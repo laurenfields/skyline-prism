@@ -706,7 +706,14 @@ def rollup_transitions_streaming(
 
             # Process when we have enough batches for all workers
             if len(batches_to_process) >= n_workers:
-                with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                # Use spawn start method so workers do not inherit the parent's
+                # accumulated peptide_rows / residual_rows memory via fork+COW.
+                # On long runs that inheritance grows to GBs and triggers the
+                # OS OOM killer (BrokenProcessPool).
+                with ProcessPoolExecutor(
+                    max_workers=n_workers,
+                    mp_context=mp.get_context("spawn"),
+                ) as executor:
                     futures = [
                         executor.submit(_worker_process_batch, b) for b in batches_to_process
                     ]
@@ -751,7 +758,8 @@ def rollup_transitions_streaming(
         # Process remaining batches
         if batches_to_process:
             with ProcessPoolExecutor(
-                max_workers=min(n_workers, len(batches_to_process))
+                max_workers=min(n_workers, len(batches_to_process)),
+                mp_context=mp.get_context("spawn"),
             ) as executor:
                 futures = [executor.submit(_worker_process_batch, b) for b in batches_to_process]
                 for future in as_completed(futures):
@@ -1009,7 +1017,16 @@ def rollup_transitions_sorted(
             chunk_dict = dict(peptide_items[i : i + chunk_size])
             chunks.append((chunk_dict, samples, config_dict))
 
-        with ProcessPoolExecutor(max_workers=min(n_workers, len(chunks))) as executor:
+        # spawn start method: workers do not inherit the parent process's
+        # accumulated peptide_rows / residual_rows / consensus_diag_rows. On
+        # long runs (45+ minutes, tens of thousands of peptides) the parent
+        # accumulates GBs of result state and forking workers off that
+        # snapshot drives total memory over the OS limit, triggering the
+        # OOM killer and surfacing as BrokenProcessPool.
+        with ProcessPoolExecutor(
+            max_workers=min(n_workers, len(chunks)),
+            mp_context=mp.get_context("spawn"),
+        ) as executor:
             futures = [executor.submit(_worker_process_batch, chunk) for chunk in chunks]
             for future in as_completed(futures):
                 try:
