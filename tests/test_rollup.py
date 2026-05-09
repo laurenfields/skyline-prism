@@ -210,6 +210,100 @@ class TestTukeyMedianPolish:
         # And overall itself should match R.
         assert abs(result.overall - 16.054) < 0.02
 
+    def test_within_protein_fold_changes_match_r(self):
+        """Sample-vs-sample log2 fold changes within one protein are invariant
+        to the decomposition partition (Tukey's normalization fixes that
+        partition, but fold changes between two columns of col_effects depend
+        only on the SUM overall + col_effects, which is what every PRISM
+        downstream consumer uses).
+
+        This test is the practical invariant for proteomics: differential
+        expression analyses depend only on between-sample comparisons within
+        one protein, and they should match R medpolish on the same input.
+        Compares against R's medpolish output documented in
+        test_matches_r_medpolish_reference.
+        """
+        data = pd.DataFrame(
+            {
+                "S1": [15.77, 13.46, 15.20, 14.63, 13.74],
+                "S2": [16.84, 14.92, 15.43, 16.36, 14.62],
+                "S3": [17.16, 15.36, 17.09, 16.41, 14.98],
+            },
+            index=[f"P{i}" for i in range(5)],
+        )
+
+        result = tukey_median_polish(data, max_iter=50)
+        ce = result.col_effects.values
+
+        # R medpolish: overall=16.054, centered_col=[-1.069, 0, 0.361]
+        # so per-sample totals (overall + centered_col): [14.985, 16.054, 16.415]
+        # Fold changes (in log2): S2-S1=+1.069, S3-S1=+1.430, S3-S2=+0.361
+        np.testing.assert_allclose(ce[1] - ce[0], 1.069, atol=0.02)
+        np.testing.assert_allclose(ce[2] - ce[0], 1.430, atol=0.02)
+        np.testing.assert_allclose(ce[2] - ce[1], 0.361, atol=0.02)
+
+    def test_decomposition_reconstructs_input_at_convergence(self):
+        """After convergence, the additive model must reconstruct the input:
+        X[i,j] == row_effects[i] + col_effects[j] + residuals[i,j],
+        where col_effects already includes overall (PRISM stores it that way).
+
+        This is a structural correctness check: the decomposition should
+        always be a valid additive model regardless of the recentering choice,
+        since recentering only shifts mass between (overall, row, col).
+        """
+        data = pd.DataFrame(
+            {
+                "S1": [15.77, 13.46, 15.20, 14.63, 13.74],
+                "S2": [16.84, 14.92, 15.43, 16.36, 14.62],
+                "S3": [17.16, 15.36, 17.09, 16.41, 14.98],
+            },
+            index=[f"P{i}" for i in range(5)],
+        )
+
+        result = tukey_median_polish(data, max_iter=50)
+
+        re = result.row_effects.values  # peptide effects (shape n_rows)
+        ce = result.col_effects.values  # overall + sample effects (shape n_cols)
+        res = result.residuals.values  # (n_rows, n_cols)
+        recon = re[:, None] + ce[None, :] + res
+        np.testing.assert_allclose(data.values, recon, atol=1e-9)
+
+    def test_handles_nan_values_in_matrix(self):
+        """Real proteomics matrices have missing observations (NaN). The
+        recentering pass uses np.nanmedian which must produce a valid
+        decomposition even when some entries are NaN, and the reconstruction
+        should still be exact at the non-NaN positions.
+        """
+        data = pd.DataFrame(
+            {
+                "S1": [15.77, np.nan, 15.20, 14.63, 13.74],
+                "S2": [16.84, 14.92, 15.43, np.nan, 14.62],
+                "S3": [17.16, 15.36, 17.09, 16.41, np.nan],
+            },
+            index=[f"P{i}" for i in range(5)],
+        )
+
+        result = tukey_median_polish(data, max_iter=50)
+
+        # No NaN in row_effects, col_effects, or overall (these come from
+        # nanmedian over enough non-NaN entries to produce a valid number).
+        assert not np.any(np.isnan(result.row_effects.values))
+        assert not np.any(np.isnan(result.col_effects.values))
+        assert not np.isnan(result.overall)
+
+        # Tukey normalization still holds at convergence (within fp noise).
+        assert abs(np.nanmedian(result.row_effects.values)) < 1e-6
+        centered_col = result.col_effects.values - result.overall
+        assert abs(np.nanmedian(centered_col)) < 1e-6
+
+        # Reconstruction is exact at every non-NaN cell.
+        re = result.row_effects.values
+        ce = result.col_effects.values
+        res = result.residuals.values
+        recon = re[:, None] + ce[None, :] + res
+        mask = ~np.isnan(data.values)
+        np.testing.assert_allclose(data.values[mask], recon[mask], atol=1e-9)
+
 
 class TestRollupMethods:
     """Tests for different rollup method implementations."""

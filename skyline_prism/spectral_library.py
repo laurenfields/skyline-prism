@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import struct
+import warnings
 import zlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -925,8 +926,17 @@ def library_median_polish_rollup_vectorized(
         diff = log_obs - log_lib  # (T, S)
         diff_masked = np.where(included, diff, np.nan)
 
-        # Compute median for each sample (column)
-        beta_s = np.nanmedian(diff_masked, axis=0)  # (S,)
+        # Compute median for each sample (column). nanmedian emits
+        # "All-NaN slice encountered" RuntimeWarning for samples whose
+        # fragments are all NaN (legitimately missing observations); the
+        # returned NaN is the intended sentinel and is handled downstream.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="All-NaN slice encountered",
+                category=RuntimeWarning,
+            )
+            beta_s = np.nanmedian(diff_masked, axis=0)  # (S,)
 
         if not remove_outliers:
             break
@@ -980,9 +990,16 @@ def library_median_polish_rollup_vectorized(
         # Exclude identified outliers
         included = included & ~new_excluded
 
-    # Final fit with clean data
+    # Final fit with clean data. Same All-NaN slice suppression as in the
+    # iteration loop above: legitimate when a sample has no included fragments.
     diff_final = np.where(included, log_obs - log_lib, np.nan)
-    beta_s_final = np.nanmedian(diff_final, axis=0)  # (S,)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="All-NaN slice encountered",
+            category=RuntimeWarning,
+        )
+        beta_s_final = np.nanmedian(diff_final, axis=0)  # (S,)
 
     # Compute final abundances: exp(beta_s) * sum(ALL library intensities)
     # CRITICAL: Always use full lib_sum so all samples sum the same fragments

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .parsimony import ProteinGroup
@@ -962,12 +963,114 @@ def rollup_transitions_sorted(
         if col in schema_names:
             cols_to_read.append(col)
 
-    peptide_rows = []
-    residual_rows = []
-    consensus_diag_rows = []  # Collect consensus diagnostic rows
+    # Streaming output buffers. The full run can produce tens of GBs of
+    # peptide_rows / residual_rows / consensus_diag_rows in memory before
+    # the end-of-run dump (a 70k-peptide x 250-sample run with consensus
+    # diagnostics writes ~140M diag rows). Flushing each buffer to its
+    # parquet writer every FLUSH_THRESHOLD peptides keeps peak memory
+    # bounded regardless of run length.
+    peptide_rows: list[dict] = []
+    residual_rows: list[dict] = []
     n_peptides = 0
     n_filtered = 0
-    last_logged_count = 0  # Track last logged value to avoid duplicate logs
+    last_logged_count = 0
+
+    FLUSH_THRESHOLD = 2000  # peptides per flush
+
+    # Pre-define output schemas so the parquet writers stay consistent across
+    # flushes even when individual peptides are missing samples.
+    peptide_meta_fields = [
+        pa.field(config.peptide_col, pa.string()),
+        pa.field("n_transitions", pa.int64()),
+        pa.field("mean_rt", pa.float64()),
+    ]
+    peptide_sample_fields = [pa.field(s, pa.float64()) for s in samples]
+    peptide_schema_target = pa.schema(peptide_meta_fields + peptide_sample_fields)
+    peptide_target_cols = peptide_schema_target.names
+
+    if save_residuals:
+        residual_meta_fields = [
+            pa.field(config.peptide_col, pa.string()),
+            pa.field(config.transition_col, pa.string()),
+        ]
+        residual_schema_target = pa.schema(
+            residual_meta_fields + [pa.field(s, pa.float64()) for s in samples]
+        )
+        residual_target_cols = residual_schema_target.names
+    else:
+        residual_schema_target = None
+        residual_target_cols = None
+
+    peptide_writer: pq.ParquetWriter | None = None
+    residual_writer: pq.ParquetWriter | None = None
+    residuals_path: Path | None = None
+    if save_residuals:
+        residuals_path = output_path.parent / output_path.name.replace(
+            ".parquet", "_residuals.parquet"
+        )
+
+    # Consensus diagnostics: write incrementally when a path is configured.
+    # Schema is fixed (same fields per row from the rollup), so we can use a
+    # ParquetWriter and convert to CSV at the end. The previous all-in-memory
+    # accumulator OOM'd on long runs (~140M rows for a 70k-peptide consensus).
+    diag_path_csv = config.consensus_diagnostics_path  # final CSV path
+    diag_path_parquet: Path | None = None
+    diag_writer: pq.ParquetWriter | None = None
+    diag_schema_target: pa.Schema | None = None
+    diag_buffer: list[dict] = []
+    if diag_path_csv:
+        diag_path_parquet = Path(diag_path_csv).with_suffix(".parquet")
+
+    def _flush_peptide_buffer() -> None:
+        nonlocal peptide_writer
+        if not peptide_rows:
+            return
+        df = pd.DataFrame(peptide_rows).reindex(columns=peptide_target_cols)
+        table = pa.Table.from_pandas(df, preserve_index=False).cast(
+            peptide_schema_target
+        )
+        if peptide_writer is None:
+            peptide_writer = pq.ParquetWriter(
+                output_path, peptide_schema_target, compression="zstd"
+            )
+        peptide_writer.write_table(table)
+        peptide_rows.clear()
+
+    def _flush_residual_buffer() -> None:
+        nonlocal residual_writer
+        if not (save_residuals and residual_rows):
+            return
+        df = pd.DataFrame(residual_rows).reindex(columns=residual_target_cols)
+        table = pa.Table.from_pandas(df, preserve_index=False).cast(
+            residual_schema_target
+        )
+        if residual_writer is None:
+            residual_writer = pq.ParquetWriter(
+                residuals_path, residual_schema_target, compression="zstd"
+            )
+        residual_writer.write_table(table)
+        residual_rows.clear()
+
+    def _flush_diag_buffer() -> None:
+        nonlocal diag_writer, diag_schema_target
+        if not (diag_path_parquet and diag_buffer):
+            return
+        df = pd.DataFrame(diag_buffer)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        if diag_writer is None:
+            diag_schema_target = table.schema
+            diag_writer = pq.ParquetWriter(
+                diag_path_parquet, diag_schema_target, compression="zstd"
+            )
+        else:
+            table = table.cast(diag_schema_target)
+        diag_writer.write_table(table)
+        diag_buffer.clear()
+
+    def _flush_buffers() -> None:
+        _flush_peptide_buffer()
+        _flush_residual_buffer()
+        _flush_diag_buffer()
 
     current_peptide = None
     current_data = []
@@ -1055,12 +1158,20 @@ def rollup_transitions_sorted(
 
                         # Collect consensus diagnostics from parallel results
                         if result.get("consensus_diagnostics"):
-                            consensus_diag_rows.extend(result["consensus_diagnostics"])
+                            diag_buffer.extend(result["consensus_diagnostics"])
 
                         n_peptides += 1
                 except Exception as e:
                     logger.error(f"Worker error: {e}")
                     raise
+
+        # Flush accumulated buffers to disk after every parallel batch so
+        # peptide_rows / residual_rows / diag_buffer never grow past one batch's
+        # worth of rows. Without this, the parent process accumulates the
+        # entire run's results and the OS OOM-killer terminates it on
+        # multi-hour runs (most reproducibly on consensus rollup with
+        # diagnostics enabled).
+        _flush_buffers()
 
     def flush_peptide():
         """Process accumulated data for current peptide."""
@@ -1101,9 +1212,14 @@ def rollup_transitions_sorted(
 
                 # Collect consensus diagnostics
                 if result.consensus_diagnostics:
-                    consensus_diag_rows.extend(result.consensus_diagnostics)
+                    diag_buffer.extend(result.consensus_diagnostics)
 
                 n_peptides += 1
+
+                # Flush single-threaded path when buffers exceed FLUSH_THRESHOLD
+                # so the run does not accumulate the full result set in memory.
+                if len(peptide_rows) >= FLUSH_THRESHOLD:
+                    _flush_buffers()
 
     # Stream through row groups
     for i in range(pf.metadata.num_row_groups):
@@ -1149,33 +1265,55 @@ def rollup_transitions_sorted(
     if not pre_sorted:
         sorted_path.unlink(missing_ok=True)
 
-    # Write outputs
-    peptide_df = pd.DataFrame(peptide_rows)
-    meta_cols = [config.peptide_col, "n_transitions"]
-    if "mean_rt" in peptide_df.columns:
-        meta_cols.append("mean_rt")
-    sample_cols = [s for s in samples if s in peptide_df.columns]
+    # Final flush of any rows still in buffers and close writers.
+    _flush_buffers()
+    if peptide_writer is not None:
+        peptide_writer.close()
+        logger.info(f"  Wrote peptide abundances: {output_path}")
+    else:
+        # No peptides ever flushed (e.g., everything was filtered). Still write
+        # an empty parquet with the right schema so downstream code finds it.
+        empty = pa.Table.from_pylist([], schema=peptide_schema_target)
+        pq.write_table(empty, output_path, compression="zstd")
+        logger.info(f"  Wrote peptide abundances (empty): {output_path}")
 
-    peptide_df = peptide_df[meta_cols + sample_cols]
-    # Data is kept in log2 scale - conversion to linear happens at final output in cli.py
-    peptide_df.to_parquet(output_path, compression="zstd", index=False)
-    logger.info(f"  Wrote peptide abundances: {output_path}")
+    if save_residuals:
+        if residual_writer is not None:
+            residual_writer.close()
+            logger.info(f"  Wrote residuals: {residuals_path}")
+        else:
+            residuals_path = None  # nothing to record
+    else:
+        residuals_path = None
 
-    residuals_path = None
-    if save_residuals and residual_rows:
-        residuals_name = output_path.name.replace(".parquet", "_residuals.parquet")
-        residuals_path = output_path.parent / residuals_name
-        residuals_df = pd.DataFrame(residual_rows)
-        residuals_df.to_parquet(residuals_path, compression="zstd", index=False)
-        logger.info(f"  Wrote residuals: {residuals_path}")
+    # Save consensus diagnostics. We streamed each batch's diag rows to a
+    # parquet during the run; convert that parquet to the user's CSV path
+    # (sorted by abs_residual desc, "most problematic first") at the end.
+    # Sorting happens via DuckDB (or pandas if DuckDB is unavailable) so it
+    # works even on multi-GB diagnostics files that won't fit in memory.
+    if diag_writer is not None and diag_path_csv:
+        diag_writer.close()
+        try:
+            import duckdb
 
-    # Save consensus diagnostics if collected
-    if consensus_diag_rows and config.consensus_diagnostics_path:
-        diag_df = pd.DataFrame(consensus_diag_rows)
-        # Sort by abs_residual descending (most problematic first)
-        diag_df = diag_df.sort_values("abs_residual", ascending=False)
-        diag_df.to_csv(config.consensus_diagnostics_path, index=False)
-        logger.info(f"  Wrote consensus diagnostics: {config.consensus_diagnostics_path}")
+            duckdb.sql(
+                f"""
+                COPY (
+                    SELECT * FROM read_parquet('{diag_path_parquet}')
+                    ORDER BY abs_residual DESC
+                ) TO '{diag_path_csv}' (FORMAT CSV, HEADER)
+                """
+            )
+        except ImportError:
+            pd.read_parquet(diag_path_parquet).sort_values(
+                "abs_residual", ascending=False
+            ).to_csv(diag_path_csv, index=False)
+        # Drop the intermediate parquet now that the CSV is written.
+        try:
+            diag_path_parquet.unlink()
+        except OSError:
+            pass
+        logger.info(f"  Wrote consensus diagnostics: {diag_path_csv}")
 
     return StreamingRollupResult(
         output_path=output_path,

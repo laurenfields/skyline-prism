@@ -2811,9 +2811,12 @@ def get_minimal_config_template() -> str:
 #
 # Usage: prism run -i data.csv -o output/ -c this_config.yaml
 #
-# BEFORE RUNNING - edit the two paths marked EDIT REQUIRED below:
-#   1. transition_rollup.library_assist.library_path  (spectral library)
-#   2. parsimony.fasta_path                           (search FASTA database)
+# BEFORE RUNNING - edit the path marked EDIT REQUIRED below:
+#   1. parsimony.fasta_path                           (search FASTA database)
+#
+# Optional: switch transition_rollup.method to "library_assist" if you
+# have a spectral library and want library-based interference detection
+# (set transition_rollup.library_assist.library_path).
 
 # =============================================================================
 # Sample Type Detection (IMPORTANT - customize for your naming convention)
@@ -2851,18 +2854,24 @@ processing:
 # =============================================================================
 # Transition to Peptide Rollup
 # =============================================================================
-# library_assist uses a spectral library to detect and exclude interfered
-# transitions before summing. This gives the best CVs when a library is available.
+# sum is the simple, robust default: each peptide's abundance per sample is
+# the sum of its fragment-ion (transition) areas. No spectral library
+# required.
 #
-# EDIT REQUIRED: Set library_path to your spectral library (.blib or .tsv).
+# To use library_assist instead (interference detection from a spectral
+# library), switch method below and add a library_assist block:
+#
+#   transition_rollup:
+#     method: "library_assist"
+#     min_transitions: 3
+#     library_assist:
+#       library_path: "/path/to/your/library.blib"
+#       fitting_method: "median_polish"
+#       outlier_threshold: 1.0
+#       remove_outliers: true
 transition_rollup:
-  method: "library_assist"
+  method: "sum"
   min_transitions: 3
-  library_assist:
-    library_path: null  # <<< EDIT REQUIRED: "/path/to/your/library.blib"
-    fitting_method: "median_polish"  # RECOMMENDED: robust to 1-2 interfered transitions
-    outlier_threshold: 1.0           # obs > 2x predicted = interference
-    remove_outliers: true
 
 # =============================================================================
 # Global (Peptide-Level) Normalization
@@ -2936,9 +2945,12 @@ def get_full_config_template() -> str:
 # This template includes ALL configuration options with detailed documentation.
 # Copy this file and modify for your experiment.
 #
-# BEFORE RUNNING - edit the two paths marked EDIT REQUIRED below:
-#   1. transition_rollup.library_assist.library_path  (spectral library)
-#   2. parsimony.fasta_path                           (search FASTA database)
+# BEFORE RUNNING - edit the path marked EDIT REQUIRED below:
+#   1. parsimony.fasta_path                           (search FASTA database)
+#
+# Optional: switch transition_rollup.method to "library_assist" if you
+# have a spectral library and want library-based interference detection
+# (set transition_rollup.library_assist.library_path).
 #
 # Usage:
 #   prism run -i skyline_report.csv -o output_dir/ -c config.yaml
@@ -3074,14 +3086,15 @@ transition_rollup:
   enabled: true
 
   # Rollup method:
-  #   sum            - Simple sum of fragment intensities (default, robust)
+  #   sum            - Simple sum of fragment intensities (DEFAULT, robust)
   #   consensus      - Inverse-variance weighted sum (down-weights outlier transitions)
   #   median_polish  - Tukey median polish (robust to interference)
   #   adaptive       - Learned weights based on intensity, m/z, shape correlation
   #   topn           - Select top N transitions by correlation
   #   library_assist - Uses spectral library to detect/exclude interfered transitions
-  #                    via iterative least squares fitting (recommended with library)
-  method: "library_assist"
+  #                    via iterative least squares fitting (recommended when a
+  #                    library is available; set library_assist.library_path below)
+  method: "sum"
 
   # Include MS1 precursor signal? (false = MS2 only, recommended)
   use_ms1: false
