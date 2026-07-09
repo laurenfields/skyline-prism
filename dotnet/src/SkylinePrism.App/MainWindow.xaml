@@ -182,6 +182,9 @@
                     ToolTip="Show the prism CLI command + config YAML that reproduces the current GUI settings." />
             <Button x:Name="OpenReportButton" Content="Open QC Report" Padding="12,4" IsEnabled="False"
                     Click="OnOpenReport" />
+            <Button x:Name="DifferentialButton" Content="Differential Analysis →" Padding="12,4" Margin="8,0,0,0"
+                    IsEnabled="False" FontWeight="Bold" Click="OnOpenDifferential"
+                    ToolTip="Open the interactive differential-abundance / enrichment explorer on this PRISM output. Add clinical metadata there to compare groups." />
         </StackPanel>
     </Grid>
 </Window>

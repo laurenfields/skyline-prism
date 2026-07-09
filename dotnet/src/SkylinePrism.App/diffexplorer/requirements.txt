@@ -1,0 +1,20 @@
+# Runtime dependencies for the PRISM Differential Explorer (Streamlit app).
+# Floors are the versions this app is developed and tested against (2026-07);
+# newer releases are expected to work. For a one-command conda setup that also
+# pins the Python version, use environment.yml.
+numpy>=2.3,<3
+pandas>=2.3,<3
+scipy>=1.13
+statsmodels>=0.14
+inmoose>=0.9
+duckdb>=1.0,<2
+pyarrow>=15
+streamlit>=1.57,<2
+plotly>=6.0,<7
+requests>=2.28
+
+# Optional (not required to run):
+#   - tkinter (Python standard library) powers the "Browse..." file pickers and
+#     ships with standard Python/conda installs. If it's absent, just type paths.
+#   - A local Ollama server (https://ollama.com) enables the optional "Suggest
+#     comparisons" button; without it the app uses its built-in heuristic.

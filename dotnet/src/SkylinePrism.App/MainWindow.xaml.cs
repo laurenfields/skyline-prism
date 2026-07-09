@@ -26,12 +26,16 @@ public partial class MainWindow : Window
 {
     private SkylineSession? _session;
     private string? _lastReportPath;
+    private string? _lastOutputDir;            // set after a successful run; handed to the differential tool
+    private System.Diagnostics.Process? _diffProcess;  // the launched Streamlit (via uv) server, if any
+    private int _diffPort;
     private bool _isRunning;
 
     public MainWindow()
     {
         InitializeComponent();
         QcPlot.MouseMove += QcPlot_MouseMove; // show the replicate name when hovering a PCA point
+        Closed += (_, _) => StopDifferential(); // don't leave the differential server running after close
 
         // Run stays disabled until an output directory is set. When connected to a saved document,
         // SetDefaultOutputDirAsync pre-fills "<document folder>/PRISM-Output"; otherwise the box stays
@@ -434,7 +438,9 @@ public partial class MainWindow : Window
                 return File.Exists(reportPath);
             });
             _lastReportPath = reportPath;
+            _lastOutputDir = outputDir;
             OpenReportButton.IsEnabled = reportExists;
+            DifferentialButton.IsEnabled = reportExists; // corrected_*.parquet exist alongside the QC report
             PopulateGroupCombos(); // fill Group-by / value from the Replicates report
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
@@ -1154,6 +1160,154 @@ public partial class MainWindow : Window
     {
         if (_lastReportPath is not null && File.Exists(_lastReportPath))
             Process.Start(new ProcessStartInfo(_lastReportPath) { UseShellExecute = true });
+    }
+
+    // Launch the interactive differential-abundance / enrichment explorer (a Streamlit app)
+    // on the PRISM output we just produced. The app is bundled under "diffexplorer/" next to
+    // this exe and run via uv, which provisions an isolated Python + the pinned deps on first
+    // use (no system Python / conda needed). The PRISM output dir is handed over via the
+    // PDX_PRISM_DIR env var, so the app auto-loads it and the user only adds clinical metadata.
+    private async void OnOpenDifferential(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_lastOutputDir) || !Directory.Exists(_lastOutputDir))
+        {
+            Log("Run PRISM first - there is no output directory to analyze yet.");
+            return;
+        }
+
+        // Already serving? Just re-open the browser tab.
+        if (_diffProcess is { HasExited: false } && _diffPort > 0)
+        {
+            OpenBrowser($"http://localhost:{_diffPort}");
+            return;
+        }
+
+        var appDir = Path.Combine(AppContext.BaseDirectory, "diffexplorer");
+        var appScript = Path.Combine(appDir, "prism_diff_explorer.py");
+        var requirements = Path.Combine(appDir, "requirements.txt");
+        var uvExe = LocateUv(appDir);
+        if (uvExe is null || !File.Exists(appScript) || !File.Exists(requirements))
+        {
+            MessageBox.Show(
+                "The Differential Explorer payload is missing from this tool install "
+                + "(expected uv.exe + prism_diff_explorer.py + requirements.txt under 'diffexplorer/').",
+                "Differential Analysis", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        DifferentialButton.IsEnabled = false;
+        Log("Starting Differential Explorer... (the first launch provisions a small Python "
+            + "runtime and can take ~a minute; later launches are instant.)");
+        try
+        {
+            _diffPort = GetFreePort();
+            var psi = new ProcessStartInfo
+            {
+                FileName = uvExe,
+                WorkingDirectory = appDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var arg in new[]
+            {
+                "run", "--python", "3.12", "--with-requirements", requirements, "--no-project",
+                "streamlit", "run", appScript,
+                "--server.headless=true", $"--server.port={_diffPort}", "--server.fileWatcherType=none",
+            })
+                psi.ArgumentList.Add(arg);
+            psi.Environment["PDX_PRISM_DIR"] = _lastOutputDir;
+
+            _diffProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            _diffProcess.OutputDataReceived += (_, ev) => { if (ev.Data is not null) App.WriteLog("[diff] " + ev.Data); };
+            _diffProcess.ErrorDataReceived += (_, ev) => { if (ev.Data is not null) App.WriteLog("[diff] " + ev.Data); };
+            _diffProcess.Start();
+            _diffProcess.BeginOutputReadLine();
+            _diffProcess.BeginErrorReadLine();
+
+            var ready = await Task.Run(() => WaitForHealth(_diffPort, TimeSpan.FromMinutes(3)));
+            if (ready)
+            {
+                Log("Differential Explorer ready - opening in your browser.");
+                OpenBrowser($"http://localhost:{_diffPort}");
+            }
+            else
+            {
+                Log("Differential Explorer did not become ready in time. See the log: " + App.LogFilePath);
+                StopDifferential();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("ERROR launching Differential Explorer: " + ex.Message);
+            App.WriteLog("Differential launch failed: " + ex);
+            StopDifferential();
+        }
+        finally
+        {
+            DifferentialButton.IsEnabled = true;
+        }
+    }
+
+    // Prefer the uv.exe bundled with the tool; fall back to one on PATH (developer machines).
+    private static string? LocateUv(string appDir)
+    {
+        var bundled = Path.Combine(appDir, "uv.exe");
+        if (File.Exists(bundled))
+            return bundled;
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+        {
+            try
+            {
+                var candidate = Path.Combine(dir.Trim(), "uv.exe");
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            catch { /* malformed PATH entry - skip */ }
+        }
+        return null;
+    }
+
+    private static int GetFreePort()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        try { return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port; }
+        finally { listener.Stop(); }
+    }
+
+    private static bool WaitForHealth(int port, TimeSpan timeout)
+    {
+        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        var url = $"http://localhost:{port}/_stcore/health";
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var resp = http.GetAsync(url).GetAwaiter().GetResult();
+                if (resp.IsSuccessStatusCode)
+                    return true;
+            }
+            catch { /* server not up yet */ }
+            System.Threading.Thread.Sleep(1000);
+        }
+        return false;
+    }
+
+    private static void OpenBrowser(string url)
+        => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+
+    private void StopDifferential()
+    {
+        try
+        {
+            if (_diffProcess is { HasExited: false })
+                _diffProcess.Kill(entireProcessTree: true); // uv -> python -> streamlit
+        }
+        catch { /* best-effort teardown */ }
+        finally { _diffProcess = null; _diffPort = 0; }
     }
 
     private static Dictionary<string, string> ReadSampleTypes(string metadataCsv)
