@@ -34,4 +34,14 @@
     <None Include="tool-inf\SkylinePrism.properties" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Bundled Differential Explorer payload (Streamlit app + uv launcher). Copied to
+         output/diffexplorer/ and staged into the tool zip; launched by OnOpenDifferential.
+         Move from the default None glob to copyable Content; the glob picks up uv.exe only
+         when present (fetched at package time / copied locally - see diffexplorer/README). -->
+    <None Remove="diffexplorer\**" />
+    <Content Include="diffexplorer\**" Exclude="diffexplorer\.gitignore;diffexplorer\README.md"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

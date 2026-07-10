@@ -1,0 +1,8 @@
+# The uv launcher binary is fetched at package time / copied locally for dev,
+# never committed (large, platform-specific).
+uv.exe
+
+# cryptic_gene_map.csv is a REQUIRED bundled payload (public UniProt-derived
+# accession->gene map used by the differential app's Cryptic tab). Re-include it
+# despite the repo-wide *.csv ignore (root .gitignore).
+!cryptic_gene_map.csv

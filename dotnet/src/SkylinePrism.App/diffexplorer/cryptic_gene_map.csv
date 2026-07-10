@@ -1,0 +1,231 @@
+peptide,cryptic_accession,cryptic_string,gene,canonical_protein_name
+GHNQYAYDGK,A0A140T951,CRYPTIC_UNIQUE|A0A140T951|tr|A0A140T951|A0A140T951_HUMAN|unique:0-16|tryptic:0-18|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+SGGGAGSNGSVLDPAER,E9PMV1,CRYPTIC_UNIQUE|E9PMV1|tr|E9PMV1|E9PMV1_HUMAN|unique:21-42|tryptic:9-58|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PLEC,Plectin (Plectin-1)
+SLDGAAVDSADR,A0A2R8Y6D0,CRYPTIC_UNIQUE|A0A2R8Y6D0|tr|A0A2R8Y6D0|A0A2R8Y6D0_HUMAN|unique:334-340|tryptic:332-344|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPB41,Protein 4.1 (Band 4.1) (Erythrocyte membrane protein band 4.1)
+SLDGASVNENHEIYMK,A0A0A0MSA4,CRYPTIC_UNIQUE|A0A0A0MSA4|tr|A0A0A0MSA4|A0A0A0MSA4_HUMAN|unique:303-327|tryptic:300-333|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPB41L3,Erythrocyte membrane protein band 4.1 like 3
+NQELEAENR,Q13948,CRYPTIC_UNIQUE|Q13948|sp|Q13948|CASP_HUMAN|unique:520-536|tryptic:515-541|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CUX1,Protein CASP
+SLQEQADAAEER,F5H7S3,CRYPTIC_UNIQUE|F5H7S3|tr|F5H7S3|F5H7S3_HUMAN|unique:21-41|tryptic:15-42|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,Tropomyosin 1
+LAQHTLQALQSELDSLR,Q13948,CRYPTIC_UNIQUE|Q13948|sp|Q13948|CASP_HUMAN|unique:520-536|tryptic:515-541|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CUX1,Protein CASP
+MQPQASATSQR,H0Y9L2,CRYPTIC_UNIQUE|H0Y9L2|tr|H0Y9L2|H0Y9L2_HUMAN|unique:33-51|tryptic:29-52|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SLAIN2,SLAIN motif family member 2
+AQSLPLPSLSGPDASLGKK,H0YJE6,CRYPTIC_UNIQUE|H0YJE6|tr|H0YJE6|H0YJE6_HUMAN|unique:1002-1017|tryptic:996-1019|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SPTB,"Spectrin beta, erythrocytic"
+FITVGYVDDTLFVR,A0A140TA14,CRYPTIC_UNIQUE|A0A140TA14|tr|A0A140TA14|A0A140TA14_HUMAN|unique:42-71|tryptic:41-72|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+MYGC(unimod:4)DVGPDGR,A0A140T9W2,CRYPTIC_UNIQUE|A0A140T9W2|tr|A0A140T9W2|A0A140T9W2_HUMAN|unique:112-125|tryptic:106-132|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+PSEDSPPLEMLGPR,H7C5I0,CRYPTIC_UNIQUE|H7C5I0|tr|H7C5I0|H7C5I0_HUMAN|unique:62-73|tryptic:49-74|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ITIH1,Inter-alpha-trypsin inhibitor heavy chain 1
+RQEQEDLELAIALSK,M0QY01,CRYPTIC_UNIQUE|M0QY01|tr|M0QY01|M0QY01_HUMAN|unique:46-52|tryptic:45-65|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPS15L1,Epidermal growth factor receptor pathway substrate 15 like 1
+SWTAADMAAQTTK,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:145-156|tryptic:145-168|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+STTPAEQRG,R4GN18,CRYPTIC_UNIQUE|R4GN18|tr|R4GN18|R4GN18_HUMAN|unique:53-77|tryptic:53-78|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CD46,CD46 molecule
+IGQSLSSLTSPAEQGVLSEK,A0A0A6YYJ5,CRYPTIC_UNIQUE|A0A0A6YYJ5|tr|A0A0A6YYJ5|A0A0A6YYJ5_HUMAN|unique:1649-1667|tryptic:1642-1668|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MACF1,Microtubule actin crosslinking factor 1
+WRPQPPAEGPGGELTVPGTTR,A0A087WWA5,CRYPTIC_UNIQUE|A0A087WWA5|tr|A0A087WWA5|A0A087WWA5_HUMAN|unique:961-980|tryptic:946-995|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+QELITHQIQTLKR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:864-900|tryptic:855-905|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+LVLVLGDLHIPHR,F8VXU5,CRYPTIC_UNIQUE|F8VXU5|tr|F8VXU5|F8VXU5_HUMAN|unique:14-38|tryptic:9-46|source:Seddighi_et_al_2024_SciTranslMed_DataS2,VPS29,Vacuolar protein sorting-associated protein 29 (Vesicle protein sorting 29)
+LMDQNLK,J3KN67,CRYPTIC_UNIQUE|J3KN67|tr|J3KN67|J3KN67_HUMAN|unique:185-216|tryptic:183-218|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+MKEPLSVLEILSLIQQR,A0A1C7CYX0,CRYPTIC_UNIQUE|A0A1C7CYX0|tr|A0A1C7CYX0|A0A1C7CYX0_HUMAN|unique:163-187|tryptic:162-189|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+VRVEESEVTVGGLEPGR,A0A140T8Z8,CRYPTIC_UNIQUE|A0A140T8Z8|tr|A0A140T8Z8|A0A140T8Z8_HUMAN|unique:2264-2270|tryptic:2263-2280|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TNXB,Tenascin XB
+DYIALKEDLR,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:145-156|tryptic:145-168|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+VLEELHK,Q6ZN40,CRYPTIC_UNIQUE|Q6ZN40|tr|Q6ZN40|Q6ZN40_HUMAN|unique:39-71|tryptic:37-80|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,"Tropomyosin 1 (Alpha), isoform CRA_f (cDNA FLJ16459 fis, clone BRCAN2002473, moderately similar to Tropomyosin, fibroblast isoform 2)"
+AAAAEVEAEGGGGGGGGK,A0A3B3ISV4,CRYPTIC_UNIQUE|A0A3B3ISV4|tr|A0A3B3ISV4|A0A3B3ISV4_HUMAN|unique:19-29|tryptic:3-47|source:Seddighi_et_al_2024_SciTranslMed_DataS2,VKORC1L1,vitamin-K-epoxide reductase (warfarin-sensitive) (EC 1.17.4.4)
+C(unimod:4)PC(unimod:4)ASGLLC(unimod:4)QPHR,F6SYF8,CRYPTIC_UNIQUE|F6SYF8|tr|F6SYF8|F6SYF8_HUMAN|unique:271-295|tryptic:264-306|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DKK3,Dickkopf-related protein 3
+AC(unimod:4)LISMGYNMGEAEFAR,H9KV75,CRYPTIC_UNIQUE|H9KV75|tr|H9KV75|H9KV75_HUMAN|unique:710-722|tryptic:707-724|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ACTN1,F-actin cross-linking protein
+GYHQYAYDGK,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:113-143|tryptic:106-145|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+TTDGSLQNTSSEGSR,G3V0J0,CRYPTIC_UNIQUE|G3V0J0|tr|G3V0J0|G3V0J0_HUMAN|unique:551-559|tryptic:549-564|source:Seddighi_et_al_2024_SciTranslMed_DataS2,FMR1,Fragile X messenger ribonucleoprotein 1
+PFHLAAVR,F8WF89,CRYPTIC_UNIQUE|F8WF89|tr|F8WF89|F8WF89_HUMAN|unique:30-36|tryptic:26-37|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MTHFD2,"Bifunctional methylenetetrahydrofolate dehydrogenase/cyclohydrolase, mitochondrial"
+VSPESNEDISTTVVYR,B8ZZA8,CRYPTIC_UNIQUE|B8ZZA8|tr|B8ZZA8|B8ZZA8_HUMAN|unique:135-168|tryptic:121-169|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+WNYFFLYDGSK,F8VYA9,CRYPTIC_UNIQUE|F8VYA9|tr|F8VYA9|F8VYA9_HUMAN|unique:0-13|tryptic:0-20|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HPS4,HPS4 biogenesis of lysosomal organelles complex 3 subunit 2
+EAAPKPPQPPR,A0A1B0GW05,CRYPTIC_UNIQUE|A0A1B0GW05|tr|A0A1B0GW05|A0A1B0GW05_HUMAN|unique:0-14|tryptic:0-21|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DPY19L1,Dpy-19 like C-mannosyltransferase 1
+C(unimod:4)KQVEEELTHLQK,K7ELP0,CRYPTIC_UNIQUE|K7ELP0|tr|K7ELP0|K7ELP0_HUMAN|unique:30-50|tryptic:30-51|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM4,Tropomyosin 4
+FAGEIC(unimod:4)GFK,A0A3B3ITY6,CRYPTIC_UNIQUE|A0A3B3ITY6|tr|A0A3B3ITY6|A0A3B3ITY6_HUMAN|unique:45-53|tryptic:43-57|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CLSTN1,Calsyntenin 1
+DSMSAAEVGTGQYATTK,A0A0A0MSA4,CRYPTIC_UNIQUE|A0A0A0MSA4|tr|A0A0A0MSA4|A0A0A0MSA4_HUMAN|unique:303-327|tryptic:300-333|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPB41L3,Erythrocyte membrane protein band 4.1 like 3
+QSDQDITKT,H0YCU0,CRYPTIC_UNIQUE|H0YCU0|tr|H0YCU0|H0YCU0_HUMAN|unique:65-90|tryptic:63-91|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CHRDL2,Chordin like 2
+HLATGHYLAAEVDPDQDASR,A0A3B3ITU8,CRYPTIC_UNIQUE|A0A3B3ITU8|tr|A0A3B3ITU8|A0A3B3ITU8_HUMAN|unique:316-322|tryptic:306-326|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ITPR1,"Inositol 1,4,5-trisphosphate receptor"
+AAAASAAEAGIATTGTEGERDSDDALLK,Q5VWC4,CRYPTIC_UNIQUE|Q5VWC4|tr|Q5VWC4|Q5VWC4_HUMAN|unique:249-262|tryptic:237-265|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PSMD4,26S proteasome non-ATPase regulatory subunit 4 (26S proteasome regulatory subunit RPN10)
+RLWNIFVR,H0YA41,CRYPTIC_UNIQUE|H0YA41|tr|H0YA41|H0YA41_HUMAN|unique:34-65|tryptic:30-65|source:Seddighi_et_al_2024_SciTranslMed_DataS2,IL7R,Interleukin 7 receptor
+WASVVVPSGQEQR,A0A0G2JPD3,CRYPTIC_UNIQUE|A0A0G2JPD3|tr|A0A0G2JPD3|A0A0G2JPD3_HUMAN|unique:264-273|tryptic:258-280|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+LPWLARN,A0A2R8YEG5,CRYPTIC_UNIQUE|A0A2R8YEG5|tr|A0A2R8YEG5|A0A2R8YEG5_HUMAN|unique:58-101|tryptic:56-101|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ENO1,Enolase 1
+YFYTAVSRPGR,A0A140T9W2,CRYPTIC_UNIQUE|A0A140T9W2|tr|A0A140T9W2|A0A140T9W2_HUMAN|unique:29-38|tryptic:7-41|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+VQPLLISADNK,B0QYW2,CRYPTIC_UNIQUE|B0QYW2|tr|B0QYW2|B0QYW2_HUMAN|unique:173-180|tryptic:165-191|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PHF21B,PHD finger protein 21B
+THMTHHAVSDHEATLR,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:202-223|tryptic:200-226|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+MYGC(unimod:4)DLGPDGR,A0A1W2PRX1,CRYPTIC_UNIQUE|A0A1W2PRX1|tr|A0A1W2PRX1|A0A1W2PRX1_HUMAN|unique:0-7|tryptic:0-11|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+PGYELQEDR,F5H3A3,CRYPTIC_UNIQUE|F5H3A3|tr|F5H3A3|F5H3A3_HUMAN|unique:75-86|tryptic:72-93|source:Seddighi_et_al_2024_SciTranslMed_DataS2,C1R,Complement C1r
+STGSPTQETQAPFIAK,H0Y704,CRYPTIC_UNIQUE|H0Y704|tr|H0Y704|H0Y704_HUMAN|unique:20-28|tryptic:19-35|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ZNF185,Zinc finger protein 185 with LIM domain
+AASLGSSQSSR,E9PSG1,CRYPTIC_UNIQUE|E9PSG1|tr|E9PSG1|E9PSG1_HUMAN|unique:33-51|tryptic:30-59|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CAST,Calpastatin
+QLEEDIAAKEK,Q6ZN40,CRYPTIC_UNIQUE|Q6ZN40|tr|Q6ZN40|Q6ZN40_HUMAN|unique:39-71|tryptic:37-80|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,"Tropomyosin 1 (Alpha), isoform CRA_f (cDNA FLJ16459 fis, clone BRCAN2002473, moderately similar to Tropomyosin, fibroblast isoform 2)"
+C(unimod:4)C(unimod:4)PDYESFC(unimod:4)AEVK,J3KP74,CRYPTIC_UNIQUE|J3KP74|tr|J3KP74|J3KP74_HUMAN|unique:61-68|tryptic:54-70|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PRG4,Proteoglycan 4
+EAAVEQAQSETSLGAR,A0A0J9YX62,CRYPTIC_UNIQUE|A0A0J9YX62|tr|A0A0J9YX62|A0A0J9YX62_HUMAN|unique:304-315|tryptic:303-319|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DNAJB6,DnaJ heat shock protein family (Hsp40) member B6
+AELSEGQVR,H0YL42,CRYPTIC_UNIQUE|H0YL42|tr|H0YL42|H0YL42_HUMAN|unique:59-67|tryptic:56-72|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,Tropomyosin 1
+KVSPESNEDISTTVVYR,B8ZZA8,CRYPTIC_UNIQUE|B8ZZA8|tr|B8ZZA8|B8ZZA8_HUMAN|unique:135-168|tryptic:121-169|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+WETAHEAEQWR,A0A0G2JPD3,CRYPTIC_UNIQUE|A0A0G2JPD3|tr|A0A0G2JPD3|A0A0G2JPD3_HUMAN|unique:167-191|tryptic:155-193|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+HSFGPLDYESLQQELALK,B8ZZA8,CRYPTIC_UNIQUE|B8ZZA8|tr|B8ZZA8|B8ZZA8_HUMAN|unique:135-168|tryptic:121-169|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+VGPEWLGDTLR,A0A096LNU0,CRYPTIC_UNIQUE|A0A096LNU0|tr|A0A096LNU0|A0A096LNU0_HUMAN|unique:693-715|tryptic:692-715|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MCC,MCC regulator of WNT signaling pathway
+ASSLNVLNVGGK,H0YJK1,CRYPTIC_UNIQUE|H0YJK1|tr|H0YJK1|H0YJK1_HUMAN|unique:0-6|tryptic:0-16|source:Seddighi_et_al_2024_SciTranslMed_DataS2,KLC1,Kinesin light chain 1
+C(unimod:4)YFPYLENGYNQNHGRK,Q5TFM2,CRYPTIC_UNIQUE|Q5TFM2|tr|Q5TFM2|Q5TFM2_HUMAN|unique:332-343|tryptic:324-346|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CFH,Complement factor H
+TIDDLEDKLK,A0A087WWU8,CRYPTIC_UNIQUE|A0A087WWU8|tr|A0A087WWU8|A0A087WWU8_HUMAN|unique:196-223|tryptic:194-227|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+SC(unimod:4)SSSC(unimod:4)AVHDLIFWR,B7Z4M1,CRYPTIC_UNIQUE|B7Z4M1|tr|B7Z4M1|B7Z4M1_HUMAN|unique:42-52|tryptic:40-55|source:Seddighi_et_al_2024_SciTranslMed_DataS2,RTN3,Reticulon
+GGSYSQAASSDSAQGSDMSLTAC(unimod:4)K,A0A140T8Y4,CRYPTIC_UNIQUE|A0A140T8Y4|tr|A0A140T8Y4|A0A140T8Y4_HUMAN|unique:334-348|tryptic:334-370|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+LTVAAPPSGGPGFLSIEWPDSRPPR,A0A140TA49,CRYPTIC_UNIQUE|A0A140TA49|tr|A0A140TA49|A0A140TA49_HUMAN|unique:471-482|tryptic:459-484|source:Seddighi_et_al_2024_SciTranslMed_DataS2,C4A,Complement C4A (Chido/Rodgers blood group)
+DSSAPSSASSSVTDLYC(unimod:4)TPHSSR,J3QLE8,CRYPTIC_UNIQUE|J3QLE8|tr|J3QLE8|J3QLE8_HUMAN|unique:0-6|tryptic:0-25|source:Seddighi_et_al_2024_SciTranslMed_DataS2,GPS1,G protein pathway suppressor 1
+RAAAAEVEAEGGGGGGGGK,A0A3B3ISV4,CRYPTIC_UNIQUE|A0A3B3ISV4|tr|A0A3B3ISV4|A0A3B3ISV4_HUMAN|unique:19-29|tryptic:3-47|source:Seddighi_et_al_2024_SciTranslMed_DataS2,VKORC1L1,vitamin-K-epoxide reductase (warfarin-sensitive) (EC 1.17.4.4)
+GSSVVAYEGQSWHDYC(unimod:4)FHC(unimod:4)KK,Q5JXI8,CRYPTIC_UNIQUE|Q5JXI8|tr|Q5JXI8|Q5JXI8_HUMAN|unique:225-256|tryptic:225-257|source:Seddighi_et_al_2024_SciTranslMed_DataS2,FHL1,Four and a half LIM domains protein 1
+C(unimod:4)LSAAEEK,J3KN67,CRYPTIC_UNIQUE|J3KN67|tr|J3KN67|J3KN67_HUMAN|unique:185-216|tryptic:183-218|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+KWEAVHAAEQR,A0A0G2JIF2,CRYPTIC_UNIQUE|A0A0G2JIF2|tr|A0A0G2JIF2|A0A0G2JIF2_HUMAN|unique:168-180|tryptic:168-181|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+KWETAHEAEQWR,A0A0G2JPD3,CRYPTIC_UNIQUE|A0A0G2JPD3|tr|A0A0G2JPD3|A0A0G2JPD3_HUMAN|unique:167-191|tryptic:155-193|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+QVEEELTHLQKK,K7ELP0,CRYPTIC_UNIQUE|K7ELP0|tr|K7ELP0|K7ELP0_HUMAN|unique:30-50|tryptic:30-51|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM4,Tropomyosin 4
+GEGPEAGAGGAGGR,H7BXI1,CRYPTIC_UNIQUE|H7BXI1|tr|H7BXI1|H7BXI1_HUMAN|unique:0-9|tryptic:0-19|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ESYT2,Extended synaptotagmin-2
+SSGGEGVKDR,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:334-348|tryptic:334-370|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+MAGKPTHINVSVVMAEADGTC(unimod:4)Y,P01877,CRYPTIC_UNIQUE|P01877|sp|P01877|IGHA2_HUMAN|unique:316-340|tryptic:314-340|source:Seddighi_et_al_2024_SciTranslMed_DataS2,IGHA2,Immunoglobulin heavy constant alpha 2 (Ig alpha-2 chain C region) (Ig alpha-2 chain C region BUT) (Ig alpha-2 chain C region LAN)
+LVEKLEK,G3V379,CRYPTIC_UNIQUE|G3V379|tr|G3V379|G3V379_HUMAN|unique:50-65|tryptic:47-65|source:Seddighi_et_al_2024_SciTranslMed_DataS2,FERMT2,FERM domain containing kindlin 2
+SPSLQSSGDR,A0A140T8X6,CRYPTIC_UNIQUE|A0A140T8X6|tr|A0A140T8X6|A0A140T8X6_HUMAN|unique:117-124|tryptic:113-127|source:Seddighi_et_al_2024_SciTranslMed_DataS2,LY6G6D,Lymphocyte antigen 6 family member G6D
+TEPITFPSGGGK,H0YJT2,CRYPTIC_UNIQUE|H0YJT2|tr|H0YJT2|H0YJT2_HUMAN|unique:122-133|tryptic:121-139|source:Seddighi_et_al_2024_SciTranslMed_DataS2,STRN3,Striatin 3
+DLQYALQEK,B1ALS0,CRYPTIC_UNIQUE|B1ALS0|tr|B1ALS0|B1ALS0_HUMAN|unique:3-15|tryptic:0-19|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PRKG1,Protein kinase cGMP-dependent 1
+MYGC(unimod:4)DVGSDWR,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:113-143|tryptic:106-145|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+C(unimod:4)LSAAEEKYSQK,J3KN67,CRYPTIC_UNIQUE|J3KN67|tr|J3KN67|J3KN67_HUMAN|unique:185-216|tryptic:183-218|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+DILGASDPYVR,A0A3B3IUC1,CRYPTIC_UNIQUE|A0A3B3IUC1|tr|A0A3B3IUC1|A0A3B3IUC1_HUMAN|unique:42-81|tryptic:34-81|source:Seddighi_et_al_2024_SciTranslMed_DataS2,NEDD4,NEDD4 E3 ubiquitin protein ligase
+C(unimod:4)TKEEHLC(unimod:4)TQR,A0A087WWU8,CRYPTIC_UNIQUE|A0A087WWU8|tr|A0A087WWU8|A0A087WWU8_HUMAN|unique:196-223|tryptic:194-227|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+GEPHFIAVGYVDDTQFVR,A0A140T9W2,CRYPTIC_UNIQUE|A0A140T9W2|tr|A0A140T9W2|A0A140T9W2_HUMAN|unique:39-48|tryptic:38-59|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+QVINENLFTKPNVER,A0A2R8Y7F9,CRYPTIC_UNIQUE|A0A2R8Y7F9|tr|A0A2R8Y7F9|A0A2R8Y7F9_HUMAN|unique:115-144|tryptic:115-145|source:Seddighi_et_al_2024_SciTranslMed_DataS2,GYPA,Glycophorin-A
+DTEEEDFHVDQATTVK,A0A0G2JRN3,CRYPTIC_UNIQUE|A0A0G2JRN3|tr|A0A0G2JRN3|A0A0G2JRN3_HUMAN|unique:231-242|tryptic:225-246|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SERPINA1,Serpin family A member 1
+GLGDMFSLAK,Q5VWU8,CRYPTIC_UNIQUE|Q5VWU8|tr|Q5VWU8|Q5VWU8_HUMAN|unique:988-1001|tryptic:985-1001|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PARD3,Partitioning defective 3 homolog (Atypical PKC isotype-specific-interacting protein)
+DAGEGDDSMR,H0Y5F3,CRYPTIC_UNIQUE|H0Y5F3|tr|H0Y5F3|H0Y5F3_HUMAN|unique:174-181|tryptic:174-184|source:Seddighi_et_al_2024_SciTranslMed_DataS2,FLNA,Filamin A
+C(unimod:4)VC(unimod:4)NPGYAGEDC(unimod:4)GVR,A0A140T8Y3,CRYPTIC_UNIQUE|A0A140T8Y3|tr|A0A140T8Y3|A0A140T8Y3_HUMAN|unique:298-304|tryptic:294-309|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TNXB,Tenascin XB
+NPAMVNEAR,Q5SNW7,CRYPTIC_UNIQUE|Q5SNW7|tr|Q5SNW7|Q5SNW7_HUMAN|unique:34-45|tryptic:29-46|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MTHFR,Methylenetetrahydrofolate reductase (EC 1.5.1.53)
+LAQLQEGQDLYSR,X5CMH5,CRYPTIC_UNIQUE|X5CMH5|tr|X5CMH5|X5CMH5_HUMAN|unique:687-703|tryptic:682-703|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TAP2,Antigen peptide transporter 2 (EC 7.4.2.14) (ATP-binding cassette sub-family B member 3)
+YSPPPSEC(unimod:4)APGQE,D6RIS4,CRYPTIC_UNIQUE|D6RIS4|tr|D6RIS4|D6RIS4_HUMAN|unique:124-134|tryptic:121-134|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MSX2,Msh homeobox 2
+THVTHHLVSDHEATLR,A0A1W2PP77,CRYPTIC_UNIQUE|A0A1W2PP77|tr|A0A1W2PP77|A0A1W2PP77_HUMAN|unique:81-102|tryptic:79-105|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+GSSVVAYEGQSWHDYC(unimod:4)FHC(unimod:4)K,Q5JXI8,CRYPTIC_UNIQUE|Q5JXI8|tr|Q5JXI8|Q5JXI8_HUMAN|unique:225-256|tryptic:225-257|source:Seddighi_et_al_2024_SciTranslMed_DataS2,FHL1,Four and a half LIM domains protein 1
+STTPAEQR,R4GN18,CRYPTIC_UNIQUE|R4GN18|tr|R4GN18|R4GN18_HUMAN|unique:53-77|tryptic:53-78|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CD46,CD46 molecule
+KAASLGSSQSSR,E9PSG1,CRYPTIC_UNIQUE|E9PSG1|tr|E9PSG1|E9PSG1_HUMAN|unique:33-51|tryptic:30-59|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CAST,Calpastatin
+ARQLEEELR,A7XZE4,CRYPTIC_UNIQUE|A7XZE4|tr|A7XZE4|A7XZE4_HUMAN|unique:183-191|tryptic:182-198|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM2b,Beta tropomyosin isoform
+WEAVHAAEQR,A0A0G2JIF2,CRYPTIC_UNIQUE|A0A0G2JIF2|tr|A0A0G2JIF2|A0A0G2JIF2_HUMAN|unique:168-180|tryptic:168-181|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+KASDAEGDVAALNR,A0A2R8YHD2,CRYPTIC_UNIQUE|A0A2R8YHD2|tr|A0A2R8YHD2|A0A2R8YHD2_HUMAN|unique:35-44|tryptic:34-54|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM4,Tropomyosin 4
+C(unimod:4)YFPYLENGYNQNHGR,Q5TFM2,CRYPTIC_UNIQUE|Q5TFM2|tr|Q5TFM2|Q5TFM2_HUMAN|unique:332-343|tryptic:324-346|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CFH,Complement factor H
+GQGVSSNMR,M0R0A5,CRYPTIC_UNIQUE|M0R0A5|tr|M0R0A5|M0R0A5_HUMAN|unique:54-75|tryptic:51-87|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DMKN,Dermokine
+HKWEAAHVAEQLR,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:161-178|tryptic:155-181|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+SLAASSALGVAGISYGQVR,A0A2R8Y4Z1,CRYPTIC_UNIQUE|A0A2R8Y4Z1|tr|A0A2R8Y4Z1|A0A2R8Y4Z1_HUMAN|unique:176-184|tryptic:169-188|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+TIDDLEETLASAK,Q5TCU3,CRYPTIC_UNIQUE|Q5TCU3|tr|Q5TCU3|Q5TCU3_HUMAN|unique:253-279|tryptic:251-284|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM2,Tropomyosin 2
+ASDAEGDVAALNR,A0A2R8YHD2,CRYPTIC_UNIQUE|A0A2R8YHD2|tr|A0A2R8YHD2|A0A2R8YHD2_HUMAN|unique:35-44|tryptic:34-54|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM4,Tropomyosin 4
+MLDQTLLDLNEM,A0A087WWU8,CRYPTIC_UNIQUE|A0A087WWU8|tr|A0A087WWU8|A0A087WWU8_HUMAN|unique:196-223|tryptic:194-227|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+FGNEEQQLAWAK,M0QY01,CRYPTIC_UNIQUE|M0QY01|tr|M0QY01|M0QY01_HUMAN|unique:0-43|tryptic:0-45|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPS15L1,Epidermal growth factor receptor pathway substrate 15 like 1
+VLEELHKAEDSLLAAEEAAAK,Q6ZN40,CRYPTIC_UNIQUE|Q6ZN40|tr|Q6ZN40|Q6ZN40_HUMAN|unique:39-71|tryptic:37-80|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,"Tropomyosin 1 (Alpha), isoform CRA_f (cDNA FLJ16459 fis, clone BRCAN2002473, moderately similar to Tropomyosin, fibroblast isoform 2)"
+KGGSYSQAASSDSAQGSDMSLTAC(unimod:4)K,A0A140T8Y4,CRYPTIC_UNIQUE|A0A140T8Y4|tr|A0A140T8Y4|A0A140T8Y4_HUMAN|unique:334-348|tryptic:334-370|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+LVEQLLSPR,G3XAH0,CRYPTIC_UNIQUE|G3XAH0|tr|G3XAH0|G3XAH0_HUMAN|unique:4-25|tryptic:0-27|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SEPTIN5,Septin
+YFYTAMSRPGR,A0A140T953,CRYPTIC_UNIQUE|A0A140T953|tr|A0A140T953|A0A140T953_HUMAN|unique:32-52|tryptic:26-56|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+LQNELDKYR,B1ALS0,CRYPTIC_UNIQUE|B1ALS0|tr|B1ALS0|B1ALS0_HUMAN|unique:42-67|tryptic:41-73|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PRKG1,Protein kinase cGMP-dependent 1
+MIDLMEQLEK,G3V394,CRYPTIC_UNIQUE|G3V394|tr|G3V394|G3V394_HUMAN|unique:1381-1416|tryptic:1380-1419|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MYO5A,Myosin VA
+SPVGLDC(unimod:4)C(unimod:4)NC(unimod:4)C(unimod:4)LDLAHR,D6R8Z7,CRYPTIC_UNIQUE|D6R8Z7|tr|D6R8Z7|D6R8Z7_HUMAN|unique:0-30|tryptic:0-31|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TSC22D3,TSC22 domain family member 3
+AYLEGLC(unimod:4)VEWLR,A0A140T9W2,CRYPTIC_UNIQUE|A0A140T9W2|tr|A0A140T9W2|A0A140T9W2_HUMAN|unique:182-213|tryptic:181-226|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+ALMAAEDK,H0YL42,CRYPTIC_UNIQUE|H0YL42|tr|H0YL42|H0YL42_HUMAN|unique:68-91|tryptic:65-94|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,Tropomyosin 1
+HNYELDEAVTLQR,A0A140T9T6,CRYPTIC_UNIQUE|A0A140T9T6|tr|A0A140T9T6|A0A140T9T6_HUMAN|unique:99-124|tryptic:99-127|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-DPB1,"Major histocompatibility complex, class II, DP beta 1"
+AEPGAPPAGGGLGGR,A0A1B0GW05,CRYPTIC_UNIQUE|A0A1B0GW05|tr|A0A1B0GW05|A0A1B0GW05_HUMAN|unique:69-86|tryptic:59-87|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DPY19L1,Dpy-19 like C-mannosyltransferase 1
+IPKPGLDHTEASFSPR,B7ZKJ8,CRYPTIC_UNIQUE|B7ZKJ8|tr|B7ZKJ8|B7ZKJ8_HUMAN|unique:633-647|tryptic:633-649|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ITIH4,ITIH4 protein
+TQPVREPSAPK,A0A0D9SF98,CRYPTIC_UNIQUE|A0A0D9SF98|tr|A0A0D9SF98|A0A0D9SF98_HUMAN|unique:104-113|tryptic:104-115|source:Seddighi_et_al_2024_SciTranslMed_DataS2,NCAM1,Neural cell adhesion molecule 1
+MFLVIGTHVMEGSGR,E7ERY9,CRYPTIC_UNIQUE|E7ERY9|tr|E7ERY9|E7ERY9_HUMAN|unique:0-10|tryptic:0-15|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+VLPAGHYC(unimod:4)PSLGIWASQVGSVR,Q5SNW7,CRYPTIC_UNIQUE|Q5SNW7|tr|Q5SNW7|Q5SNW7_HUMAN|unique:0-30|tryptic:0-37|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MTHFR,Methylenetetrahydrofolate reductase (EC 1.5.1.53)
+QLAEEPMDTDQGNSMLSAIQSEVAK,H0Y636,CRYPTIC_UNIQUE|H0Y636|tr|H0Y636|H0Y636_HUMAN|unique:30-37|tryptic:29-54|source:Seddighi_et_al_2024_SciTranslMed_DataS2,UCHL5,Ubiquitin C-terminal hydrolase L5
+FSDQAGPAIPTSNSYSK,E7ETY4,CRYPTIC_UNIQUE|E7ETY4|tr|E7ETY4|E7ETY4_HUMAN|unique:375-383|tryptic:374-391|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MARK2,Serine/threonine-protein kinase MARK2 (EC 2.7.11.1) (EC 2.7.11.26) (ELKL motif kinase 1) (MAP/microtubule affinity-regulating kinase 2)
+HHGEQIQTLEDR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:1979-2017|tryptic:1972-2018|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+THVTHHPVSDHEATLR,A0A140T9W2,CRYPTIC_UNIQUE|A0A140T9W2|tr|A0A140T9W2|A0A140T9W2_HUMAN|unique:182-213|tryptic:181-226|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+GSIGENQIKDEK,C9J813,CRYPTIC_UNIQUE|C9J813|tr|C9J813|C9J813_HUMAN|unique:202-212|tryptic:200-214|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CALD1,Caldesmon 1
+AREQAEAEVASLNR,A0A494C0G0,CRYPTIC_UNIQUE|A0A494C0G0|tr|A0A494C0G0|A0A494C0G0_HUMAN|unique:0-24|tryptic:0-29|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+QSASTLQGEPR,B1ALS0,CRYPTIC_UNIQUE|B1ALS0|tr|B1ALS0|B1ALS0_HUMAN|unique:42-67|tryptic:41-73|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PRKG1,Protein kinase cGMP-dependent 1
+EGMLMMMSPSPR,H0Y300,CRYPTIC_UNIQUE|H0Y300|tr|H0Y300|H0Y300_HUMAN|unique:120-164|tryptic:118-167|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HP,Haptoglobin
+SQSDLSSSSSR,J3KP75,CRYPTIC_UNIQUE|J3KP75|tr|J3KP75|J3KP75_HUMAN|unique:60-77|tryptic:50-78|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PHACTR2,Phosphatase and actin regulator
+VLGESPVPHTVLNLK,A0A494C0G5,CRYPTIC_UNIQUE|A0A494C0G5|tr|A0A494C0G5|A0A494C0G5_HUMAN|unique:1643-1651|tryptic:1640-1655|source:Seddighi_et_al_2024_SciTranslMed_DataS2,AGRN,Agrin
+NGAYGTPQK,K7ESF5,CRYPTIC_UNIQUE|K7ESF5|tr|K7ESF5|K7ESF5_HUMAN|unique:0-14|tryptic:0-15|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SLC44A2,Solute carrier family 44 member 2 (CTL2 blood group)
+VSEDERDR,Q6ZN40,CRYPTIC_UNIQUE|Q6ZN40|tr|Q6ZN40|Q6ZN40_HUMAN|unique:39-71|tryptic:37-80|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,"Tropomyosin 1 (Alpha), isoform CRA_f (cDNA FLJ16459 fis, clone BRCAN2002473, moderately similar to Tropomyosin, fibroblast isoform 2)"
+GYHGALAEWLGASAR,A0A1C7CYX0,CRYPTIC_UNIQUE|A0A1C7CYX0|tr|A0A1C7CYX0|A0A1C7CYX0_HUMAN|unique:321-364|tryptic:320-365|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+LKDLAFLK,L0R6Q1,CRYPTIC_UNIQUE|L0R6Q1|sp|L0R6Q1|S35U4_HUMAN|unique:9-23|tryptic:5-26|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SLC35A4,SLC35A4 upstream open reading frame protein (SLC35A4 microprotein) (SLC35A4-MP)
+ELDHERK,H0YN06,CRYPTIC_UNIQUE|H0YN06|tr|H0YN06|H0YN06_HUMAN|unique:21-49|tryptic:15-49|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,Tropomyosin 1
+LLEDMAVVR,A0A1C7CYX0,CRYPTIC_UNIQUE|A0A1C7CYX0|tr|A0A1C7CYX0|A0A1C7CYX0_HUMAN|unique:321-364|tryptic:320-365|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+LAGKPTHVNVSVVMAEVDGTC(unimod:4)Y,P01876,CRYPTIC_UNIQUE|P01876|sp|P01876|IGHA1_HUMAN|unique:328-353|tryptic:327-353|source:Seddighi_et_al_2024_SciTranslMed_DataS2,IGHA1,Immunoglobulin heavy constant alpha 1 (Ig alpha-1 chain C region) (Ig alpha-1 chain C region BUR) (Ig alpha-1 chain C region TRO)
+YFDTAMSRPGR,A0A140TA21,CRYPTIC_UNIQUE|A0A140TA21|tr|A0A140TA21|A0A140TA21_HUMAN|unique:30-41|tryptic:30-45|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+KNEIDLESELK,F8W876,CRYPTIC_UNIQUE|F8W876|tr|F8W876|F8W876_HUMAN|unique:332-344|tryptic:332-348|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MASP1,MBL associated serine protease 1
+LTNENLYFEELYADDPKK,G3V394,CRYPTIC_UNIQUE|G3V394|tr|G3V394|G3V394_HUMAN|unique:1381-1416|tryptic:1380-1419|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MYO5A,Myosin VA
+RVEGHVGELGDFQVK,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:1452-1488|tryptic:1451-1491|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+ENGTLVQVATISVYVR,A0A1B0GU22,CRYPTIC_UNIQUE|A0A1B0GU22|tr|A0A1B0GU22|A0A1B0GU22_HUMAN|unique:66-75|tryptic:59-75|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+GSGESGIQGFR,M0R0A5,CRYPTIC_UNIQUE|M0R0A5|tr|M0R0A5|M0R0A5_HUMAN|unique:54-75|tryptic:51-87|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DMKN,Dermokine
+DLSSPQGLLPGRPVQQR,A0A140T8X6,CRYPTIC_UNIQUE|A0A140T8X6|tr|A0A140T8X6|A0A140T8X6_HUMAN|unique:127-166|tryptic:127-169|source:Seddighi_et_al_2024_SciTranslMed_DataS2,LY6G6D,Lymphocyte antigen 6 family member G6D
+PEVDVMC(unimod:4)TAFHDNEETFLKK,A0A087WWT3,CRYPTIC_UNIQUE|A0A087WWT3|tr|A0A087WWT3|A0A087WWT3_HUMAN|unique:157-167|tryptic:141-170|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+SLMASEEEYSTK,A7XZE4,CRYPTIC_UNIQUE|A7XZE4|tr|A7XZE4|A7XZE4_HUMAN|unique:194-218|tryptic:191-220|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM2b,Beta tropomyosin isoform
+VYTLNNEK,H0Y300,CRYPTIC_UNIQUE|H0Y300|tr|H0Y300|H0Y300_HUMAN|unique:120-164|tryptic:118-167|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HP,Haptoglobin
+C(unimod:4)C(unimod:4)PDYESFC(unimod:4)AEVKDNK,J3KP74,CRYPTIC_UNIQUE|J3KP74|tr|J3KP74|J3KP74_HUMAN|unique:61-68|tryptic:54-70|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PRG4,Proteoglycan 4
+GPQAGLGPR,E9PGM1,CRYPTIC_UNIQUE|E9PGM1|tr|E9PGM1|E9PGM1_HUMAN|unique:609-615|tryptic:607-616|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EIF4G1,Eukaryotic translation initiation factor 4 gamma 1
+WEAAHVAEQLR,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:161-178|tryptic:155-181|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+LPSPDPGAEGHGQSR,H0YCU0,CRYPTIC_UNIQUE|H0YCU0|tr|H0YCU0|H0YCU0_HUMAN|unique:65-90|tryptic:63-91|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CHRDL2,Chordin like 2
+DGPPGGLLGEQIQPPSHHFSPEQR,K7EQ37,CRYPTIC_UNIQUE|K7EQ37|tr|K7EQ37|K7EQ37_HUMAN|unique:0-10|tryptic:0-33|source:Seddighi_et_al_2024_SciTranslMed_DataS2,UNC13D,Unc-13 homolog D
+EDLRSWTAADMAAQTTK,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:145-156|tryptic:145-168|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+SSHETLNIVEEK,E9PMG5,CRYPTIC_UNIQUE|E9PMG5|tr|E9PMG5|E9PMG5_HUMAN|unique:106-138|tryptic:104-145|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPB41L2,Erythrocyte membrane protein band 4.1 like 2
+TQDVYHDK,J3QQN0,CRYPTIC_UNIQUE|J3QQN0|tr|J3QQN0|J3QQN0_HUMAN|unique:9-42|tryptic:8-53|source:Seddighi_et_al_2024_SciTranslMed_DataS2,LPIN2,Lipin 2
+EEHLC(unimod:4)TQR,A0A087WWU8,CRYPTIC_UNIQUE|A0A087WWU8|tr|A0A087WWU8|A0A087WWU8_HUMAN|unique:196-223|tryptic:194-227|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+ETAEADVASLNR,F5H7S3,CRYPTIC_UNIQUE|F5H7S3|tr|F5H7S3|F5H7S3_HUMAN|unique:42-49|tryptic:42-54|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,Tropomyosin 1
+TLQEHYSQSLR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:2020-2046|tryptic:2018-2067|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+EQGIHSLEVLITR,A0A2R8Y602,CRYPTIC_UNIQUE|A0A2R8Y602|tr|A0A2R8Y602|A0A2R8Y602_HUMAN|unique:39-45|tryptic:36-49|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CLPB,ClpB family mitochondrial disaggregase
+TAVEHATDEDILAK,E9PEM5,CRYPTIC_UNIQUE|E9PEM5|tr|E9PEM5|E9PEM5_HUMAN|unique:2010-2020|tryptic:2010-2024|source:Seddighi_et_al_2024_SciTranslMed_DataS2,LRBA,LPS responsive beige-like anchor protein
+LAPAYPAGLGAFGVYLR,A0A1C7CYX0,CRYPTIC_UNIQUE|A0A1C7CYX0|tr|A0A1C7CYX0|A0A1C7CYX0_HUMAN|unique:321-364|tryptic:320-365|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+THVTHHPISDHEVTLR,A0A140T9Y5,CRYPTIC_UNIQUE|A0A140T9Y5|tr|A0A140T9Y5|A0A140T9Y5_HUMAN|unique:228-237|tryptic:221-246|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+GASDVGAGEPGPERAPLSPGR,A0A1B0GW05,CRYPTIC_UNIQUE|A0A1B0GW05|tr|A0A1B0GW05|A0A1B0GW05_HUMAN|unique:38-50|tryptic:28-55|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DPY19L1,Dpy-19 like C-mannosyltransferase 1
+QLEEDIAAK,Q6ZN40,CRYPTIC_UNIQUE|Q6ZN40|tr|Q6ZN40|Q6ZN40_HUMAN|unique:39-71|tryptic:37-80|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,"Tropomyosin 1 (Alpha), isoform CRA_f (cDNA FLJ16459 fis, clone BRCAN2002473, moderately similar to Tropomyosin, fibroblast isoform 2)"
+QEQEDLELAIALSK,M0QY01,CRYPTIC_UNIQUE|M0QY01|tr|M0QY01|M0QY01_HUMAN|unique:46-52|tryptic:45-65|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPS15L1,Epidermal growth factor receptor pathway substrate 15 like 1
+GELLGPQTDPSL,A0A087WWW0,CRYPTIC_UNIQUE|A0A087WWW0|tr|A0A087WWW0|A0A087WWW0_HUMAN|unique:98-115|tryptic:96-115|source:Seddighi_et_al_2024_SciTranslMed_DataS2,STX4,Syntaxin 4
+AAGQYSTSYAQQK,E5KLJ9,CRYPTIC_UNIQUE|E5KLJ9|tr|E5KLJ9|E5KLJ9_HUMAN|unique:200-229|tryptic:190-231|source:Seddighi_et_al_2024_SciTranslMed_DataS2,OPA1,"Dynamin-like GTPase OPA1, mitochondrial (EC 3.6.5.5)"
+TIDDLEDK,A0A087WWU8,CRYPTIC_UNIQUE|A0A087WWU8|tr|A0A087WWU8|A0A087WWU8_HUMAN|unique:196-223|tryptic:194-227|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+LLLLEGGPGSPSC(unimod:4)LLGGK,J3KPF0,CRYPTIC_UNIQUE|J3KPF0|tr|J3KPF0|J3KPF0_HUMAN|unique:246-264|tryptic:236-280|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HECTD4,HECT domain E3 ubiquitin protein ligase 4
+QEDAPMIEPLVPEEK,A0A0J9YW31,CRYPTIC_UNIQUE|A0A0J9YW31|tr|A0A0J9YW31|A0A0J9YW31_HUMAN|unique:92-98|tryptic:80-99|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPB41L3,Erythrocyte membrane protein band 4.1 like 3
+HC(unimod:4)SDIFSK,B7ZAP0,CRYPTIC_UNIQUE|B7ZAP0|sp|B7ZAP0|RBG10_HUMAN|unique:132-176|tryptic:130-178|source:Seddighi_et_al_2024_SciTranslMed_DataS2,RABGAP1L,"Rab GTPase-activating protein 1-like, isoform 10"
+HSTFGQSLTQR,H0Y7Z6,CRYPTIC_UNIQUE|H0Y7Z6|tr|H0Y7Z6|H0Y7Z6_HUMAN|unique:0-42|tryptic:0-45|source:Seddighi_et_al_2024_SciTranslMed_DataS2,GNAS,Guanine nucleotide-binding protein G(s) subunit alpha isoforms short
+KGGSYSQAASSDSAQGSDVSLTAC(unimod:4)K,A0A140T913,CRYPTIC_UNIQUE|A0A140T913|tr|A0A140T913|A0A140T913_HUMAN|unique:334-348|tryptic:334-370|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+GGSC(unimod:4)SQAASSNSAQGSDESLIAC(unimod:4)KA,A0A140T9M0,CRYPTIC_UNIQUE|A0A140T9M0|tr|A0A140T9M0|A0A140T9M0_HUMAN|unique:363-372|tryptic:347-372|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+ALMAAEDKYSQK,H0YL42,CRYPTIC_UNIQUE|H0YL42|tr|H0YL42|H0YL42_HUMAN|unique:68-91|tryptic:65-94|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,Tropomyosin 1
+LMKPLVVFVLGGPGAGK,A0A494BXC7,CRYPTIC_UNIQUE|A0A494BXC7|tr|A0A494BXC7|A0A494BXC7_HUMAN|unique:0-36|tryptic:0-48|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CMPK1,Cytidine/uridine monophosphate kinase 1
+NEEDNHSYYVSR,B4E173,CRYPTIC_UNIQUE|B4E173|tr|B4E173|B4E173_HUMAN|unique:34-48|tryptic:30-55|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+GSSGSVVVDLLYWR,F8W914,CRYPTIC_UNIQUE|F8W914|tr|F8W914|F8W914_HUMAN|unique:152-158|tryptic:151-165|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+VEESEVTVGGLEPGR,A0A140T8Z8,CRYPTIC_UNIQUE|A0A140T8Z8|tr|A0A140T8Z8|A0A140T8Z8_HUMAN|unique:2264-2270|tryptic:2263-2280|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TNXB,Tenascin XB
+TVVTEDFSHLPPEQQR,W4VSQ9,CRYPTIC_UNIQUE|W4VSQ9|tr|W4VSQ9|W4VSQ9_HUMAN|unique:324-332|tryptic:320-344|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TRIP10,Thyroid hormone receptor interactor 10
+SVIRPATQQAQK,B1ALS0,CRYPTIC_UNIQUE|B1ALS0|tr|B1ALS0|B1ALS0_HUMAN|unique:42-67|tryptic:41-73|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PRKG1,Protein kinase cGMP-dependent 1
+QVEEELTHLQK,K7ELP0,CRYPTIC_UNIQUE|K7ELP0|tr|K7ELP0|K7ELP0_HUMAN|unique:30-50|tryptic:30-51|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM4,Tropomyosin 4
+GYDQYAYDGK,A0A140T9W2,CRYPTIC_UNIQUE|A0A140T9W2|tr|A0A140T9W2|A0A140T9W2_HUMAN|unique:134-142|tryptic:132-145|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+DYIALNEDLSSWTAADTAAQITQR,A0A140T953,CRYPTIC_UNIQUE|A0A140T953|tr|A0A140T953|A0A140T953_HUMAN|unique:161-171|tryptic:156-180|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+QLLQTSSTK,H0Y9L2,CRYPTIC_UNIQUE|H0Y9L2|tr|H0Y9L2|H0Y9L2_HUMAN|unique:55-68|tryptic:52-70|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SLAIN2,SLAIN motif family member 2
+QTGSPGMIYR,A0A590UK89,CRYPTIC_UNIQUE|A0A590UK89|tr|A0A590UK89|A0A590UK89_HUMAN|unique:20-29|tryptic:16-30|source:Seddighi_et_al_2024_SciTranslMed_DataS2,KCNAB2,Potassium voltage-gated channel subfamily A regulatory beta subunit 2
+YFTTSVSRPGR,A0A1W2PQS8,CRYPTIC_UNIQUE|A0A1W2PQS8|tr|A0A1W2PQS8|A0A1W2PQS8_HUMAN|unique:27-37|tryptic:7-41|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+IQVLQQQADDAEER,A0A087WWU8,CRYPTIC_UNIQUE|A0A087WWU8|tr|A0A087WWU8|A0A087WWU8_HUMAN|unique:15-26|tryptic:13-27|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+SFQPLGPGYGISQSSR,E3W994,CRYPTIC_UNIQUE|E3W994|tr|E3W994|E3W994_HUMAN|unique:545-554|tryptic:544-560|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CLASP2,Cytoplasmic linker associated protein 2
+AEDSLLAAEEAAAK,Q6ZN40,CRYPTIC_UNIQUE|Q6ZN40|tr|Q6ZN40|Q6ZN40_HUMAN|unique:39-71|tryptic:37-80|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM1,"Tropomyosin 1 (Alpha), isoform CRA_f (cDNA FLJ16459 fis, clone BRCAN2002473, moderately similar to Tropomyosin, fibroblast isoform 2)"
+GPGGVWAAEAISDAR,P0DJI8,CRYPTIC_UNIQUE|P0DJI8|sp|P0DJI8|SAA1_HUMAN|unique:69-82|tryptic:65-85|source:Seddighi_et_al_2024_SciTranslMed_DataS2,SAA1,Serum amyloid A-1 protein (SAA) [Cleaved into: Amyloid protein A (Amyloid fibril protein AA); Serum amyloid protein A(2-104); Serum amyloid protein A(3-104); Serum amyloid protein A(2-103); Serum amyloid protein A(2-102); Serum amyloid protein A(4-101)]
+GTQVVGSDMTVTVQFTNPLK,P00488,CRYPTIC_UNIQUE|P00488|sp|P00488|F13A_HUMAN|unique:646-657|tryptic:638-658|source:Seddighi_et_al_2024_SciTranslMed_DataS2,F13A1,Coagulation factor XIII A chain (Coagulation factor XIIIa) (EC 2.3.2.13) (Protein-glutamine gamma-glutamyltransferase A chain) (Transglutaminase A chain)
+EQAEAEVASLNR,A0A494C0G0,CRYPTIC_UNIQUE|A0A494C0G0|tr|A0A494C0G0|A0A494C0G0_HUMAN|unique:0-24|tryptic:0-29|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+PEVDVMC(unimod:4)TAFHDNEETFLK,A0A087WWT3,CRYPTIC_UNIQUE|A0A087WWT3|tr|A0A087WWT3|A0A087WWT3_HUMAN|unique:157-167|tryptic:141-170|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+QTWSPVFLPDTWK,A0A087WXH2,CRYPTIC_UNIQUE|A0A087WXH2|tr|A0A087WXH2|A0A087WXH2_HUMAN|unique:102-142|tryptic:99-142|source:Seddighi_et_al_2024_SciTranslMed_DataS2,IPO8,Importin 8
+SWTAADMAAQITQR,A0A0G2JPD3,CRYPTIC_UNIQUE|A0A0G2JPD3|tr|A0A0G2JPD3|A0A0G2JPD3_HUMAN|unique:167-191|tryptic:155-193|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-A,"Major histocompatibility complex, class I, A"
+EVEGERR,A0A494C0G0,CRYPTIC_UNIQUE|A0A494C0G0|tr|A0A494C0G0|A0A494C0G0_HUMAN|unique:0-24|tryptic:0-29|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+C(unimod:4)LQDTLC(unimod:4)LHQGPHPK,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:2020-2046|tryptic:2018-2067|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+GKADGGAEYATYQTK,R4GN18,CRYPTIC_UNIQUE|R4GN18|tr|R4GN18|R4GN18_HUMAN|unique:53-77|tryptic:53-78|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CD46,CD46 molecule
+GNSDPWPNSMVVEHPEFLK,A0A0A0MS51,CRYPTIC_UNIQUE|A0A0A0MS51|tr|A0A0A0MS51|A0A0A0MS51_HUMAN|unique:7-19|tryptic:0-27|source:Seddighi_et_al_2024_SciTranslMed_DataS2,GSN,Gelsolin (ADF) (Actin-depolymerizing factor)
+VSSQLQSMHTLLR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:1135-1165|tryptic:1134-1166|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+ESEKAEQER,M0QY01,CRYPTIC_UNIQUE|M0QY01|tr|M0QY01|M0QY01_HUMAN|unique:0-43|tryptic:0-45|source:Seddighi_et_al_2024_SciTranslMed_DataS2,EPS15L1,Epidermal growth factor receptor pathway substrate 15 like 1
+DMEFSTSGHAYTDTGK,E5RK27,CRYPTIC_UNIQUE|E5RK27|tr|E5RK27|E5RK27_HUMAN|unique:0-12|tryptic:0-21|source:Seddighi_et_al_2024_SciTranslMed_DataS2,VDAC3,Non-selective voltage-gated ion channel VDAC3
+GGSC(unimod:4)SQAASSNSAQGSDESLIAC(unimod:4)K,A0A140T9M0,CRYPTIC_UNIQUE|A0A140T9M0|tr|A0A140T9M0|A0A140T9M0_HUMAN|unique:363-372|tryptic:347-372|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+GASDVGAGEPGPER,A0A1B0GW05,CRYPTIC_UNIQUE|A0A1B0GW05|tr|A0A1B0GW05|A0A1B0GW05_HUMAN|unique:38-50|tryptic:28-55|source:Seddighi_et_al_2024_SciTranslMed_DataS2,DPY19L1,Dpy-19 like C-mannosyltransferase 1
+EQAQQLQGSEGEK,B1AVV0,CRYPTIC_UNIQUE|B1AVV0|tr|B1AVV0|B1AVV0_HUMAN|unique:1198-1207|tryptic:1195-1208|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CDH23,Cadherin related 23
+STGKPTLYNVSLVMSDTAGTC(unimod:4)Y,P01871,CRYPTIC_UNIQUE|P01871|sp|P01871|IGHM_HUMAN|unique:430-453|tryptic:427-453|source:Seddighi_et_al_2024_SciTranslMed_DataS2,IGHM,Immunoglobulin heavy constant mu (Ig mu chain C region) (Ig mu chain C region BOT) (Ig mu chain C region GAL) (Ig mu chain C region OU)
+NRNVHSAGAAGSR,H7C0L5,CRYPTIC_UNIQUE|H7C0L5|tr|H7C0L5|H7C0L5_HUMAN|unique:473-480|tryptic:472-485|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ITIH4,Inter-alpha-trypsin inhibitor heavy chain 4
+VLSQLDASVR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:1979-2017|tryptic:1972-2018|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+MLDAEDIVGTLRPDEK,K7EJH8,CRYPTIC_UNIQUE|K7EJH8|tr|K7EJH8|K7EJH8_HUMAN|unique:45-55|tryptic:40-56|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+C(unimod:4)REMDEQIR,J3KN67,CRYPTIC_UNIQUE|J3KN67|tr|J3KN67|J3KN67_HUMAN|unique:185-216|tryptic:183-218|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPM3,Tropomyosin 3
+AHGDEEAAGEAAR,A0A1C7CYX0,CRYPTIC_UNIQUE|A0A1C7CYX0|tr|A0A1C7CYX0|A0A1C7CYX0_HUMAN|unique:125-143|tryptic:114-148|source:Seddighi_et_al_2024_SciTranslMed_DataS2,,
+DVIPVHYYLIPPPTK,Q5VZU9,CRYPTIC_UNIQUE|Q5VZU9|tr|Q5VZU9|Q5VZU9_HUMAN|unique:979-1002|tryptic:977-1012|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TPP2,Tripeptidyl-peptidase 2 (EC 3.4.14.10) (Tripeptidyl aminopeptidase) (Tripeptidyl-peptidase II)
+ELSQVLTQR,P47756,CRYPTIC_UNIQUE|P47756|sp|P47756|CAPZB_HUMAN|unique:261-277|tryptic:260-277|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CAPZB,F-actin-capping protein subunit beta (CapZ beta)
+FDSDATSPR,A0A140TA14,CRYPTIC_UNIQUE|A0A140TA14|tr|A0A140TA14|A0A140TA14_HUMAN|unique:42-71|tryptic:41-72|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+ADGGAEYATYQTK,R4GN18,CRYPTIC_UNIQUE|R4GN18|tr|R4GN18|R4GN18_HUMAN|unique:53-77|tryptic:53-78|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CD46,CD46 molecule
+DSSVPVSK,D6RCE7,CRYPTIC_UNIQUE|D6RCE7|tr|D6RCE7|D6RCE7_HUMAN|unique:62-96|tryptic:60-98|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ALB,Albumin
+GLETQQALQR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:983-990|tryptic:974-992|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+NVHSAGAAGSR,H7C0L5,CRYPTIC_UNIQUE|H7C0L5|tr|H7C0L5|H7C0L5_HUMAN|unique:473-480|tryptic:472-485|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ITIH4,Inter-alpha-trypsin inhibitor heavy chain 4
+YPLHAIR,B4E2Q0,CRYPTIC_UNIQUE|B4E2Q0|tr|B4E2Q0|B4E2Q0_HUMAN|unique:6-41|tryptic:0-42|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ATP2C1,Calcium-transporting ATPase (EC 7.2.2.10)
+IADLSQQLGASEQAQR,A0A494BZV2,CRYPTIC_UNIQUE|A0A494BZV2|tr|A0A494BZV2|A0A494BZV2_HUMAN|unique:992-1033|tryptic:992-1041|source:Seddighi_et_al_2024_SciTranslMed_DataS2,MPRIP,Myosin phosphatase Rho-interacting protein (Rho-interacting protein 3) (p116Rip)
+TPIQAGGYGEFAAFK,H7C560,CRYPTIC_UNIQUE|H7C560|tr|H7C560|H7C560_HUMAN|unique:756-767|tryptic:752-767|source:Seddighi_et_al_2024_SciTranslMed_DataS2,BRAF,non-specific serine/threonine protein kinase (EC 2.7.11.1)
+YLTLDSFDAMFR,A0A0G2JQT1,CRYPTIC_UNIQUE|A0A0G2JQT1|tr|A0A0G2JQT1|A0A0G2JQT1_HUMAN|unique:814-821|tryptic:814-826|source:Seddighi_et_al_2024_SciTranslMed_DataS2,CYFIP1,Cytoplasmic FMR1 interacting protein 1
+GHDQSAYDGK,A0A140T953,CRYPTIC_UNIQUE|A0A140T953|tr|A0A140T953|A0A140T953_HUMAN|unique:145-153|tryptic:143-156|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-B,"Major histocompatibility complex, class I, B"
+QEVHAPWNWQVGR,A0A087WWD4,CRYPTIC_UNIQUE|A0A087WWD4|tr|A0A087WWD4|A0A087WWD4_HUMAN|unique:358-392|tryptic:358-398|source:Seddighi_et_al_2024_SciTranslMed_DataS2,NCAM1,Neural cell adhesion molecule 1
+GYNQFAYDGK,A0A140T9S7,CRYPTIC_UNIQUE|A0A140T9S7|tr|A0A140T9S7|A0A140T9S7_HUMAN|unique:132-143|tryptic:132-145|source:Seddighi_et_al_2024_SciTranslMed_DataS2,HLA-C,"Major histocompatibility complex, class I, C"
+ILPQSDPSPGTPPR,A0A140T902,CRYPTIC_UNIQUE|A0A140T902|tr|A0A140T902|A0A140T902_HUMAN|unique:1157-1166|tryptic:1147-1194|source:Seddighi_et_al_2024_SciTranslMed_DataS2,TNXB,Tenascin XB
+VNVDIINFGEEALR,H0Y3Y9,CRYPTIC_UNIQUE|H0Y3Y9|tr|H0Y3Y9|H0Y3Y9_HUMAN|unique:29-35|tryptic:23-37|source:Seddighi_et_al_2024_SciTranslMed_DataS2,PSMD4,"Proteasome 26S subunit ubiquitin receptor, non-ATPase 4"
+LPNGVHAR,H7C5N6,CRYPTIC_UNIQUE|H7C5N6|tr|H7C5N6|H7C5N6_HUMAN|unique:0-22|tryptic:0-31|source:Seddighi_et_al_2024_SciTranslMed_DataS2,ASIC3,Acid sensing ion channel subunit 3
+NPITGFGK,Q5JXI8,CRYPTIC_UNIQUE|Q5JXI8|tr|Q5JXI8|Q5JXI8_HUMAN|unique:225-256|tryptic:225-257|source:Seddighi_et_al_2024_SciTranslMed_DataS2,FHL1,Four and a half LIM domains protein 1
