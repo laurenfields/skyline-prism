@@ -20,6 +20,32 @@
       dotnet msbuild dotnet/build/package.proj /p:Configuration=Debug
   -->
 
+  <PropertyGroup>
+    <!-- Pinned uv launcher for the bundled differential-explorer payload. uv.exe is
+         gitignored (large, platform-specific), so fetch it here to make the packaged
+         zip reproducible from a clean checkout / CI. -->
+    <UvVersion>0.11.28</UvVersion>
+    <DiffExplorerDir>$(MSBuildThisFileDirectory)..\src\SkylinePrism.App\diffexplorer\</DiffExplorerDir>
+    <UvExe>$(DiffExplorerDir)uv.exe</UvExe>
+    <UvZipUrl>https://github.com/astral-sh/uv/releases/download/$(UvVersion)/uv-x86_64-pc-windows-msvc.zip</UvZipUrl>
+    <UvTmpDir>$(MSBuildThisFileDirectory)uv-download\</UvTmpDir>
+  </PropertyGroup>
+
+  <!-- Ensure the pinned uv.exe is in the payload before publishing. Idempotent: skips
+       entirely when a dev copy already exists. TODO: verify a pinned SHA-256 of the
+       release asset for supply-chain integrity. -->
+  <Target Name="FetchUv" BeforeTargets="Pack" Condition="!Exists('$(UvExe)')">
+    <Message Importance="high" Text="uv.exe not found in payload - fetching uv $(UvVersion)..." />
+    <MakeDir Directories="$(UvTmpDir)" />
+    <DownloadFile SourceUrl="$(UvZipUrl)" DestinationFolder="$(UvTmpDir)">
+      <Output TaskParameter="DownloadedFile" PropertyName="UvZipFile" />
+    </DownloadFile>
+    <Unzip SourceFiles="$(UvZipFile)" DestinationFolder="$(UvTmpDir)" />
+    <Copy SourceFiles="$(UvTmpDir)uv.exe" DestinationFiles="$(UvExe)" />
+    <RemoveDir Directories="$(UvTmpDir)" />
+    <Message Importance="high" Text="Fetched uv $(UvVersion) -> $(UvExe)" />
+  </Target>
+
   <Target Name="Pack">
     <RemoveDir Directories="$(PublishDir)" />
     <MakeDir Directories="$(PublishDir);$(ZipDir)" />
