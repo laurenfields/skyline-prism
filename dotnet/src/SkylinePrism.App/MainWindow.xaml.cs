@@ -1156,19 +1156,81 @@ public partial class MainWindow : Window
 
     private async void OnRun(object sender, RoutedEventArgs e)
     {
-        if (_inputs.Count == 0)
-        {
-            Log("No inputs. Add a document or an exported report on the Inputs tab.");
-            ShowAnalysis(AnalysisPane.Inputs);
+        // Claimed BEFORE the first await, not after it. Everything from the click to the pipeline
+        // starting used to be synchronous, so WPF could not deliver a second click in between; the
+        // existence check below runs off-thread and yields the dispatcher, and a second click on a
+        // still-enabled button would start a second pipeline into the same output directory.
+        // UpdateRunEnabled owns the button's state, so every exit from here goes back through it.
+        if (_isRunning)
             return;
+        _isRunning = true;
+        UpdateRunEnabled();
+
+        // Everything between the claim and the run can throw - a control that will not parse, a
+        // share that cannot be listed, a label collision - and this is an `async void` handler, so an
+        // escaping exception never reaches the finally further down that releases the claim. The Run
+        // button would then stay disabled until the tool was restarted, which is a worse outcome than
+        // the double-start the claim exists to prevent. So: one gate, released on every exit that is
+        // not the run actually beginning.
+        var starting = false;
+        try
+        {
+            if (_inputs.Count == 0)
+            {
+                Log("No inputs. Add a document or an exported report on the Inputs tab.");
+                ShowAnalysis(AnalysisPane.Inputs);
+                return;
+            }
+
+            // Asked BEFORE anything is touched - this is the last moment a person can change their
+            // mind, and the answer decides whether a cohort's results survive.
+            //
+            // Silent when the previous run used the same version and the same settings: re-running
+            // to regenerate a report or to top up a partial ion accounting is ordinary, and a dialog
+            // on the ordinary case is one people learn to dismiss without reading.
+            //
+            // The controls are read here, on the UI thread; the directory is then looked at off it,
+            // because an output directory is routinely a network share and a stat of six file names
+            // plus a JSON read is not something to make the window sit through.
+            var outputDirToCheck = OutputDirBox.Text;
+            var configToCheck = BuildConfigFromUi();
+            var existing = await Task.Run(
+                () => ExistingResults.Inspect(outputDirToCheck, configToCheck));
+            if (existing.Warning() is { } warning)
+            {
+                var answer = MessageBox.Show(
+                    warning + Environment.NewLine + Environment.NewLine + "Run anyway?",
+                    "Results already in this folder", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes)
+                    return;
+            }
+
+            // Labels double as exported file stems and as batch labels, so they must be unique
+            // before the run.
+            PrismInput.EnsureUniqueLabels(_inputs);
+            InputsGrid.Items.Refresh();
+            starting = true;
+        }
+        catch (Exception ex)
+        {
+            Log("ERROR: the run could not be started - " + ex.Message);
+            App.WriteLog("Run setup failed: " + ex);
+            // Where the message is. The empty-inputs path above shows its own pane for the same
+            // reason: a button that flickers and a window that does nothing is not a report.
+            ShowAnalysis(AnalysisPane.Log);
+        }
+        finally
+        {
+            if (!starting)
+            {
+                _isRunning = false;
+                UpdateRunEnabled();
+            }
         }
 
-        // Labels double as exported file stems and as batch labels, so they must be unique before the run.
-        PrismInput.EnsureUniqueLabels(_inputs);
-        InputsGrid.Items.Refresh();
+        if (!starting)
+            return;
 
-        _isRunning = true;
-        RunButton.IsEnabled = false;
         OpenReportButton.IsEnabled = false;
         LogBox.Clear();
         ShowAnalysis(AnalysisPane.Log); // show progress as it runs
@@ -1602,6 +1664,18 @@ public partial class MainWindow : Window
                     ? ", no precursor window (the MS2 half only)"
                     : $", precursor {precursor.Describe()}")
                 + $" ({source}).");
+
+            // Written down while it is known. The tolerances come from the Skyline document, and a
+            // result outlives its document as surely as it outlives the instrument files - after
+            // which nothing in the directory can say which window produced its assigned figures,
+            // and the window is what decides how much fragment sharing is found. AFTER
+            // Provenance.Write, which truncates parameters.json wholesale at Stage 5; this is the
+            // same ordering RecordIsolationProvenance needs and for the same reason.
+            if (Provenance.RecordExtraction(outputDir, product, precursor, source))
+            {
+                Log("Recorded the extraction windows in parameters.json, so the numbers stay "
+                    + "interpretable once the document has moved on.");
+            }
 
             var scheme = IsolationSchemeResolver.Resolve(outputDir, rawDir, Log);
             if (scheme is null)

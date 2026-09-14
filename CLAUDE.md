@@ -515,12 +515,39 @@ Key sections:
 - `IonAccountingRun` / `IonAccountingStore` / `ClaimedRegionLoader` / `ClaimedSignalIndex` /
   `AssignedPeptides`: ion accounting - how many ions reached the detector and what fraction a peptide
   sequence explains, at each MS level. Cached as `ion_accounting.parquet` + `ion_cycles.parquet`.
-  **The cycles file is written ONCE, at the end of a run**, with every progress save going to
-  `ion_cycles.parquet.new` beside it; a run that cannot claim the real name leaves the measurement
-  staged there and `IonAccountingStore.CyclesPathFor` reads it in place, taking the newer of the
-  two. Do not "simplify" that back to writing the real name per replicate - a 48-replicate run
-  then replaces it 48 times and races whatever watches the directory, which is how a whole
-  measurement was lost.
+  **The cycles file is created at the start of a measurement and one row group is APPENDED per
+  replicate** (`IonAccountingStore.BeginCycles` / `AppendCycles`), so `ion_cycles.parquet` is valid
+  and current under its own name from the first replicate onward - parquet rewrites its footer on
+  every close, so a run killed at replicate 499 of 500 leaves 499 readable replicates. Two shapes
+  this must never turn back into. **Rewriting the whole accumulated table** each time is O(N^2):
+  measured at 883 MB written to persist 36 MB over 48 replicates, ~92 GB projected at 500. **Writing
+  to a staging file and renaming it over the real one** is worse than it sounds - a rename-over is
+  the strictest operation available (see the file-sharing table under "Code Style"), refused while
+  ANY handle is open on the target, so it fails in exactly the case it is reached for; that shipped
+  once and made a narrow failure wider. `RecoverStagedCycles` / `CyclesPathFor` still read an
+  `ion_cycles.parquet.new` left by a build before dotnet-vNEXT, taking the newer of the two. That is
+  a migration path for one release, not a design to extend.
+
+  > [!CAUTION]
+  > **An append is NOT atomic, and what it damages is the WHOLE file.** Parquet keeps its metadata
+  > at the end, so appending overwrites the existing footer with the new row group and writes a fresh
+  > footer after it; in between, the file has no footer and reads as **nothing** - not "everything
+  > except the replicate in flight". Measured: a four-replicate file truncated at its footer offset,
+  > which is exactly what the first write of an append does, gives 0 rows instead of 3,000.
+  >
+  > So `ParquetWideWriter.Append` copies the bytes it is about to overwrite to
+  > `<file>.footer` first, and `IonAccountingStore.RepairCycles` puts them back - automatically, from
+  > the read path, because the reader is where the damage is noticed. The footer is ~1,577 bytes per
+  > row group (measured, linear from 8 to 120 groups), so the protection costs about 188 MB over a
+  > 500-replicate run against 376 MB of data. Never remove the backup to save those bytes: without
+  > it, a run killed at replicate 499 of 500 loses all 499, which is the exact promise appending was
+  > introduced to keep.
+  >
+  > **Starting the file over is part of the OPEN** (`Append(..., replace: true)` -> `FileMode.Create`),
+  > never a `File.Delete` before it. A delete can be refused and then succeed a moment later - a
+  > scanner or an SMB holder letting go inside the append's own retry window - and the next open
+  > finds the file and APPENDS, mixing two measurements and two settings keys in one file with
+  > nothing said.
   **The cache is keyed on `IonAccountingStore.SettingsKeyFor`, and the key is stored in the file:**
   it covers both extraction tolerances, the isolation scheme, the selected lists AND a fingerprint of
   the instrument files and `merged_data/`. Add anything that changes the numbers and it must go in
@@ -549,6 +576,12 @@ Key sections:
   reads the windows for the cost of opening ONE file - they are scan headers in the first two
   acquisition cycles - so never reach for `Ms2SignalReaders.Read` to get them: that measures the
   whole run to use one field of the answer.
+- `Pipeline/Provenance.RecordExtraction` / `ReadExtraction`: the EXTRACTION windows, recorded in
+  `parameters.json` for the same reason the isolation windows are - the tolerances live in the
+  Skyline document and a result outlives it. **Record the quadruple** (analyzer, resolution,
+  resolution_mz, selective_extraction), never a setting string: `ProductMassTolerance.ToSetting()`
+  returns null for tof, orbitrap, ft_icr and selective-extraction QIT, and an earlier version of
+  this recorded exactly nothing on those instruments while looking correct on centroided.
 - `Visualization/PlotRenderer`: every plot (ScottPlot/SkiaSharp), rendered headlessly
 
 ### dotnet/Directory.Build.props

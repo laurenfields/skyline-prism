@@ -345,9 +345,14 @@ public static class IonAccountingStore
     /// False for a progress save mid-run, which leaves <c>ion_cycles.parquet</c> alone and keeps the
     /// cycles in the staging file beside it. See <see cref="WriteCycles"/> for why that matters.
     /// </param>
+    /// <param name="writeCycles">
+    /// False when the caller is accumulating the cycles itself, one replicate at a time, through
+    /// <see cref="BeginCycles"/> and <see cref="AppendCycles"/> - which is what a measurement does.
+    /// The summary and the per-list totals are still written.
+    /// </param>
     public static void Write(
         string outputDir, IonAccountingResult result, Action<string>? log = null,
-        bool finalize = true)
+        bool finalize = true, bool writeCycles = true)
     {
         var rows = result.Rows;
         var n = rows.Count;
@@ -414,9 +419,141 @@ public static class IonAccountingStore
             Path.Combine(outputDir, FileName), meta,
             Array.Empty<string>(), Array.Empty<double[]>(), n);
 
-        WriteCycles(
-            outputDir, result.Cycles, result.SettingsKey, result.Rows.Count, log, finalize);
+        if (writeCycles)
+        {
+            WriteCycles(
+                outputDir, result.Cycles, result.SettingsKey, result.Rows.Count, log, finalize);
+        }
         WriteLists(outputDir, result);
+    }
+
+    /// <summary>
+    /// Start a fresh cycles file for a measurement that is about to begin.
+    /// </summary>
+    /// <remarks>
+    /// <para>The real name, from the first replicate onward. Everything a run measures is in
+    /// <c>ion_cycles.parquet</c> as soon as that replicate finishes - there is no staging file to
+    /// recover from and no rename to be refused, because the file being written IS the file.</para>
+    ///
+    /// <para>A measurement replaces what was there, or a re-run would silently carry the previous
+    /// run's replicates forward. The replacement is NOT done by deleting here: the first append
+    /// opens with truncation instead, so that "start over" is one operation that either happens or
+    /// does not. A delete can be refused and then succeed a moment later - a scanner or an SMB
+    /// holder letting go inside the append's own retry window - and the new rows would land on top
+    /// of the old measurement, mixing two settings keys in one file with nothing said.</para>
+    ///
+    /// <para>What IS removed here is the staging file a build before dotnet-vNEXT would have left,
+    /// so a stale one cannot shadow the file this run is about to write. Failing to remove it is
+    /// harmless and therefore silent: the real file is rewritten continuously from here, so it is
+    /// the newer of the two within moments.</para>
+    /// </remarks>
+    public static void BeginCycles(string outputDir)
+    {
+        foreach (var path in new[]
+                 {
+                     Path.Combine(outputDir, CyclesFile + ".new"),
+                     ParquetWideWriter.FooterBackupOf(Path.Combine(outputDir, CyclesFile)),
+                 })
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Harmless: neither file can outrank what this run is about to write.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Add one replicate's cycles to the file, as a row group.
+    /// </summary>
+    /// <remarks>
+    /// Writing the whole accumulated table again after every replicate is O(n^2) in bytes - measured
+    /// on a real 48-replicate cache, 883 MB written to persist 36 MB, and about 92 GB projected at
+    /// 500 replicates. This writes each row once. The file is valid after every append, so a run
+    /// that stops leaves everything it had measured under the name everything reads.
+    /// </remarks>
+    /// <param name="replace">
+    /// True for the FIRST save of a measurement, which starts the file over rather than adding to
+    /// what a previous measurement left. The truncation is part of the open - see
+    /// <see cref="BeginCycles"/> for why it is not a delete.
+    /// </param>
+    public static void AppendCycles(
+        string outputDir, IReadOnlyList<IonCycleRow> cycles, string settingsKey,
+        bool replace = false)
+    {
+        if (cycles.Count == 0)
+            return;
+        ParquetWideWriter.Append(
+            Path.Combine(outputDir, CyclesFile), CycleColumns(cycles, settingsKey), replace);
+    }
+
+    /// <summary>
+    /// Put back a cycles file whose footer an interrupted append destroyed.
+    /// </summary>
+    /// <remarks>
+    /// <para>Parquet keeps its metadata at the end, so an append overwrites the footer with the new
+    /// row group and writes a fresh one after it. A process killed in between - and this repository
+    /// documents ion accounting dying that way twice, to a native fault no catch block sees - leaves
+    /// a file with no footer, which reads as NOTHING rather than as everything up to that point.
+    /// Measured: a four-replicate file truncated at its footer offset gives 0 rows, not 3,000.</para>
+    ///
+    /// <para>The bytes are kept beside the file before each append, so what comes back is every
+    /// replicate that had been saved. The one in flight is lost, which is correct - it never
+    /// finished.</para>
+    /// </remarks>
+    public static bool RepairCycles(string outputDir, Action<string>? log = null)
+    {
+        // NEVER while a measurement is running. An append in flight looks exactly like an
+        // interrupted one from outside, and rewinding a live run to its previous footer would be the
+        // worst possible reading of a transient state. TryRepair opens exclusively and would be
+        // refused anyway, but that is a share-mode interaction in another file; this is the guard,
+        // and it is here so that every caller gets it rather than the ones that remembered.
+        if (IsMeasuring(outputDir))
+            return false;
+
+        var path = Path.Combine(outputDir, CyclesFile);
+        if (!File.Exists(path) || !File.Exists(ParquetWideWriter.FooterBackupOf(path)))
+            return false;
+        if (Parses(path))
+            return false;
+
+        if (!ParquetWideWriter.TryRepair(path, Parses))
+            return false;
+
+        log?.Invoke(
+            $"  {CyclesFile} was left without a footer by an interrupted write and has been "
+            + $"repaired from the copy beside it ({RowsIn(path):N0} cycles recovered).");
+        return true;
+    }
+
+    private static bool Parses(string path)
+    {
+        try
+        {
+            using var reader = ParquetColumnReader.Open(path);
+            _ = reader.RowGroupCount;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static long RowsIn(string path)
+    {
+        try
+        {
+            return ParquetColumnReader.RowCountOf(path);
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     /// <param name="rowCount">
@@ -454,34 +591,7 @@ public static class IonAccountingStore
         // .new file is left where a later run or a hand rename recovers the whole measurement.
         var staging = path + ".new";
 
-        var meta = new List<ParquetWideWriter.MetaColumn>
-        {
-            ParquetWideWriter.Strings("sample", cycles.Select(c => c.Sample).ToArray()),
-            ParquetWideWriter.Longs("cycle", cycles.Select(c => (long)c.Cycle).ToArray()),
-            ParquetWideWriter.Doubles("rt_start_min", cycles.Select(c => c.RtStartMin).ToArray()),
-            ParquetWideWriter.Doubles("rt_stop_min", cycles.Select(c => c.RtStopMin).ToArray()),
-            ParquetWideWriter.Longs("ms1_count", cycles.Select(c => (long)c.Ms1Count).ToArray()),
-            ParquetWideWriter.Longs("ms2_count", cycles.Select(c => (long)c.Ms2Count).ToArray()),
-            ParquetWideWriter.Doubles("ms1_acquired", cycles.Select(c => c.Ms1Acquired).ToArray()),
-            ParquetWideWriter.Doubles("ms2_acquired", cycles.Select(c => c.Ms2Acquired).ToArray()),
-            ParquetWideWriter.Doubles("ms1_assigned", cycles.Select(c => c.Ms1Assigned).ToArray()),
-            ParquetWideWriter.Doubles("ms2_assigned", cycles.Select(c => c.Ms2Assigned).ToArray()),
-            ParquetWideWriter.Doubles("ms1_signal", cycles.Select(c => c.Ms1Signal).ToArray()),
-            ParquetWideWriter.Doubles("ms2_signal", cycles.Select(c => c.Ms2Signal).ToArray()),
-            ParquetWideWriter.Doubles(
-                "ms1_signal_assigned", cycles.Select(c => c.Ms1SignalAssigned).ToArray()),
-            ParquetWideWriter.Doubles(
-                "ms2_signal_assigned", cycles.Select(c => c.Ms2SignalAssigned).ToArray()),
-            ParquetWideWriter.Doubles(
-                "ms2_signal_explained", cycles.Select(c => c.Ms2SignalExplained).ToArray()),
-            ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
-            // The same key the summary carries, so the two files can be checked against each other.
-            // They are written separately and the summary is written FIRST, so a failure between
-            // them leaves a new summary beside an older set of traces - and without this the only
-            // thing tying a trace to a measurement was the replicate name, which is identical
-            // across runs. Repeated per row and dictionary-encoded to nothing.
-            ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
-        };
+        var meta = CycleColumns(cycles, settingsKey);
         if (!finalize)
         {
             ParquetWideWriter.Write(
@@ -738,6 +848,54 @@ public static class IonAccountingStore
         }
     }
 
+    /// <summary>
+    /// The cycles file's columns, in the ONE place that defines them.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the whole-table write and the per-replicate append, because appending a row
+    /// group requires a schema IDENTICAL to what is already in the file - same names, same types,
+    /// same order - and parquet will not tell you when it is not. Two copies of this list would
+    /// be two chances to diverge and no way to notice.
+    /// </remarks>
+    private static List<ParquetWideWriter.MetaColumn> CycleColumns(
+        IReadOnlyList<IonCycleRow> cycles, string settingsKey) =>
+        new()
+        {
+            ParquetWideWriter.Strings("sample", cycles.Select(c => c.Sample).ToArray()),
+            ParquetWideWriter.Longs("cycle", cycles.Select(c => (long)c.Cycle).ToArray()),
+            ParquetWideWriter.Doubles("rt_start_min", cycles.Select(c => c.RtStartMin).ToArray()),
+            ParquetWideWriter.Doubles("rt_stop_min", cycles.Select(c => c.RtStopMin).ToArray()),
+            ParquetWideWriter.Longs("ms1_count", cycles.Select(c => (long)c.Ms1Count).ToArray()),
+            ParquetWideWriter.Longs("ms2_count", cycles.Select(c => (long)c.Ms2Count).ToArray()),
+            ParquetWideWriter.Doubles("ms1_acquired", cycles.Select(c => c.Ms1Acquired).ToArray()),
+            ParquetWideWriter.Doubles("ms2_acquired", cycles.Select(c => c.Ms2Acquired).ToArray()),
+            ParquetWideWriter.Doubles("ms1_assigned", cycles.Select(c => c.Ms1Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms2_assigned", cycles.Select(c => c.Ms2Assigned).ToArray()),
+            ParquetWideWriter.Doubles("ms1_signal", cycles.Select(c => c.Ms1Signal).ToArray()),
+            ParquetWideWriter.Doubles("ms2_signal", cycles.Select(c => c.Ms2Signal).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms1_signal_assigned", cycles.Select(c => c.Ms1SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_assigned", cycles.Select(c => c.Ms2SignalAssigned).ToArray()),
+            ParquetWideWriter.Doubles(
+                "ms2_signal_explained", cycles.Select(c => c.Ms2SignalExplained).ToArray()),
+            ParquetWideWriter.Doubles("ms2_explained", cycles.Select(c => c.Ms2Explained).ToArray()),
+            // The same key the summary carries, so the two files can be checked against each other.
+            // They are written separately and the summary is written FIRST, so a failure between
+            // them leaves a new summary beside an older set of traces - and without this the only
+            // thing tying a trace to a measurement was the replicate name, which is identical
+            // across runs.
+            //
+            // "Repeated per row and dictionary-encoded to nothing" is what this comment used to say,
+            // and it was measured wrong: the key is ~650 bytes, and in ONE row group of 49,010 rows
+            // Snappy stored it plainly - 31.5 MB of a 36 MB file, 87% of it, for a single repeated
+            // value. Appending one replicate per row group leaves one distinct value per group,
+            // which does encode away; the same 48 replicates come to 4.8 MB. The whole-table path
+            // still pays it, which is a reason to prefer AppendCycles and, eventually, to move the
+            // key into the file's own metadata where one copy would do.
+            ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
+        };
+
     private static void WriteLists(string outputDir, IonAccountingResult result)
     {
         var path = Path.Combine(outputDir, ListsFile);
@@ -785,7 +943,9 @@ public static class IonAccountingStore
             return null;
 
         // The first thing anything does with this directory, so a measurement whose cycles write
-        // was blocked is put right before anyone notices it was.
+        // was blocked is put right before anyone notices it was. A torn cycles file is NOT repaired
+        // here - this reads the summary, and repairing on the read that actually fails costs one
+        // footer parse instead of one per read. See ReadCyclesFile.
         RecoverStagedCycles(outputDir, log);
 
         try
@@ -886,11 +1046,116 @@ public static class IonAccountingStore
     /// summary is small and this is not: a cohort's cycles run to hundreds of thousands of rows, and
     /// the time plots only ever show one replicate at a time.
     /// </summary>
-    public static IReadOnlyList<IonCycleRow> ReadCycles(string outputDir, string? sample = null)
+    /// <summary>
+    /// How long a read of the cycles file keeps trying while a measurement is appending to it.
+    /// </summary>
+    /// <remarks>
+    /// <para>An append overwrites the footer before writing a new one, so for the width of one append
+    /// the file cannot be parsed at all - it is momentarily headless rather than damaged, and
+    /// <see cref="RepairCycles"/> deliberately will not touch it while a writer is live. A reader that
+    /// happens to land there gets an exception, and every caller turns that into "no cycles", which is
+    /// a statement about the DATA rather than about the read.</para>
+    ///
+    /// <para>Measured with a writer appending back to back - far harsher than a real measurement,
+    /// where the append is ~20 ms once per replicate and a replicate takes minutes to read: 4.6% of
+    /// opens failed, and a single 50 ms retry recovered every one of them. The budget here is five
+    /// attempts 75 ms apart, which covers the slowest append seen (155 ms) with room over. It costs
+    /// nothing when the read succeeds, which is the overwhelming majority of the time.</para>
+    /// </remarks>
+    private const int CycleReadAttempts = 5;
+
+    /// <inheritdoc cref="CycleReadAttempts"/>
+    private const int CycleReadDelayMs = 75;
+
+    /// <summary>
+    /// Read the cycles file, retrying briefly while an append has it headless. Null when it could not
+    /// be read at all - which is NOT the same answer as "there is nothing in it", and the callers that
+    /// decide whether to re-measure a cohort must not confuse the two.
+    /// </summary>
+    private static (T? Value, Exception? Failure) WithAppendRetry<T>(Func<T> read)
+        where T : class
     {
-        foreach (var path in CyclesPathsFor(outputDir))
+        for (var attempt = 1; ; attempt++)
         {
             try
+            {
+                return (read(), null);
+            }
+            catch (Exception ex) when (attempt < CycleReadAttempts && IsWorthRetrying(ex))
+            {
+                Thread.Sleep(CycleReadDelayMs);
+            }
+            catch (Exception ex)
+            {
+                return (null, ex);
+            }
+        }
+    }
+
+    /// <summary>Whether waiting could plausibly change the answer.</summary>
+    /// <remarks>
+    /// A missing file, a missing directory or a refused permission will say the same thing in
+    /// 300 ms, and sleeping through four delays to be told so again is latency on every read of a
+    /// directory the user cannot see. Cancellation and exhaustion must not be slept through at all.
+    /// </remarks>
+    private static bool IsWorthRetrying(Exception ex) =>
+        ex is not (OperationCanceledException or FileNotFoundException or DirectoryNotFoundException
+            or UnauthorizedAccessException or OutOfMemoryException);
+
+    /// <summary>
+    /// Read the cycles file: wait out an append, and only then consider the file damaged.
+    /// </summary>
+    /// <remarks>
+    /// That order is the whole of it. A file being appended to and a file left torn by an
+    /// interrupted append are indistinguishable from outside - both simply have no footer - and only
+    /// one of them should be acted on. Waiting first tells them apart for free.
+    ///
+    /// <para>Repair is attempted only after a read has actually failed. Probing for damage before
+    /// every read costs a second full footer parse each time - about 790 KB over the share on a
+    /// 500-replicate file - to ask a question whose answer is almost always no.</para>
+    /// </remarks>
+    /// <param name="path">
+    /// The candidate being read. Repair only ever rebuilds the REAL cycles file, so a failure
+    /// reading the staging file left by an older build must not trigger it: the repair would examine
+    /// a different file, and a success there would send this caller back to re-read the corrupt one.
+    /// </param>
+    /// <param name="log">
+    /// Told when a file had to be repaired. A recovery is a replicate lost and a crash survived, and
+    /// a silent one leaves the next reader unable to explain why the replicate count moved.
+    /// </param>
+    private static (T? Value, Exception? Failure) ReadCyclesFile<T>(
+        string outputDir, string path, Func<T> read, Action<string>? log = null)
+        where T : class
+    {
+        var (value, failure) = WithAppendRetry(read);
+        if (value is not null)
+            return (value, null);
+
+        // Only a failure that could BE a missing footer is worth taking the file apart for. The
+        // classification that decided against retrying already knows a refused permission or a
+        // vanished file is not one.
+        if (failure is null || !IsWorthRetrying(failure))
+            return (value, failure);
+        if (!string.Equals(path, Path.Combine(outputDir, CyclesFile), StringComparison.Ordinal))
+            return (value, failure);
+        if (!RepairCycles(outputDir, log))
+            return (value, failure);
+
+        return WithAppendRetry(read);
+    }
+
+    /// <param name="log">
+    /// Told when the file exists and could not be read. Returning nothing looks identical whether
+    /// there are no traces or the read failed, and every caller draws the first of those - so the
+    /// second has to be said out loud somewhere.
+    /// </param>
+    public static IReadOnlyList<IonCycleRow> ReadCycles(
+        string outputDir, string? sample = null, Action<string>? log = null)
+    {
+        Exception? unreadable = null;
+        foreach (var path in CyclesPathsFor(outputDir))
+        {
+            var (rows, failure) = ReadCyclesFile<IReadOnlyList<IonCycleRow>>(outputDir, path, () =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 var samples = reader.ReadStrings("sample");
@@ -912,23 +1177,28 @@ public static class IonAccountingStore
                 var ms2sigA = Nums(reader, "ms2_signal_assigned", samples.Length);
                 var ms2sigE = Nums(reader, "ms2_signal_explained", samples.Length);
 
-                var rows = new List<IonCycleRow>();
+                var found = new List<IonCycleRow>();
                 for (var i = 0; i < samples.Length; i++)
                 {
                     if (sample is not null && !string.Equals(samples[i], sample, StringComparison.Ordinal))
                         continue;
-                    rows.Add(new IonCycleRow(
+                    found.Add(new IonCycleRow(
                         samples[i], (int)cycle[i], rt0[i], rt1[i], (int)ms1c[i], (int)ms2c[i],
                         ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i],
                         ms1sig[i], ms2sig[i], ms1sigA[i], ms2sigA[i], ms2sigE[i]));
                 }
+                return found;
+            });
+
+            // Null means the read FAILED, which is not the same as finding nothing: fall through to
+            // the other candidate. An empty list from a file that parsed is a real answer.
+            if (rows is not null)
                 return rows;
-            }
-            catch (Exception)
-            {
-                // Unreadable - try the other file rather than reporting no data.
-            }
+            unreadable = failure;
         }
+
+        if (unreadable is not null)
+            log?.Invoke($"  Could not read {CyclesFile}: {unreadable.Message}");
         return Array.Empty<IonCycleRow>();
     }
 
@@ -944,15 +1214,32 @@ public static class IonAccountingStore
     /// replicate names are identical across runs, so the name alone cannot tell them apart.
     /// </param>
     public static IReadOnlyList<string> SamplesWithCycles(
-        string outputDir, Action<string>? log = null, string? expectKey = null)
+        string outputDir, Action<string>? log = null, string? expectKey = null) =>
+        SamplesWithCycles(outputDir, out _, log, expectKey);
+
+    /// <param name="couldNotRead">
+    /// True when the file EXISTS and could not be read, rather than holding nothing.
+    /// </param>
+    /// <remarks>
+    /// The distinction is the whole point of this overload, and it is worth hours. A caller deciding
+    /// what to reuse turns an empty list into "no replicate has traces" and re-measures the cohort -
+    /// every instrument file again - so a read that failed for a moment, or a file that is corrupt,
+    /// must not be allowed to look like an answer about the data. The retry above handles the moment;
+    /// this handles everything else, by refusing to answer rather than answering wrongly.
+    /// </remarks>
+    /// <inheritdoc cref="SamplesWithCycles(string, Action{string}, string)"/>
+    public static IReadOnlyList<string> SamplesWithCycles(
+        string outputDir, out bool couldNotRead, Action<string>? log = null,
+        string? expectKey = null)
     {
         Exception? unreadable = null;
+        couldNotRead = false;
 
         // Each candidate in turn, exactly as ReadCycles does: the preferred file can be one a write
         // truncated and never finished, and the intact measurement is then the other one.
         foreach (var path in CyclesPathsFor(outputDir, log))
         {
-            try
+            var (found, failure) = ReadCyclesFile<IReadOnlyList<string>>(outputDir, path, () =>
             {
                 using var reader = ParquetColumnReader.Open(path);
                 if (expectKey is not null && reader.HasColumn("settings_key"))
@@ -972,13 +1259,19 @@ public static class IonAccountingStore
                 // A file written before the key column existed cannot be checked, and is taken as
                 // before rather than thrown away: it was written by a run whose summary matched.
                 return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
-            }
-            catch (Exception ex)
-            {
-                unreadable = ex;
-            }
+            }, log);
+
+            if (found is not null)
+                return found;
+            unreadable = failure;
         }
 
+        // Absent and unreadable are different answers, and only one of them is about the data - and
+        // a file that disappeared between the existence check and the open is ABSENT, however it was
+        // reported. Calling that one damaged sends the caller looking for a corrupt file to keep a
+        // copy of, in the case (a dropped share) where there is nothing wrong with the file at all.
+        couldNotRead = unreadable is not null
+            and not (FileNotFoundException or DirectoryNotFoundException);
         log?.Invoke(unreadable is null
             ? $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it."
             : $"  Could not read {CyclesFile}: {unreadable.Message}");
@@ -1112,6 +1405,19 @@ public static class IonAccountingStore
         if (File.Exists(path)
             && File.GetLastWriteTimeUtc(staging) <= File.GetLastWriteTimeUtc(path))
         {
+            return;
+        }
+
+        // Newer is not the same as better. The copy below truncates the real file first, so
+        // promoting a staging file that cannot be read replaces a good measurement with a broken one
+        // and then DELETES the evidence - and a run killed while writing its progress leaves exactly
+        // such a file, which is the case this whole path exists to serve. The guard above covers a
+        // run that is still going; this covers the one that died.
+        if (File.Exists(path) && !Parses(staging))
+        {
+            log?.Invoke(
+                $"  {Path.GetFileName(staging)} is newer than {CyclesFile} but cannot be read, so it "
+                + "has been left alone rather than written over a measurement that can be.");
             return;
         }
 

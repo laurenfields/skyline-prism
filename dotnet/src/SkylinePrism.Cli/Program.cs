@@ -110,6 +110,17 @@ public static class Program
         if (provenanceLoaded)
             Log($"PRISM: loaded settings from provenance {provenancePath}");
 
+        // Warned about, not refused. A CLI run is usually scripted, and something that stops a
+        // pipeline to ask a question is worse than the surprise it prevents - so this says what is
+        // about to go and carries on. It is silent when the previous run used the same version and
+        // the same settings, which is how a QC report gets regenerated and a partial ion accounting
+        // topped up; a warning that fires on the ordinary case stops being read.
+        // With the inputs, so the merge and the transition rollup are answered by the same
+        // CanReuse the pipeline will call rather than predicted - which is what catches an input
+        // file edited in place under settings that did not move.
+        if (ExistingResults.Inspect(outputDir, config, inputs).Warning() is { } warning)
+            Log("WARNING: " + warning);
+
         Log($"PRISM: merging {inputs.Count} input(s) -> {outputDir}");
         var result = PrismPipeline.Run(
             inputs, outputDir, config, metadataFiles.Count > 0 ? metadataFiles : null, Log, forceReprocess);
@@ -250,6 +261,16 @@ public static class Program
                     $"Error: could not read --precursor-tolerance \"{precursorText}\".");
                 return 2;
             }
+        }
+
+        // Recorded where they are known, for the same reason the isolation windows are: an
+        // archived directory has to be able to say what its numbers were extracted with. Non-fatal
+        // and additive - a directory with no parameters.json simply gets nothing.
+        if (Provenance.RecordExtraction(dir, product, precursor, "command line"))
+        {
+            Console.WriteLine(
+                "Recorded the extraction windows in parameters.json, so the numbers stay "
+                + "interpretable once the document has moved on.");
         }
 
         OptionalReaders.Register(Console.WriteLine);
