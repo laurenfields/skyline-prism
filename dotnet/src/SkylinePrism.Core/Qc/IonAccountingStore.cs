@@ -216,8 +216,14 @@ public sealed record IonAccountingResult(
             .ToArray();
         if (ranked.Length == 0)
             return Array.Empty<IonAccountingRow>();
+
+        // BEST FIRST, always. Callers label these positionally - "Best", "Median", "Worst" - so the
+        // order IS the meaning. This returned the ascending array for three or fewer, which is worst
+        // first, so a cohort of two or three had its worst replicate captioned "Best" and its best
+        // one "Worst" in the QC report. Every test that checked the order used four replicates or
+        // more, which takes the branch below; the short path was covered only for membership.
         if (ranked.Length <= 3)
-            return ranked;
+            return ranked.Reverse().ToArray();
 
         // Distinct by sample, so a three-replicate cohort does not list one row three times.
         var picks = new List<IonAccountingRow> { ranked[^1], ranked[ranked.Length / 2], ranked[0] };
@@ -476,61 +482,193 @@ public static class IonAccountingStore
             // across runs. Repeated per row and dictionary-encoded to nothing.
             ParquetWideWriter.Strings("settings_key", Repeat(settingsKey, cycles.Count)),
         };
-        ParquetWideWriter.Write(
-            staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
         if (!finalize)
+        {
+            ParquetWideWriter.Write(
+                staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
             return;
+        }
 
-        PlaceStagedCycles(staging, path, log);
+        // THE END OF A RUN WRITES THE REAL NAME DIRECTLY, from memory. There is no rename.
+        //
+        // There used to be one, and it was solving a problem that no longer exists: the real file
+        // could not be overwritten because a reader held it, so the write went beside it and was
+        // renamed into place. Readers stopped taking files hostage (ParquetColumnIo.OpenRead), which
+        // removed that problem - and left a rename that had become one of its own.
+        //
+        // A rename-over is the strictest operation Windows offers, refused while ANY handle is open
+        // on the target. Worse, the handle that blocked it was on the SOURCE: PRISM's own freshly
+        // written 37.8 MB staging file, which over SMB the redirector can still hold at the server
+        // after the local handle is closed. The run then reported failure quoting the DESTINATION
+        // path - a file that did not exist, because the folder had been deleted before the run - and
+        // that sentence sent three investigations to the wrong place.
+        //
+        // Writing the real name directly touches neither the staging handle nor a rename. The
+        // staging file was written after the last replicate, so it already holds this same
+        // measurement: if the write below fails, it stays and CyclesPathFor reads it in place.
+        // Waited out rather than attempted once. A scan of a freshly created file on a share runs
+        // for seconds, and ParquetWideWriter's own open retry is 4.5 s - measurably short of what a
+        // 37.8 MB file was observed to need. The budget lives here so it is one number rather than a
+        // property of whichever writer happens to be used.
+        var attempts = Math.Max(1, WriteAttempts);
+        var delayMs = Math.Max(0, WriteDelayMs);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        // What the target looked like before anything was attempted, so a failure afterwards can
+        // tell "never opened it" from "truncated it and did not finish". See DiscardPartial.
+        var before = Snapshot(path);
+        Exception? last = null;
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            try
+            {
+                ParquetWideWriter.Write(
+                    path, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+                DiscardStaging(staging, log);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                last = ex;
+                if (attempt < attempts)
+                    Thread.Sleep(delayMs);
+            }
+        }
+
+        // NOT an exception out of here. The measurement succeeded - every replicate was read and
+        // every cycle is on disk under a name the readers know. Reporting "Ion accounting failed"
+        // after forty-eight instrument files and an hour, because a file NAME was unavailable, was
+        // the worst sentence in the product.
+        //
+        // The partial target goes first. FileMode.Create truncates on OPEN, so a write that failed
+        // part way leaves a torn file that is NEWER than the staging file - and the readers take the
+        // newer of the two, which would hand them a corrupt file in preference to the intact
+        // measurement sitting beside it.
+        DiscardPartial(path, before, log);
+
+        // Written UNCONDITIONALLY, not only when the staging file is absent. A progress save that
+        // failed leaves a short one behind (IonAccountingRun.SaveProgress logs and carries on), and
+        // the message below promises a complete measurement.
+        try
+        {
+            ParquetWideWriter.Write(
+                staging, meta, Array.Empty<string>(), Array.Empty<double[]>(), cycles.Count);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Both names unavailable - the share went away, not a scanner. Nothing further can be
+            // written, so say so rather than throwing: the caller has already measured everything
+            // and an exception here reports the whole run as failed.
+            log?.Invoke(
+                $"  WARNING: neither {CyclesFile} nor {Path.GetFileName(staging)} could be written "
+                + $"- {ex.Message}. The across-the-gradient views will have nothing to read; the "
+                + "per-replicate numbers above are unaffected and were written first.");
+            return;
+        }
+
+        // The elapsed time rather than a figure computed from the knobs: each attempt carries the
+        // writer's own open retry, so attempts x delay understates it several-fold.
+        log?.Invoke($"  NOTE: {CyclesFile} could not be written after {attempts} attempts over "
+            + $"{clock.Elapsed.TotalSeconds:0.#} s - {last?.Message}");
+        log?.Invoke($"  {Held(staging, path)}");
+        log?.Invoke(
+            $"  The measurement is complete and is in {Path.GetFileName(staging)} beside it, "
+            + "which is where PRISM reads it from. Nothing is lost and there is nothing to do "
+            + "by hand.");
     }
 
     /// <summary>
-    /// Put the staged cycles under the real name - the one time a run does it.
+    /// How long the end-of-run write waits out a file something else has just opened.
     /// </summary>
     /// <remarks>
-    /// Renaming is tried first because it cannot half-succeed. It is also the strictest operation
-    /// there is: Windows refuses a rename-over while ANY handle is open on the target, even one
-    /// shared for write and delete, so it fails in exactly the case this is meant to survive. An
-    /// overwriting copy is not refused by a well-behaved reader, which is why it is the fallback
-    /// rather than the failure. Both directions were measured, not assumed.
+    /// <para><b>These multiply with the writer's own retry, they do not replace it.</b>
+    /// <c>ParquetWideWriter</c> already retries the OPEN 15 times at 300 ms, so each attempt here
+    /// can itself take 4.5 s before returning. Six attempts at 500 ms is therefore about 30 s in
+    /// total, not six seconds - and thirty attempts at a second, the obvious spelling of "wait 30
+    /// seconds", would have been nearly three minutes.</para>
+    ///
+    /// <para>Settable only so the give-up path can be exercised without waiting that out; nothing
+    /// outside tests changes it.</para>
     /// </remarks>
+    internal static int WriteAttempts = 6;
+
+    /// <inheritdoc cref="WriteAttempts"/>
+    internal static int WriteDelayMs = 500;
+
     /// <summary>
-    /// How long to wait for a file a scanner has just opened, as attempts x milliseconds. Settable
-    /// only so the give-up path can be exercised in a second rather than half a minute; nothing
-    /// outside tests changes it.
+    /// Remove a target THIS write truncated but never finished - and nothing else.
     /// </summary>
-    internal static int PlacementAttempts = 30;
-
-    /// <inheritdoc cref="PlacementAttempts"/>
-    internal static int PlacementDelayMs = 1000;
-
-    private static void PlaceStagedCycles(string staging, string path, Action<string>? log)
+    /// <remarks>
+    /// <para><see cref="FileMode.Create"/> truncates on OPEN, so a write that fails part way leaves
+    /// a file that parses as nothing and carries a fresh timestamp. The readers take the newer of
+    /// the real file and the staging file, so leaving it would hand them a corrupt file in
+    /// preference to the intact measurement beside it - losing a cohort to tidy up after a failure,
+    /// which is the exact shape of the bug that started this.</para>
+    ///
+    /// <para><b>The snapshot is what makes this safe.</b> A write refused at the OPEN - the file is
+    /// read-only, or something holds it exclusively - never touched the target, and the previous
+    /// run's cycles are still in it. Deleting on any failure would destroy a perfectly good file
+    /// because this run could not replace it, which is worse than the problem being solved. So only
+    /// a target whose size or timestamp MOVED is treated as this write's wreckage.</para>
+    /// </remarks>
+    private static void DiscardPartial(string path, (bool Exists, long Length, DateTime Written) before,
+        Action<string>? log)
     {
-        var maxAttempts = Math.Max(1, PlacementAttempts);
-        var delayMs = Math.Max(0, PlacementDelayMs);
-        Exception? last = null;
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            if (TryPlace(staging, path, ref last))
-            {
-                RemoveStaging(staging, path, log);
-                return;
-            }
-            if (attempt < maxAttempts)
-                Thread.Sleep(delayMs);
-        }
+        if (!File.Exists(path))
+            return;
 
-        // NOT an exception. The measurement succeeded - every replicate was read and every cycle is
-        // on disk under a name the readers know to look for. Throwing here reported "Ion accounting
-        // failed" after forty-eight files and several hours, for a file NAME that could not be
-        // claimed. See CyclesPathFor: the staging file is read where it lies.
-        log?.Invoke(
-            $"  NOTE: this measurement could not be put under {CyclesFile} after {maxAttempts} "
-            + $"attempts over {maxAttempts * delayMs / 1000.0:0.#} s - {last?.Message}");
-        log?.Invoke($"  {Held(staging, path)}");
-        log?.Invoke(
-            $"  It is complete and is in {Path.GetFileName(staging)} beside it, which is where "
-            + "PRISM reads it from. Nothing is lost and there is nothing to do by hand.");
+        var now = Snapshot(path);
+        if (before.Exists && now.Length == before.Length && now.Written == before.Written)
+            return;   // never opened, so never truncated: the file is the one that was already there
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke(
+                $"  {CyclesFile} was left part-written and could not be removed: {ex.Message}. It "
+                + "may not be readable; re-running ion accounting rewrites it.");
+        }
+    }
+
+    /// <summary>Enough of a file's identity to tell whether a write touched it.</summary>
+    private static (bool Exists, long Length, DateTime Written) Snapshot(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? (true, info.Length, info.LastWriteTimeUtc) : (false, 0L, default);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Unknowable is treated as "not there": the only cost is declining to delete.
+            return (false, 0L, default);
+        }
+    }
+
+    /// <summary>
+    /// Drop the progress file once the real one carries the same measurement.
+    /// </summary>
+    /// <remarks>
+    /// Failing to remove it never fails a write that succeeded: it is a duplicate of a file that now
+    /// exists and is older than it, so <see cref="RecoverStagedCycles"/> leaves it alone and the
+    /// next run overwrites it.
+    /// </remarks>
+    private static void DiscardStaging(string staging, Action<string>? log)
+    {
+        if (!File.Exists(staging))
+            return;
+        try
+        {
+            File.Delete(staging);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log?.Invoke(
+                $"  {Path.GetFileName(staging)} could not be removed now that {CyclesFile} carries "
+                + $"the same measurement; it is a duplicate: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -553,16 +691,20 @@ public static class IonAccountingStore
     /// </remarks>
     private static string Held(string staging, string path)
     {
-        var who = FileHolders.Describe(staging) ?? FileHolders.Describe(path);
+        // The TARGET first, in both the probe and the wording. Nothing is renamed any more, so the
+        // only file a write can fail on is the real one; leading with the staging file named the
+        // bystander, which is the same misdirection that cost four rounds here.
+        var who = FileHolders.Describe(path) ?? FileHolders.Describe(staging);
         var stagingHeld = IsUnavailable(staging);
         var targetHeld = File.Exists(path) && IsUnavailable(path);
 
         var which = (stagingHeld, targetHeld) switch
         {
-            (true, true) => $"Both {Path.GetFileName(staging)} and {CyclesFile} are open elsewhere.",
-            (true, false) => $"{Path.GetFileName(staging)} is open elsewhere - typically a scanner "
-                + "reading back the file PRISM has just written.",
-            (false, true) => $"{CyclesFile} is open elsewhere.",
+            (true, true) => $"Both {CyclesFile} and {Path.GetFileName(staging)} are open elsewhere.",
+            (true, false) => $"{Path.GetFileName(staging)} is open elsewhere, but {CyclesFile} is "
+                + "not - so the write was refused by something that has since let go.",
+            (false, true) => $"{CyclesFile} is open elsewhere - typically a scanner reading a file "
+                + "that has just appeared.",
             _ => "Neither file is held now, so whatever had one has let go since - a scan of a "
                 + "freshly written file is the usual reason, and it ends when the scan does.",
         };
@@ -593,52 +735,6 @@ public static class IonAccountingStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return true;
-        }
-    }
-
-    /// <summary>One attempt: rename if it can, copy if it cannot.</summary>
-    private static bool TryPlace(string staging, string path, ref Exception? last)
-    {
-        try
-        {
-            File.Move(staging, path, overwrite: true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            last = ex;
-        }
-
-        try
-        {
-            File.Copy(staging, path, overwrite: true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            last = ex;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Drop the staging file once its content is under the real name. A copy leaves it behind; a
-    /// rename does not, so this is a no-op in the ordinary case. Failing to remove it is never worth
-    /// failing a write that succeeded - it is a duplicate, and the next run replaces it.
-    /// </summary>
-    private static void RemoveStaging(string staging, string path, Action<string>? log)
-    {
-        if (!File.Exists(staging))
-            return;
-        try
-        {
-            File.Delete(staging);
-        }
-        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-        {
-            log?.Invoke(
-                $"  {Path.GetFileName(staging)} could not be removed after {CyclesFile} was "
-                + "written from it; it is a duplicate and the next run replaces it.");
         }
     }
 
@@ -792,48 +888,48 @@ public static class IonAccountingStore
     /// </summary>
     public static IReadOnlyList<IonCycleRow> ReadCycles(string outputDir, string? sample = null)
     {
-        var path = CyclesPathFor(outputDir);
-        if (path is null)
-            return Array.Empty<IonCycleRow>();
-
-        try
+        foreach (var path in CyclesPathsFor(outputDir))
         {
-            using var reader = ParquetColumnReader.Open(path);
-            var samples = reader.ReadStrings("sample");
-            var cycle = reader.ReadDoubles("cycle");
-            var rt0 = reader.ReadDoubles("rt_start_min");
-            var rt1 = reader.ReadDoubles("rt_stop_min");
-            var ms1c = reader.ReadDoubles("ms1_count");
-            var ms2c = reader.ReadDoubles("ms2_count");
-            var ms1a = reader.ReadDoubles("ms1_acquired");
-            var ms2a = reader.ReadDoubles("ms2_acquired");
-            var ms1s = reader.ReadDoubles("ms1_assigned");
-            var ms2s = reader.ReadDoubles("ms2_assigned");
-            var ms2e = reader.HasColumn("ms2_explained")
-                ? reader.ReadDoubles("ms2_explained")
-                : new double[samples.Length];
-            var ms1sig = Nums(reader, "ms1_signal", samples.Length);
-            var ms2sig = Nums(reader, "ms2_signal", samples.Length);
-            var ms1sigA = Nums(reader, "ms1_signal_assigned", samples.Length);
-            var ms2sigA = Nums(reader, "ms2_signal_assigned", samples.Length);
-            var ms2sigE = Nums(reader, "ms2_signal_explained", samples.Length);
-
-            var rows = new List<IonCycleRow>();
-            for (var i = 0; i < samples.Length; i++)
+            try
             {
-                if (sample is not null && !string.Equals(samples[i], sample, StringComparison.Ordinal))
-                    continue;
-                rows.Add(new IonCycleRow(
-                    samples[i], (int)cycle[i], rt0[i], rt1[i], (int)ms1c[i], (int)ms2c[i],
-                    ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i],
-                    ms1sig[i], ms2sig[i], ms1sigA[i], ms2sigA[i], ms2sigE[i]));
+                using var reader = ParquetColumnReader.Open(path);
+                var samples = reader.ReadStrings("sample");
+                var cycle = reader.ReadDoubles("cycle");
+                var rt0 = reader.ReadDoubles("rt_start_min");
+                var rt1 = reader.ReadDoubles("rt_stop_min");
+                var ms1c = reader.ReadDoubles("ms1_count");
+                var ms2c = reader.ReadDoubles("ms2_count");
+                var ms1a = reader.ReadDoubles("ms1_acquired");
+                var ms2a = reader.ReadDoubles("ms2_acquired");
+                var ms1s = reader.ReadDoubles("ms1_assigned");
+                var ms2s = reader.ReadDoubles("ms2_assigned");
+                var ms2e = reader.HasColumn("ms2_explained")
+                    ? reader.ReadDoubles("ms2_explained")
+                    : new double[samples.Length];
+                var ms1sig = Nums(reader, "ms1_signal", samples.Length);
+                var ms2sig = Nums(reader, "ms2_signal", samples.Length);
+                var ms1sigA = Nums(reader, "ms1_signal_assigned", samples.Length);
+                var ms2sigA = Nums(reader, "ms2_signal_assigned", samples.Length);
+                var ms2sigE = Nums(reader, "ms2_signal_explained", samples.Length);
+
+                var rows = new List<IonCycleRow>();
+                for (var i = 0; i < samples.Length; i++)
+                {
+                    if (sample is not null && !string.Equals(samples[i], sample, StringComparison.Ordinal))
+                        continue;
+                    rows.Add(new IonCycleRow(
+                        samples[i], (int)cycle[i], rt0[i], rt1[i], (int)ms1c[i], (int)ms2c[i],
+                        ms1a[i], ms2a[i], ms1s[i], ms2s[i], ms2e[i],
+                        ms1sig[i], ms2sig[i], ms1sigA[i], ms2sigA[i], ms2sigE[i]));
+                }
+                return rows;
             }
-            return rows;
+            catch (Exception)
+            {
+                // Unreadable - try the other file rather than reporting no data.
+            }
         }
-        catch (Exception)
-        {
-            return Array.Empty<IonCycleRow>();
-        }
+        return Array.Empty<IonCycleRow>();
     }
 
     /// <summary>Which replicates have cycle traces cached, for a GUI replicate picker.</summary>
@@ -850,36 +946,43 @@ public static class IonAccountingStore
     public static IReadOnlyList<string> SamplesWithCycles(
         string outputDir, Action<string>? log = null, string? expectKey = null)
     {
-        var path = CyclesPathFor(outputDir, log);
-        if (path is null)
+        Exception? unreadable = null;
+
+        // Each candidate in turn, exactly as ReadCycles does: the preferred file can be one a write
+        // truncated and never finished, and the intact measurement is then the other one.
+        foreach (var path in CyclesPathsFor(outputDir, log))
         {
-            log?.Invoke(
-                $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it.");
-            return Array.Empty<string>();
-        }
-        try
-        {
-            using var reader = ParquetColumnReader.Open(path);
-            if (expectKey is not null && reader.HasColumn("settings_key"))
+            try
             {
-                var keys = reader.ReadStrings("settings_key");
-                if (keys.Length > 0 && !string.Equals(keys[0], expectKey, StringComparison.Ordinal))
+                using var reader = ParquetColumnReader.Open(path);
+                if (expectKey is not null && reader.HasColumn("settings_key"))
                 {
-                    log?.Invoke(
-                        $"  {CyclesFile} was measured under different settings than {FileName}, so "
-                        + "none of its traces are reused - they will be measured again.");
-                    return Array.Empty<string>();
+                    var keys = reader.ReadStrings("settings_key");
+                    if (keys.Length > 0
+                        && !string.Equals(keys[0], expectKey, StringComparison.Ordinal))
+                    {
+                        // A DIFFERENT measurement, not an unreadable one - falling through to the
+                        // other file would be looking for a second opinion. Stop here.
+                        log?.Invoke(
+                            $"  {CyclesFile} was measured under different settings than {FileName}, "
+                            + "so none of its traces are reused - they will be measured again.");
+                        return Array.Empty<string>();
+                    }
                 }
+                // A file written before the key column existed cannot be checked, and is taken as
+                // before rather than thrown away: it was written by a run whose summary matched.
+                return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
             }
-            // A file written before the key column existed cannot be checked, and is taken as
-            // before rather than thrown away: it was written by a run whose summary matched.
-            return reader.ReadStrings("sample").Distinct(StringComparer.Ordinal).ToArray();
+            catch (Exception ex)
+            {
+                unreadable = ex;
+            }
         }
-        catch (Exception ex)
-        {
-            log?.Invoke($"  Could not read {CyclesFile}: {ex.Message}");
-            return Array.Empty<string>();
-        }
+
+        log?.Invoke(unreadable is null
+            ? $"  No {CyclesFile} in {outputDir} - the across-the-gradient views need it."
+            : $"  Could not read {CyclesFile}: {unreadable.Message}");
+        return Array.Empty<string>();
     }
 
     /// <summary>
@@ -1094,6 +1197,27 @@ public static class IonAccountingStore
     /// replicate, so a read could catch it half-written. The real file, stale or absent, is the
     /// honest answer until the run finishes.</para>
     /// </remarks>
+    /// <summary>
+    /// Every file the cycles could be in, best first - so a reader whose first choice will not parse
+    /// can fall back instead of reporting no data.
+    /// </summary>
+    /// <remarks>
+    /// A process killed mid-write leaves a truncated real file with no catch block to tidy it, and
+    /// it is the newer of the two. Preference decides the order; parsing decides the answer.
+    /// </remarks>
+    internal static IEnumerable<string> CyclesPathsFor(string outputDir, Action<string>? log = null)
+    {
+        var preferred = CyclesPathFor(outputDir, log);
+        if (preferred is null)
+            yield break;
+        yield return preferred;
+
+        var path = Path.Combine(outputDir, CyclesFile);
+        var other = string.Equals(preferred, path, StringComparison.Ordinal) ? path + ".new" : path;
+        if (File.Exists(other))
+            yield return other;
+    }
+
     internal static string? CyclesPathFor(string outputDir, Action<string>? log = null)
     {
         var path = Path.Combine(outputDir, CyclesFile);

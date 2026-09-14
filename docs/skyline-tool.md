@@ -363,11 +363,29 @@ precursors that were identified; each 3 Th DIA window fragments everything co-is
 identified peptides' fragments account for a twentieth of what comes out. The two are never drawn on
 one axis.
 
+Three pickers, each answering one question. **View** is the shape: *Per replicate*, one bar per run
+so the cohort can be compared and an outlier found, or *Across the gradient*, the same totals per
+acquisition cycle for one replicate. **Quantity** is what is measured: *Signal (TIC)* or *Ions*.
+**Show** is how: *Totals*, or *Fraction of acquired*.
+
+Quantity opens on **Signal** — what the instrument reports, and what a mass spectrometrist reads a
+run in. A cache measured before the summed TIC was recorded falls back to Ions rather than greeting
+you with an error. The gradient bin defaults to **0.01 min**: 0.6 s, shorter than one acquisition
+cycle on these instruments, so it bins essentially nothing and the trace is drawn at the rate the
+run was acquired at. The QC report uses the same bin.
+
 The pane is a pure read of `ion_accounting.parquet` and `ion_cycles.parquet`, so switching replicate,
-level, view or bin width is instant. It opens on the **median** replicate by assigned share rather
-than the first alphabetically. **The nav entry does not appear at all until those files exist** —
-every plot on it needs a measured denominator, and a fraction taken against a guessed one reads as
-coverage without being coverage.
+level, view, quantity or bin width is instant. It opens on the **median** replicate by assigned
+fraction rather than the first alphabetically. **The nav entry does not appear at all until those
+files exist** — every plot on it needs a measured denominator, and a fraction taken against a
+guessed one reads as coverage without being coverage.
+
+You may see `ion_cycles.parquet.new` beside the cache. That is the file a measurement writes its
+progress to, so it holds **either a completed measurement whose write to the real name was refused,
+or the progress of a run that was interrupted** — whichever it is, PRISM reads it where it lies and
+replaces it on the next run. Nothing measured is lost by its presence and there is nothing to do by
+hand, but do not read it as proof that the cohort is complete: how many replicates it covers is what
+the pane and the report show, exactly as for the real file.
 
 ### What it costs, and why it is a separate step
 

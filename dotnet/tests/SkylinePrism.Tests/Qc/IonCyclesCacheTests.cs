@@ -275,43 +275,189 @@ public class IonCyclesCacheTests : IDisposable
         var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
         IonAccountingStore.Write(dir, Result("A", cycles: 2));
 
-        var attempts = IonAccountingStore.PlacementAttempts;
-        var delay = IonAccountingStore.PlacementDelayMs;
-        IonAccountingStore.PlacementAttempts = 2;
-        IonAccountingStore.PlacementDelayMs = 1;
         var lines = new List<string>();
-        bool refused;
-        try
-        {
-            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
-            {
-                // Forty-eight instrument files and several hours. Throwing over a file NAME
-                // reported all of it as "Ion accounting failed" when every cycle was on disk and
-                // readable.
-                IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
 
-                // Windows refuses every way of replacing a file something holds exclusively.
-                // POSIX does not - a rename over an open file is ordinary there - so the placement
-                // genuinely succeeds on Linux and macOS. Both outcomes are a success; asserting
-                // the Windows one everywhere is what broke this on the other two.
-                refused = File.Exists(path + ".new");
-            }
-        }
-        finally
+        // Read-only rather than held open, on both counts deliberately. It is refused identically
+        // on every platform - FileShare is emulated on POSIX and a create is not always stopped by
+        // it - and it fails FAST: ParquetWideWriter retries an IOException fifteen times at 300 ms
+        // but lets UnauthorizedAccessException straight through, so the test does not sit out a
+        // retry budget it is not testing.
+        using (ShortWriteBudget())
+        using (ReadOnlyFile(path))
         {
-            IonAccountingStore.PlacementAttempts = attempts;
-            IonAccountingStore.PlacementDelayMs = delay;
+            // Forty-eight instrument files and an hour. Throwing over a file NAME reported all of
+            // it as "Ion accounting failed" when every cycle was on disk and readable.
+            IonAccountingStore.Write(dir, Result("A", cycles: 6), lines.Add);
         }
 
-        // The measurement survives either way, which is the whole point.
+        Assert.True(File.Exists(path + ".new"), "the measurement should have been staged");
+
+        // The write was refused at the OPEN, so it never touched the target - and the two cycles
+        // the previous run left in it are still there. Deleting a good file because this run could
+        // not replace it would be worse than the problem being solved.
+        Assert.True(File.Exists(path), "a target this write never opened must not be deleted");
+
         Assert.Equal(6, IonAccountingStore.ReadCycles(dir, "A").Count);
         Assert.DoesNotContain(lines, l => l.Contains("WARNING", StringComparison.Ordinal));
-        if (refused)
-        {
-            Assert.Contains(
-                lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
-        }
+        Assert.Contains(lines, l => l.Contains("nothing to do by hand", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// "Best" and "worst" of WHAT. The two quantities rank the cohort differently, so a panel picked
+    /// by one and captioned as the other names the wrong replicate - and nothing on the page could
+    /// reveal it, because both numbers are real.
+    /// </summary>
+    [Fact]
+    public void RepresentativesRankOnTheQuantityAskedFor()
+    {
+        // Ions say b is worst; signal says a is. Both are true: the ion count weights each scan by
+        // its injection time and the summed TIC does not.
+        var a = Row("a", ms2Acquired: 1000, ms2Assigned: 100, ms2Signal: 1000, ms2SignalAssigned: 50);
+        var b = Row("b", ms2Acquired: 1000, ms2Assigned: 50, ms2SignalAssigned: 300, ms2Signal: 1000);
+        var result = new IonAccountingResult(
+            "k", "10 ppm", "10 ppm", "scheme", Array.Empty<string>(), 1, false,
+            new[] { a, b }, Array.Empty<IonCycleRow>());
+
+        // Best first, so the head of the list is the HIGHEST fraction in that quantity.
+        Assert.Equal("a", result.Representatives(signal: false)[0].Sample);
+        Assert.Equal("b", result.Representatives(signal: false)[^1].Sample);
+        Assert.Equal("b", result.Representatives(signal: true)[0].Sample);
+        Assert.Equal("a", result.Representatives(signal: true)[^1].Sample);
+    }
+
+    /// <summary>
+    /// The empty state names the file and a remedy, and never asks anyone to rename anything - the
+    /// staged file is read in place, so a staged file that exists is a file that was read.
+    /// </summary>
+    [Fact]
+    public void TheEmptyStateSaysWhatToDoAboutIt()
+    {
+        var dir = NewDir();
+        var absent = IonAccountingStore.DescribeMissingCycles(dir);
+        Assert.Contains(IonAccountingStore.CyclesFile, absent, StringComparison.Ordinal);
+        Assert.Contains("Re-run", absent, StringComparison.Ordinal);
+        Assert.DoesNotContain("rename", absent, StringComparison.OrdinalIgnoreCase);
+
+        // Present but unreadable is a different sentence, and must not read as "never measured".
+        // Written as bytes that are NOT parquet: IonAccountingStore.Write would produce a valid
+        // file, which exercises only the file-exists branch and would pass whatever the unreadable
+        // path did.
+        File.WriteAllBytes(
+            Path.Combine(dir, IonAccountingStore.CyclesFile), new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+        Assert.Empty(IonAccountingStore.ReadCycles(dir, "A"));
+
+        var present = IonAccountingStore.DescribeMissingCycles(dir);
+        Assert.Contains("could not be read", present, StringComparison.Ordinal);
+        Assert.DoesNotContain("rename", present, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A target the write truncated but never finished must not shadow the intact staging file.
+    /// </summary>
+    /// <remarks>
+    /// FileMode.Create truncates on OPEN, so a write that fails part way leaves a file that parses
+    /// as nothing and carries a FRESH timestamp - newer than the staging file, which is what the
+    /// readers prefer. Left alone it loses a whole cohort to tidy up after a failure, which is the
+    /// exact shape of the bug this file exists for.
+    /// </remarks>
+    [Fact]
+    public void ATruncatedRealFileDoesNotShadowTheStagedMeasurement()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        // The staging file holds a complete measurement; the real one was left part-written after
+        // it, so it is both newer AND unreadable.
+        IonAccountingStore.Write(dir, Result("A", cycles: 7), log: null, finalize: false);
+        File.WriteAllBytes(path, new byte[] { 0x50, 0x41, 0x52, 0x31, 0, 0, 0, 0 });
+        File.SetLastWriteTimeUtc(path + ".new", DateTime.UtcNow.AddHours(-1));
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+
+        Assert.Equal(7, IonAccountingStore.ReadCycles(dir, "A").Count);
+        Assert.Equal(new[] { "A" }, IonAccountingStore.SamplesWithCycles(dir));
+    }
+
+    /// <summary>
+    /// A refused write leaves the CURRENT measurement staged, not whatever was staged before.
+    /// </summary>
+    /// <remarks>
+    /// A progress save that fails leaves a short staging file behind and the run carries on, so
+    /// writing one only when it is absent would promise a complete measurement about a file missing
+    /// replicates. The message says "nothing is lost"; it has to be true.
+    /// </remarks>
+    [Fact]
+    public void ARefusedWriteStagesThisMeasurementOverAnOlderOne()
+    {
+        var dir = NewDir();
+        var path = Path.Combine(dir, IonAccountingStore.CyclesFile);
+
+        // A short progress file from earlier in the same run, and a real file held exclusively so
+        // the end-of-run write cannot land.
+        IonAccountingStore.Write(dir, Result("A", cycles: 2), log: null, finalize: false);
+        IonAccountingStore.Write(dir, Result("A", cycles: 2));
+
+        var lines = new List<string>();
+        using (ShortWriteBudget())
+        using (ReadOnlyFile(path))
+        {
+            IonAccountingStore.Write(dir, Result("A", cycles: 9), lines.Add);
+        }
+
+        // Nine, not the two the earlier progress save left - whichever file it comes from.
+        Assert.Equal(9, IonAccountingStore.ReadCycles(dir, "A").Count);
+    }
+
+    /// <summary>
+    /// Make a file unwritable for the life of the scope, and writable again afterwards - or the
+    /// directory cleanup in Dispose cannot remove it.
+    /// </summary>
+    private static IDisposable ReadOnlyFile(string path)
+    {
+        File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        return new Restore(() =>
+        {
+            // The file may be gone: POSIX lets a read-only file be unlinked from a writable
+            // directory, so a run that decided to remove it succeeds there and fails on Windows.
+            if (File.Exists(path))
+                File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        });
+    }
+
+    /// <summary>The product waits about 30 s; a test waiting that long is a test nobody runs.</summary>
+    private static IDisposable ShortWriteBudget()
+    {
+        var attempts = IonAccountingStore.WriteAttempts;
+        var delay = IonAccountingStore.WriteDelayMs;
+        IonAccountingStore.WriteAttempts = 2;
+        IonAccountingStore.WriteDelayMs = 1;
+        return new Restore(() =>
+        {
+            IonAccountingStore.WriteAttempts = attempts;
+            IonAccountingStore.WriteDelayMs = delay;
+        });
+    }
+
+    private sealed class Restore : IDisposable
+    {
+        private readonly Action _undo;
+
+        internal Restore(Action undo) => _undo = undo;
+
+        public void Dispose() => _undo();
+    }
+
+    /// <summary>A row with both quantities, for the ranking test.</summary>
+    private static IonAccountingRow Row(
+        string sample, double ms2Acquired, double ms2Assigned,
+        double ms2Signal, double ms2SignalAssigned) =>
+        new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 10, 100,
+            Ms1Acquired: 1000, Ms2Acquired: ms2Acquired,
+            Ms1Assigned: 100, Ms2Assigned: ms2Assigned,
+            Ms2Explained: 0, HasExplained: false,
+            0, 30, 0, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>(),
+            AcquiredUtc: null, Ms1Signal: 1000, Ms2Signal: ms2Signal,
+            Ms1SignalAssigned: 100, Ms2SignalAssigned: ms2SignalAssigned,
+            Ms2SignalExplained: 0, HasSignal: true);
 
     private string NewDir()
     {
