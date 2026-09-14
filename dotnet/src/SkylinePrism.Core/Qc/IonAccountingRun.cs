@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.RawData;
 
 namespace SkylinePrism.Core.Qc;
@@ -97,6 +98,13 @@ public static class IonAccountingRun
     {
         if (productTolerance is null)
             throw new ArgumentNullException(nameof(productTolerance));
+
+        // FIRST, before anything can go wrong. This is the longest operation in the product - hours
+        // against a cohort - and the question that follows a surprising result is always "which
+        // build produced this?". The version cannot answer it: PRISM versions at release time, so
+        // every development build says the same number.
+        log?.Invoke($"  Ion accounting: PRISM {PrismVersion.BuildStamp}"
+            + (PrismVersion.BuildLocation.Length > 0 ? $" from {PrismVersion.BuildLocation}" : ""));
 
         if (!IonAccountingReaders.Available)
         {
@@ -200,7 +208,12 @@ public static class IonAccountingRun
                 // measured, so it was never read again, and the next incremental save rewrote the
                 // cycles file from memory and made the gap permanent: its gradient panel simply
                 // vanished from the report with nothing logged.
-                var haveCycles = IonAccountingStore.SamplesWithCycles(outputDir)
+                // With the KEY, not just the directory. The summary is written before the
+                // cycles and a failure between them leaves the two describing different
+                // measurements; replicate names are identical across runs, so without the key a
+                // stale trace is indistinguishable from this run's.
+                var haveCycles = IonAccountingStore
+                    .SamplesWithCycles(outputDir, log, settingsKey)
                     .ToHashSet(StringComparer.Ordinal);
                 foreach (var row in cached.Rows)
                 {
@@ -263,6 +276,10 @@ public static class IonAccountingRun
 
         // The producer is this thread and it must stay the only one touching DuckDB. The workers
         // only read instrument files, which is 99.5% of the cost.
+        //
+        // The mark keeps the rest of the process - the GUI, reading the same directory to draw the
+        // pane - from touching the staging file this loop writes after every replicate.
+        using var measuring = IonAccountingStore.MarkMeasuring(outputDir);
         using var gate = new SemaphoreSlim(effectiveLanes);
         var pending = new List<Task>();
         var sync = new object();
@@ -359,9 +376,13 @@ public static class IonAccountingRun
                                 // partial cache carries a settings key that stops matching once
                                 // more replicates are added, so the next run recomputes rather
                                 // than trusting a short file.
+                                //
+                                // The cycles go to the STAGING file (finalize: false), so the real
+                                // one is created once, at the end. Replacing it every replicate is
+                                // how a run came to lose a race against a reader of its own.
                                 SaveProgress(
                                     outputDir, settingsKey, productText, precursorText, schemeText,
-                                    classified, rows, cycles);
+                                    classified, rows, cycles, log, finalize: false);
                             }
                         }
                         finally
@@ -399,7 +420,7 @@ public static class IonAccountingRun
             settingsKey, productText, precursorText, schemeText, classified.ListNames,
             classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles);
 
-        IonAccountingStore.Write(outputDir, result);
+        IonAccountingStore.Write(outputDir, result, log);
         ReportTotals(result, clock, log);
         return result;
     }
@@ -410,17 +431,30 @@ public static class IonAccountingRun
     private static void SaveProgress(
         string outputDir, string settingsKey, string productText, string precursorText,
         string schemeText, AssignedPeptides.Classified classified,
-        IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles)
+        IReadOnlyList<IonAccountingRow> rows, IReadOnlyList<IonCycleRow> cycles,
+        Action<string>? log = null, bool finalize = true)
     {
         try
         {
-            IonAccountingStore.Write(outputDir, new IonAccountingResult(
-                settingsKey, productText, precursorText, schemeText, classified.ListNames,
-                classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles));
+            IonAccountingStore.Write(
+                outputDir,
+                new IonAccountingResult(
+                    settingsKey, productText, precursorText, schemeText, classified.ListNames,
+                    classified.AssignedPeptides, classified.HasGroupColumns, rows, cycles),
+                log, finalize);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            // A cache that cannot be written is not a reason to abandon the reads already done.
+            // Not a reason to abandon the reads already done - but SAYING SO is the difference
+            // between a run whose cache is stale and a run that spent hours reading instrument files
+            // and silently kept none of it. A locked cache file did exactly that.
+            //
+            // What it must NOT say is that nothing was saved, which is what it used to say and was
+            // not true: the cycles are in the staging file and the summary is written separately.
+            // Reading "nothing measured so far has been saved" after two hours of instrument reads
+            // is alarming, and it was alarming about the wrong thing. A cycles file that cannot be
+            // replaced no longer reaches here at all - see IonAccountingStore.PlaceStagedCycles.
+            log?.Invoke($"  WARNING: could not write the ion accounting cache - {ex.Message}");
         }
     }
 

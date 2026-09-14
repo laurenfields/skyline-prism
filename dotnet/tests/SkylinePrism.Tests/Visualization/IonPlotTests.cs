@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ScottPlot;
+using ScottPlot.Plottables;
 using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.RawData;
 using SkylinePrism.Core.Visualization;
@@ -58,6 +59,40 @@ public class IonPlotTests
     }
 
     /// <summary>
+    /// Fraction is a TRANSFORM of the per-replicate view, not a view of its own: the same three
+    /// series divided by each replicate&apos;s own acquired total. The acquired series is then 100%
+    /// for everyone by construction, so it is not drawn - a full-height bar behind every one
+    /// carries nothing and hides the axis the other two are read against.
+    /// </summary>
+    [Fact]
+    public void PerReplicateAsAFractionDropsTheAcquiredBarAndPlotsPercentages()
+    {
+        var result = Result(
+            RowWithSignal("s1", ms2Acquired: 1000, ms2Assigned: 100, ms2Signal: 1000, ms2SignalAssigned: 250));
+
+        var totals = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            totals, result, PlotRenderer.IonLevel.Ms2, null, 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: false);
+
+        var fraction = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            fraction, result, PlotRenderer.IonLevel.Ms2, null, 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: true);
+
+        // Three bar series with the acquired background, two without it.
+        Assert.Equal(3, totals.GetPlottables<BarPlot>().Count());
+        Assert.Equal(2, fraction.GetPlottables<BarPlot>().Count());
+
+        // 100 of 1000 quantified, 150 of 1000 explained - read straight off the axis in percent.
+        var bars = fraction.GetPlottables<BarPlot>().Select(b => b.Bars.First().Value).ToArray();
+        Assert.Equal(15.0, bars[0], 6);
+        Assert.Equal(10.0, bars[1], 6);
+        Assert.Contains("Fraction of acquired", fraction.Axes.Left.Label.Text);
+        Assert.Contains("%", fraction.Axes.Left.Label.Text);
+    }
+
+    /// <summary>
     /// The two quantities are DIFFERENT NUMBERS, not two units for one. A scan's intensity is a
     /// rate; the ion count multiplies it by the injection time and the summed TIC does not. Where
     /// the injection times vary, the assigned fractions differ too - and neither is wrong.
@@ -109,7 +144,19 @@ public class IonPlotTests
         var signal = new Plot();
         PlotRenderer.DrawIonAccounting(
             signal, result, PlotRenderer.IonLevel.Ms2, null, 1.0, PlotRenderer.IonQuantity.Signal);
-        Assert.Contains("TIC", signal.Axes.Left.Label.Text);
+        Assert.Contains("signal", signal.Axes.Left.Label.Text);
+
+        // And the axis does NOT say TIC. Only the ACQUIRED series is a total ion current; the
+        // assigned and explained series are the parts of it inside a claimed region, which no
+        // instrument reports. Naming the axis TIC labels two of three series as something they are
+        // not, so TIC appears in the acquired legend entry and nowhere else.
+        Assert.DoesNotContain("TIC", signal.Axes.Left.Label.Text);
+        var legend = signal.GetPlottables()
+            .SelectMany(p => p.LegendItems)
+            .Select(i => i.LabelText ?? "")
+            .ToArray();
+        Assert.Contains(legend, l => l.Contains("acquired") && l.Contains("TIC"));
+        Assert.DoesNotContain(legend, l => l.Contains("quantified") && l.Contains("TIC"));
     }
 
     /// <summary>
@@ -333,6 +380,82 @@ public class IonPlotTests
             Ms1Assigned: percent * 10, Ms2Assigned: percent * 10,
             // No explained total by default, so the existing assertions keep describing exactly
             // what they described before it existed. The explained path has its own rows.
+            Ms2Explained: 0, HasExplained: false,
+            0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
+
+    /// <summary>
+    /// As a FRACTION, an impossible row gets no bar at all - the one case where the title alone is
+    /// not enough.
+    /// </summary>
+    /// <remarks>
+    /// Plotting TOTALS, nothing impossible is on the axis: the bars are absolute counts, which are
+    /// what they are, and it is the median in the caption that is withheld. Plotting the FRACTION,
+    /// the impossible number IS the bar - so a 150% bar would sit under an axis labelled "fraction
+    /// of acquired" and read as a measurement. Clamping it to 100% would be worse still: it turns a
+    /// visible defect into a plausible reading, which is exactly how the previous version of this
+    /// feature shipped a fraction built from mismatched units.
+    /// </remarks>
+    [Fact]
+    public void AnImpossibleRowIsNotDrawnAsAFraction()
+    {
+        var broken = Result(Row("s1", 20), Exceeding("s2"), Row("s3", 30));
+
+        var totals = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            totals, broken, PlotRenderer.IonLevel.Ms2, "Ions", 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: false);
+
+        var fraction = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            fraction, broken, PlotRenderer.IonLevel.Ms2, "Ions", 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: true);
+
+        // Totals: all three absolute bars are legitimate and all three are drawn.
+        var totalBars = totals.GetPlottables<BarPlot>().Last().Bars;
+        Assert.Equal(3, totalBars.Count);
+
+        // Fraction: two bars for three replicates, and the missing one is s2's position.
+        var fractionBars = fraction.GetPlottables<BarPlot>().Last().Bars;
+        Assert.Equal(2, fractionBars.Count);
+        Assert.DoesNotContain(fractionBars, b => b.Position == 1);
+        Assert.All(fractionBars, b => Assert.True(b.Value <= 100.0));
+
+        // And the reader is told a gap is a defect, not a missing file.
+        Assert.Contains("not drawn", fraction.Axes.Title.Label.Text);
+        Assert.Contains("fraction not shown", totals.Axes.Title.Label.Text);
+    }
+
+    /// <summary>
+    /// Impossible in ONE quantity and not the other, which is the case that makes a single check
+    /// wrong: the ion totals weight each scan by its injection time and the signal totals do not.
+    /// </summary>
+    [Fact]
+    public void TheWithholdingFollowsTheQuantityDrawn()
+    {
+        // Sound as ions (100 of 1000), impossible as signal (1200 of 1000).
+        var row = RowWithSignal(
+            "s1", ms2Acquired: 1000, ms2Assigned: 100, ms2Signal: 1000, ms2SignalAssigned: 1200);
+        var result = Result(row);
+
+        var ions = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            ions, result, PlotRenderer.IonLevel.Ms2, "t", 1.0,
+            PlotRenderer.IonQuantity.Ions, asFraction: true);
+
+        var signal = new Plot();
+        PlotRenderer.DrawIonAccounting(
+            signal, result, PlotRenderer.IonLevel.Ms2, "t", 1.0,
+            PlotRenderer.IonQuantity.Signal, asFraction: true);
+
+        Assert.Single(ions.GetPlottables<BarPlot>().Last().Bars);
+        Assert.Empty(signal.GetPlottables<BarPlot>().Last().Bars);
+        Assert.Contains("not drawn", signal.Axes.Title.Label.Text);
+    }
+
+    /// <summary>A row whose assigned total is impossible - 150 of 100 acquired.</summary>
+    private static IonAccountingRow Exceeding(string sample) =>
+        new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 1, 167,
+            Ms1Acquired: 100, Ms2Acquired: 100, Ms1Assigned: 10, Ms2Assigned: 150,
             Ms2Explained: 0, HasExplained: false,
             0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
 

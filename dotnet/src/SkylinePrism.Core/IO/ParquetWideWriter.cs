@@ -69,8 +69,11 @@ public static class ParquetWideWriter
     /// <summary>
     /// Open the output file for writing, retrying on transient IO locks. New parquet files in
     /// watched folders (e.g. Downloads) are briefly locked by Windows Defender / the search
-    /// indexer / cloud sync; a short backoff clears those. A persistent lock (the file open in
-    /// a viewer) throws with a clear hint after the retries.
+    /// indexer / cloud sync; a short backoff clears those.
+    ///
+    /// <para>A persistent lock throws after the retries. Do not assume it is local: on a share the
+    /// holder can be another machine, or a dead session the server has not timed out yet, and the
+    /// old message sent people to look in a Downloads folder for a file on a lab drive.</para>
     /// </summary>
     private static async Task<FileStream> OpenWriteWithRetryAsync(
         string path, int maxAttempts = 15, int delayMs = 300)
@@ -80,7 +83,11 @@ public static class ParquetWideWriter
         {
             try
             {
-                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+                // Read, not None. None is refused while ANY other handle is open, so a
+                // reader anywhere in this process - the GUI showing the very file the run is
+                // updating - blocked the write outright. Sharing Read still excludes a second
+                // WRITER, because that would need Write access this handle does not grant.
+                return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
             }
             catch (IOException ex)
             {
@@ -89,9 +96,12 @@ public static class ParquetWideWriter
             }
         }
         throw new IOException(
-            $"Could not write '{path}' after {maxAttempts} attempts - it is locked by another process "
-            + "(often antivirus scanning the Downloads folder, cloud sync, or the file open in a viewer). "
-            + "Use an output directory outside Downloads/OneDrive, or close any program viewing the file.",
+            $"Could not write '{path}' after {maxAttempts} attempts - another process is holding it "
+            + "open. On a network share that can be a program on ANOTHER machine, and the lock can "
+            + "outlive it: a client that was killed or lost its connection leaves the server holding "
+            + "the file until the session times out. Locally it is usually the file open in a viewer, "
+            + "cloud sync, or antivirus. Close whatever has it - 'openfiles /query' on the file "
+            + "server names the holder - or write to a directory that is not being watched.",
             last);
     }
 

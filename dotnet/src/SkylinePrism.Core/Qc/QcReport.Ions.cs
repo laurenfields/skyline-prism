@@ -49,8 +49,8 @@ public static partial class QcReport
             $"  Ion accounting: plotting {usable.Count:N0} measured replicate(s) from "
             + $"{IonAccountingStore.FileName}.");
 
-        var settings = $"Extraction windows: product {result.ProductTolerance}, precursor "
-            + $"{result.PrecursorTolerance}. Isolation scheme: {result.IsolationScheme}. "
+        var settings = $"- Product {result.ProductTolerance}, precursor "
+            + $"{result.PrecursorTolerance}; isolation scheme {result.IsolationScheme}; "
             + $"{result.AssignedPeptides:N0} peptides claimed signal.";
 
         // A cached result carries no run log, and a units error leaves the FRACTION correct - so the
@@ -60,24 +60,27 @@ public static partial class QcReport
         if (offScale > 0)
         {
             var worst = usable.First(r => r.IonScaleImplausible);
-            settings = $"WARNING: {offScale:N0} replicate(s) report an impossible number of ions per "
-                + $"scan (e.g. {worst.MeanMs1IonsPerScan:E2} at MS1, {worst.MeanMs2IonsPerScan:E2} at "
-                + "MS2, against an AGC target of perhaps 1e6). The TOTALS are in the wrong unit; the "
-                + "fractions are unaffected, which is why the plots still look right. " + settings;
+            settings = $"- WARNING: {offScale:N0} replicate(s) report an impossible number of "
+                + $"ions per scan ({worst.MeanMs1IonsPerScan:E2} at MS1, "
+                + $"{worst.MeanMs2IonsPerScan:E2} at MS2, against an AGC target of perhaps 1e6). "
+                + "The totals are in the wrong unit; the fractions are unaffected.\n" + settings;
         }
 
         // ---- Per replicate, one panel per MS level. Never one axis for both: measured over a whole
-        // run MS2 acquires about three times the ions of MS1 while the assigned share goes the other
-        // way, so a shared axis would flatten one of them.
+        // run MS2 acquires about three times the ions of MS1 while the assigned fraction goes the
+        // other way, so a shared axis would flatten one of them.
         var bars = new List<PlotImage>();
         foreach (var level in new[] { PlotRenderer.IonLevel.Ms2, PlotRenderer.IonLevel.Ms1 })
         {
             var name = level.ToString().ToUpperInvariant();
-            var caption = $"{name}: ions the instrument acquired, and the part of them falling "
-                + "inside a region some peptide of this analysis claims. Shared signal is counted "
-                + "once - two peptides whose fragments fall within the extraction tolerance of each "
-                + "other read the same detector counts. " + FractionCaption(usable, level)
-                + ExplainedCaption(usable, level) + " " + settings;
+            var caption = string.Join("\n", new[]
+            {
+                $"- {name} ions acquired, and the part of them inside a region some peptide of this "
+                + "analysis claims. Signal two peptides share is counted once.",
+                "- " + FractionCaption(usable, level),
+                ExplainedCaption(usable, level),
+                settings,
+            }.Where(line => line.Length > 2));
 
             Render(
                 bars, caption, $"ion_accounting_{name.ToLowerInvariant()}.png", savePlots, plotsDir,
@@ -95,23 +98,35 @@ public static partial class QcReport
     }
 
     /// <summary>
-    /// The assigned share across the gradient, for the best, median and worst replicate rather than
-    /// all of them.
+    /// The assigned fraction across the gradient, for the best, median and worst replicate rather
+    /// than all of them.
     /// </summary>
     /// <remarks>
     /// <para>Three panels because 192 is a section nobody scrolls, and because the question these
-    /// answer - is the analysis explaining a steady share of what was acquired, or losing it
+    /// answer - is the analysis explaining a steady fraction of what was acquired, or losing it
     /// somewhere in particular - is answered by the extremes and the middle.</para>
-    /// <para>The SHARE rather than the absolute traces: both absolute curves rise and fall with the
-    /// elution envelope, so a stretch the analysis cannot explain is invisible in them. The absolute
-    /// pair is still drawn for the median replicate, because the share alone does not say whether a
-    /// low stretch carried much signal at all.</para>
+    /// <para>The FRACTION rather than the absolute traces: both absolute curves rise and fall with
+    /// the elution envelope, so a stretch the analysis cannot explain is invisible in them. The
+    /// absolute pair is still drawn for the median replicate, because the fraction alone does not
+    /// say whether a low stretch carried much signal at all.</para>
     /// </remarks>
+    /// <summary>
+    /// The gradient bin, in minutes. 0.01 is 0.6 s - shorter than one acquisition cycle on the
+    /// instruments this was built for - so it bins essentially nothing and the trace is drawn at
+    /// the rate the run was acquired at. A minute-wide bin averaged sixty cycles together, which is
+    /// the one thing these panels exist to show. Matches the pane's own default.
+    /// </summary>
+    private const double GradientBinMinutes = 0.01;
+
     private static void AddIonProfileSection(
         List<PlotSection> sections, string outputDir, IonAccountingResult result, string settings,
         bool savePlots, string plotsDir, Action<string>? log)
     {
-        var representatives = result.Representatives();
+        // ONE quantity for the whole section. It used to draw three fraction panels and then an
+        // absolute one, so "fraction of acquired MS2 signal" and "MS2 ions" sat under the same
+        // heading meaning different things - two quantities and two units, read as a series.
+        var signal = result.Usable.Any(r => r.HasSignal);
+        var representatives = result.Representatives(signal);
         if (representatives.Count == 0)
             return;
 
@@ -124,9 +139,10 @@ public static partial class QcReport
             return;
         }
 
+        var quantity = signal ? PlotRenderer.IonQuantity.Signal : PlotRenderer.IonQuantity.Ions;
+        var noun = signal ? "signal" : "ions";
         var labels = Labels(representatives.Count);
         var images = new List<PlotImage>();
-        var median = representatives.Count >= 3 ? representatives[1] : representatives[0];
 
         for (var i = 0; i < representatives.Count; i++)
         {
@@ -138,51 +154,43 @@ public static partial class QcReport
             if (cycles.Count == 0)
                 continue;
 
-            var explainedShare = row.HasExplained && !row.Exceeded
-                ? $" All possible b/y and precursor ions would account for "
-                  + $"{IonAccountingStore.Percent(row.Ms2ExplainedFraction)} of acquired MS2 ions."
-                : "";
-            var share = row.Exceeded
-                ? "This replicate assigned more than it acquired, which is impossible, so no share "
-                  + "is stated."
-                : $"Whole run: {IonAccountingStore.Percent(row.Ms2Fraction)} of acquired MS2 ions "
-                  + $"and {IonAccountingStore.Percent(row.Ms1Fraction)} of acquired MS1 ions."
-                  + explainedShare;
+            var quantified = row.Ms2FractionIn(signal);
+            var explained = row.Ms2ExplainedFractionIn(signal);
+            var lines = new List<string>
+            {
+                $"- {labels[i]} replicate by assigned fraction: {row.Sample}.",
+                $"- Fraction of each cycle's acquired MS2 {noun} the run quantifies on"
+                + (row.HasExplained
+                    ? ", with the lighter line what any b/y or precursor ion could account for."
+                    : "."),
+            };
+            lines.Add(row.ExceededIn(signal)
+                ? "- This replicate assigned more than it acquired, which is impossible, so no "
+                  + "whole-run fraction is stated."
+                : $"- Whole run: {IonAccountingStore.Percent(quantified)} quantified"
+                  + (double.IsFinite(explained)
+                      ? $", {IonAccountingStore.Percent(explained)} explained."
+                      : "."));
+            // Once per section rather than under every panel - it is the same three settings each
+            // time, and repeating them is most of what made this section a wall of text.
+            if (images.Count == 0)
+                lines.Add(settings);
 
             Render(
-                images,
-                $"{labels[i]} by assigned share: {row.Sample}. The lower line is the share of "
-                + "each cycle's acquired MS2 ions the run quantifies on"
-                + (row.HasExplained
-                    ? ", the upper one the share all possible b/y and precursor ions could account "
-                      + "for"
-                    : "")
-                + ". The axis starts at zero and fits the data above it. "
-                + share + " " + settings,
-                $"ion_share_{labels[i].ToLowerInvariant()}.png", savePlots, plotsDir,
+                images, string.Join("\n", lines),
+                $"ion_fraction_{labels[i].ToLowerInvariant()}.png", savePlots, plotsDir,
                 () => PlotRenderer.IonFractionProfilePng(
-                    cycles, PlotRenderer.IonLevel.Ms2, binMinutes: 1.0,
-                    title: $"{labels[i]}: {row.Sample}"));
-
-            // The absolute pair, for the median only. A low share where almost nothing was acquired
-            // is a different finding from a low share at the peak of the elution.
-            if (ReferenceEquals(row, median))
-            {
-                Render(
-                    images,
-                    $"Median replicate {row.Sample}, absolute ions per cycle: acquired MS2 filled, "
-                    + "with the part assigned to a peptide drawn over it. Read together with the "
-                    + "share above - a dip in the share matters more where the acquired trace is "
-                    + "high. " + settings,
-                    "ion_profile_median.png", savePlots, plotsDir,
-                    () => PlotRenderer.IonProfilePng(
-                        cycles, PlotRenderer.IonLevel.Ms2, binMinutes: 1.0,
-                        title: $"{row.Sample}: MS2 ions across the gradient"));
-            }
+                    cycles, PlotRenderer.IonLevel.Ms2, GradientBinMinutes,
+                    title: $"{labels[i]}: {row.Sample}", quantity: quantity));
         }
 
         if (images.Count > 0)
-            sections.Add(new PlotSection("Assigned Share Across the Gradient", images));
+        {
+            sections.Add(new PlotSection(
+                $"Fraction of Acquired MS2 {char.ToUpperInvariant(noun[0])}{noun[1..]} Across the "
+                + "Gradient",
+                images));
+        }
     }
 
     /// <summary>
@@ -191,8 +199,8 @@ public static partial class QcReport
     /// quietly excluded from a median.
     /// </summary>
     /// <summary>
-    /// The second number, when there is one: the share the peptides can ACCOUNT FOR against the share
-    /// they are QUANTIFIED on.
+    /// The second number, when there is one: the fraction the peptides can ACCOUNT FOR against the
+    /// fraction they are QUANTIFIED on.
     ///
     /// <para>Returns empty at MS1 and on a cache that measured no explained total, so a report over
     /// an older directory reads exactly as it did before - silence rather than a zero, which would
@@ -207,10 +215,9 @@ public static partial class QcReport
         var impossible = usable.Count(r => r.ExplainedImpossible);
         if (impossible > 0)
         {
-            return $" NOTE: {impossible:N0} replicate(s) explained more than was acquired, or less "
-                + "than they quantified - both impossible, because the explained set contains the "
-                + "quantified one by construction. No explained figure is reported; the quantified "
-                + "one above is unaffected.";
+            return $"- NOTE: {impossible:N0} replicate(s) explained more than was acquired, or "
+                + "less than they quantified - both impossible, so no explained figure is reported. "
+                + "The quantified one is unaffected.";
         }
 
         var fractions = usable
@@ -230,13 +237,10 @@ public static partial class QcReport
               + $"{IonAccountingStore.Percent(fractions[^1])}"
             : "";
 
-        return " The lighter bar is what these peptides could account for IN PRINCIPLE - every "
-            + "theoretical b and y ion at 1+ and 2+, plus the surviving precursor and its first two "
-            + "isotopes - against the narrower set the run actually quantifies on. Median "
-            + $"{IonAccountingStore.Percent(median)} explained{span}. The gap between the two is "
-            + "signal the peptide genuinely produced that no transition in the document integrates: "
-            + "low-m/z fragments and unfragmented precursor are poor quantifiers, but they are part "
-            + "of the mass balance.";
+        return $"- Median {IonAccountingStore.Percent(median)} explained{span} (lighter bar): "
+            + "every theoretical b and y ion at 1+ and 2+ plus the surviving precursor and its "
+            + "first two isotopes. The gap to the quantified bar is signal the peptide produced "
+            + "that no transition integrates.";
     }
 
     internal static string FractionCaption(

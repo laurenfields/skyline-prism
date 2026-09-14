@@ -51,9 +51,22 @@ public static partial class PlotRenderer
         Signal = 1,
     }
 
-    /// <summary>The axis noun for a quantity: "ions", or "signal (TIC)".</summary>
+    /// <summary>One total over another as a percentage, or 0 when there is no denominator.</summary>
+    private static double Share(double part, double whole) =>
+        whole > 0 && double.IsFinite(part) ? part / whole * 100.0 : 0;
+
+    /// <summary>
+    /// The axis noun for a quantity: "ions" or "signal".
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT "signal (TIC)". Only the ACQUIRED series is a total ion current; the
+    /// assigned and explained series are the parts of it inside a claimed region, which no
+    /// instrument reports and which are not TICs. Naming the whole axis TIC labels two of three
+    /// series as something they are not - so the axis says "signal" and the acquired series says
+    /// TIC in its own legend entry, where it is true.
+    /// </remarks>
     private static string Noun(IonQuantity quantity) =>
-        quantity == IonQuantity.Signal ? "signal (TIC)" : "ions";
+        quantity == IonQuantity.Signal ? "signal" : "ions";
 
     /// <summary>
     /// Per replicate: the ions acquired, and the part of them assigned to a peptide sequence.
@@ -71,7 +84,7 @@ public static partial class PlotRenderer
     /// </remarks>
     public static void DrawIonAccounting(
         Plot plt, IonAccountingResult result, IonLevel level, string? title = null,
-        double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions)
+        double fontScale = 1.0, IonQuantity quantity = IonQuantity.Ions, bool asFraction = false)
     {
         // Start from an empty plot. ScottPlot's Add methods APPEND - they do not replace, and
         // neither the plottables nor the legend entries they carry go away on their own - so a
@@ -90,47 +103,90 @@ public static partial class PlotRenderer
             return;
         }
 
-        var acquiredOf = Selector(level, acquired: true, quantity);
-        var assignedOf = Selector(level, acquired: false, quantity);
-        var explainedOf = quantity == IonQuantity.Signal
+        var acquiredRaw = Selector(level, acquired: true, quantity);
+        var assignedRaw = Selector(level, acquired: false, quantity);
+        var explainedRaw = quantity == IonQuantity.Signal
             ? new Func<IonAccountingRow, double>(r => r.Ms2SignalExplained)
             : r => r.Ms2Explained;
+
+        // As a FRACTION, the same three series divided by the replicate's own acquired total. The
+        // acquired series is then 100% for every replicate by construction, so it is not drawn -
+        // a full-height background bar behind every one carries no information and hides the axis
+        // the other two are read against.
+        var acquiredOf = asFraction
+            ? new Func<IonAccountingRow, double>(r => 0)
+            : acquiredRaw;
+        var assignedOf = asFraction
+            ? r => Share(assignedRaw(r), acquiredRaw(r))
+            : assignedRaw;
+        var explainedOf = asFraction
+            ? r => Share(explainedRaw(r), acquiredRaw(r))
+            : explainedRaw;
+
+        // AS A FRACTION, a row whose assigned total exceeds its acquired total is not drawn at
+        // all. The fraction is impossible, so it means a defect - a units mismatch, a scheme that
+        // does not match the acquisition, or claims merged too loosely - and a 150% bar under an
+        // axis labelled "fraction of acquired" reads as a measurement. This function's own remarks
+        // have always said a fraction over 1 is never drawn; until the fraction view existed there
+        // was no path that could draw one, and adding the view added the path.
+        //
+        // Withheld per row rather than for the whole plot: one bad replicate must not blank a
+        // cohort. The title says how many are missing - see WithIonFraction.
+        var signalDrawn = quantity == IonQuantity.Signal;
+        var drawAssigned = asFraction
+            ? new Func<IonAccountingRow, bool>(r => !r.ExceededIn(signalDrawn))
+            : _ => true;
+        var drawExplained = asFraction
+            ? new Func<IonAccountingRow, bool>(
+                r => !r.ExceededIn(signalDrawn) && !r.ExplainedImpossibleIn(signalDrawn))
+            : _ => true;
 
         // Drawn only where it exists and can differ: MS2, and a cache that actually measured it. An
         // export with no precursor charge column measures none, and a bar of height zero would read
         // as "these peptides account for nothing" rather than "this was never asked".
         var showExplained = level == IonLevel.Ms2 && rows.Any(r => r.HasExplained)
             && (quantity == IonQuantity.Ions || rows.Any(r => r.HasSignal));
-        var tallest = rows.Max(r => Math.Max(Finite(acquiredOf(r)), Finite(assignedOf(r))));
-        var (scale, unit) = SignalScale(tallest);
+        var tallest = rows.Max(r => Math.Max(
+            Finite(acquiredOf(r)),
+            Math.Max(
+                drawAssigned(r) ? Finite(assignedOf(r)) : 0,
+                showExplained && drawExplained(r) ? Finite(explainedOf(r)) : 0)));
+        // A percentage is already in the units it is read in, so it is never rescaled.
+        var (scale, unit) = asFraction ? (1.0, " (%)") : SignalScale(tallest);
 
-        // Acquired first, so the assigned bars land on top of it.
-        var acquiredBars = new List<Bar>(rows.Count);
-        for (var i = 0; i < rows.Count; i++)
+        var withDenominator = rows.Count(r => Finite(acquiredRaw(r)) > 0);
+        if (!asFraction)
         {
-            acquiredBars.Add(new Bar
+            // Acquired first, so the assigned bars land on top of it.
+            var acquiredBars = new List<Bar>(rows.Count);
+            for (var i = 0; i < rows.Count; i++)
             {
-                Position = i,
-                // Finite() gives 0 for a replicate with no data file, so its background bar simply
-                // does not appear - the honest rendering of an unknown denominator.
-                Value = Finite(acquiredOf(rows[i])) / scale,
-                FillColor = AcquiredBarColor,
-                LineWidth = 0,
-                Size = 0.85,
-            });
-        }
-        plt.Add.Bars(acquiredBars);
+                acquiredBars.Add(new Bar
+                {
+                    Position = i,
+                    // Finite() gives 0 for a replicate with no data file, so its background bar
+                    // simply does not appear - the honest rendering of an unknown denominator.
+                    Value = Finite(acquiredOf(rows[i])) / scale,
+                    FillColor = AcquiredBarColor,
+                    LineWidth = 0,
+                    Size = 0.85,
+                });
+            }
+            plt.Add.Bars(acquiredBars);
 
-        var withDenominator = rows.Count(r => Finite(acquiredOf(r)) > 0);
-        var acquiredKey = plt.Add.Marker(double.NaN, double.NaN);
-        acquiredKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
-        acquiredKey.MarkerStyle.Size = 14;
-        acquiredKey.MarkerStyle.FillColor = AcquiredBarColor;
-        acquiredKey.MarkerStyle.LineWidth = 0;
-        acquiredKey.LegendText = withDenominator == rows.Count
-            ? $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}"
-            : $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)} "
-              + $"({withDenominator:N0} of {rows.Count:N0})";
+            var acquiredKey = plt.Add.Marker(double.NaN, double.NaN);
+            acquiredKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
+            acquiredKey.MarkerStyle.Size = 14;
+            acquiredKey.MarkerStyle.FillColor = AcquiredBarColor;
+            acquiredKey.MarkerStyle.LineWidth = 0;
+            // TIC belongs HERE and nowhere else on the plot: this series is the instrument's own
+            // total, and the two drawn over it are parts of it.
+            var acquiredNoun = level.ToString().ToUpperInvariant() + " " + Noun(quantity)
+                + (quantity == IonQuantity.Signal ? " (TIC)" : "");
+            acquiredKey.LegendText = withDenominator == rows.Count
+                ? $"acquired {acquiredNoun}"
+                : $"acquired {acquiredNoun} ({withDenominator:N0} of {rows.Count:N0})";
+        }
 
         // Between the two, and BEFORE the assigned bars so the shorter one lands on top. The three
         // totals nest - acquired >= explained >= assigned - so they are drawn back to front rather
@@ -145,7 +201,7 @@ public static partial class PlotRenderer
                 // measured partly before this feature is exactly the mixed case that produces both.
                 // Skipping it leaves the acquired background bar alone, and the legend says how many
                 // of the replicates carry the series.
-                if (!rows[i].HasExplained)
+                if (!rows[i].HasExplained || !drawExplained(rows[i]))
                     continue;
 
                 explainedBars.Add(new Bar
@@ -164,7 +220,7 @@ public static partial class PlotRenderer
             }
             plt.Add.Bars(explainedBars);
 
-            var measured = rows.Count(r => r.HasExplained);
+            var measured = rows.Count(r => r.HasExplained && drawExplained(r));
             var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
             explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
             explainedKey.MarkerStyle.Size = 14;
@@ -178,6 +234,9 @@ public static partial class PlotRenderer
         var assignedBars = new List<Bar>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
+            if (!drawAssigned(rows[i]))
+                continue;
+
             assignedBars.Add(new Bar
             {
                 Position = i,
@@ -215,10 +274,12 @@ public static partial class PlotRenderer
 
         plt.ShowLegend(Alignment.UpperRight);
         plt.XLabel($"Replicate (n = {rows.Count:N0})");
-        plt.YLabel($"{level.ToString().ToUpperInvariant()} {Noun(quantity)}{unit}");
+        plt.YLabel(asFraction
+            ? $"Fraction of acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}{unit}"
+            : $"{level.ToString().ToUpperInvariant()} {Noun(quantity)}{unit}");
         LabelCategoryTicks(plt, rows.Select(r => r.Sample).ToArray());
         StyleQcPlot(plt, fontScale);
-        SetPlotTitle(plt, WithIonFraction(title, result, level, quantity), fontScale);
+        SetPlotTitle(plt, WithIonFraction(title, result, level, quantity, asFraction), fontScale);
         plt.Axes.SetLimits(-0.7, rows.Count - 0.3, 0, tallest > 0 ? tallest / scale * 1.15 : 1);
     }
 
@@ -258,10 +319,11 @@ public static partial class PlotRenderer
         // partition.
         var band = plt.Add.FillY(
             x, new double[x.Length], acquired.Select(v => v / scale).ToArray());
-        band.FillColor = Color.FromHex("#c8ccd4").WithAlpha((byte)140);
+        band.FillColor = AcquiredBandColor;
         band.LineWidth = 0;
         band.MarkerSize = 0;
-        band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}";
+        band.LegendText = $"acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)}"
+            + (quantity == IonQuantity.Signal ? " (TIC)" : "");
 
         if (showExplained)
         {
@@ -347,7 +409,7 @@ public static partial class PlotRenderer
             explainedLine.Color = ExplainedBarColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
-            explainedLine.LegendText = "explained share";
+            explainedLine.LegendText = "explained fraction";
         }
 
         var line = plt.Add.Scatter(
@@ -356,8 +418,20 @@ public static partial class PlotRenderer
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained
-            ? "quantified share"
-            : $"assigned share of acquired {level.ToString().ToUpperInvariant()}";
+            ? "quantified fraction"
+            : $"assigned fraction of acquired {level.ToString().ToUpperInvariant()}";
+
+        // The same contract as the bars: a fraction over 100% is impossible, so it is named
+        // rather than left to be read as a measurement. Named and NOT dropped here - the points are
+        // a line, and ScottPlot joins across an omission, so removing a bin would sail the trace
+        // over exactly the stretch that is wrong.
+        var impossible = points.Count(p => p.Fraction > 100.0);
+        if (impossible > 0)
+        {
+            var note = $"{impossible:N0} of {points.Length:N0} bins exceed 100%, which is "
+                + "impossible - treat this trace as a defect, not a measurement";
+            title = string.IsNullOrEmpty(title) ? note : $"{title}{NewLine}{note}";
+        }
 
         var overallAcquired = binned.Sum(b => b.Acquired);
         var overall = overallAcquired > 0 ? binned.Sum(b => b.Assigned) / overallAcquired * 100 : 0;
@@ -375,8 +449,8 @@ public static partial class PlotRenderer
         plt.XLabel("Retention time (min)");
         plt.YLabel(
             showExplained
-                ? $"Share of acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)} (%)"
-                : $"Assigned share of acquired {level.ToString().ToUpperInvariant()} "
+                ? $"Fraction of acquired {level.ToString().ToUpperInvariant()} {Noun(quantity)} (%)"
+                : $"Assigned fraction of acquired {level.ToString().ToUpperInvariant()} "
                   + $"{Noun(quantity)} (%)");
         StyleQcPlot(plt, fontScale);
         SetPlotTitle(plt, title, fontScale);
@@ -531,7 +605,7 @@ public static partial class PlotRenderer
     /// </summary>
     private static string? WithIonFraction(
         string? title, IonAccountingResult result, IonLevel level,
-        IonQuantity quantity = IonQuantity.Ions)
+        IonQuantity quantity = IonQuantity.Ions, bool asFraction = false)
     {
         var usable = result.Rows.Where(r => r.IsUsable).ToArray();
         if (usable.Length == 0)
@@ -543,22 +617,23 @@ public static partial class PlotRenderer
         // injection time and the signal totals do not, so one can be under 1 while the other is
         // over it, and withholding on the wrong one shows an impossible fraction with no warning.
         var signalDrawn = quantity == IonQuantity.Signal;
-        if (usable.Any(r => r.ExceededIn(signalDrawn)))
+        var impossible = usable.Count(r => r.ExceededIn(signalDrawn));
+        if (impossible > 0)
         {
-            var suffix = "assigned exceeds acquired in "
-                + $"{usable.Count(r => r.ExceededIn(signalDrawn)):N0} replicate(s); fraction not shown";
+            // Two different withholdings, and saying the wrong one is worse than saying nothing.
+            // Plotting TOTALS, nothing impossible is on the axis and it is the median in this
+            // caption that is withheld. Plotting the FRACTION, those replicates have no bar at all,
+            // and a reader looking at a gap needs to know it is a defect rather than a missing file.
+            var suffix = asFraction
+                ? $"{impossible:N0} replicate(s) assigned more than was acquired, which is "
+                  + "impossible - they are not drawn"
+                : $"assigned exceeds acquired in {impossible:N0} replicate(s); fraction not shown";
             return string.IsNullOrEmpty(title) ? suffix : $"{title}{NewLine}{suffix}";
         }
 
         var signal = quantity == IonQuantity.Signal;
         var fractions = usable
-            .Select(r => (level, signal) switch
-            {
-                (IonLevel.Ms1, false) => r.Ms1Fraction,
-                (IonLevel.Ms1, true) => r.Ms1SignalFraction,
-                (_, false) => r.Ms2Fraction,
-                _ => r.Ms2SignalFraction,
-            })
+            .Select(r => level == IonLevel.Ms1 ? r.Ms1FractionIn(signal) : r.Ms2FractionIn(signal))
             .Where(double.IsFinite)
             .OrderBy(f => f)
             .ToArray();
@@ -572,7 +647,7 @@ public static partial class PlotRenderer
         // one number out of two invites the reading that it is the whole answer.
         var explained = usable
             .Where(r => r.HasExplained)
-            .Select(r => signal ? r.Ms2SignalExplainedFraction : r.Ms2ExplainedFraction)
+            .Select(r => r.Ms2ExplainedFractionIn(signal))
             .Where(double.IsFinite)
             .OrderBy(f => f)
             .ToArray();
