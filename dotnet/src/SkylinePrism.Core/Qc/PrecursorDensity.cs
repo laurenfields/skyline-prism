@@ -11,11 +11,22 @@ namespace SkylinePrism.Core.Qc;
 public readonly record struct DetectedPrecursor(double Mz, double RtStart, double RtStop);
 
 /// <summary>
-/// Precursor counts on an (m/z band x RT bin) grid. When the bands are the acquisition's real isolation
-/// windows, one cell IS one DIA spectrum: cell (i, j) counts the precursors whose m/z falls in window i
-/// and whose peak is eluting during RT bin j - i.e. how many peptide precursors that spectrum had to
-/// resolve. Rows are explicit [Low, High) bands rather than a uniform bin size, because real schemes are
-/// not obliged to be uniform, gapless or non-overlapping.
+/// Co-eluting precursor counts on an (m/z band x RT column) grid. Cell (i, j) is the GREATEST number of
+/// precursors whose m/z falls in window i and which were eluting AT ANY ONE INSTANT inside column j -
+/// how many peptide precursors a single spectrum had to resolve.
+/// <para>
+/// At an instant, not over the column: a cell is not a tally of everything that passed through that
+/// stretch of time. Two peptides, one finishing before the other starts, are one and one, never two -
+/// no spectrum ever saw both. That is what keeps the number from growing with the column width, and it
+/// is why cells cannot be summed or averaged across columns as though they were counts. Peaks are CLOSED
+/// intervals: two that meet at exactly one instant were both in a spectrum acquired then, and count as
+/// two in the column holding that instant.
+/// </para>
+/// <para>
+/// When the bands are the acquisition's real isolation windows and the column is about one acquisition
+/// cycle, one cell IS one DIA spectrum. Rows are explicit [Low, High) bands rather than a uniform bin
+/// size, because real schemes are not obliged to be uniform, gapless or non-overlapping.
+/// </para>
 /// </summary>
 public sealed record PrecursorDensityMap(
     IReadOnlyList<IsolationWindow> Rows,
@@ -35,11 +46,21 @@ public sealed record PrecursorDensityMap(
     /// Whether the RT bin had to be widened past what the caller asked for.
     /// </summary>
     /// <remarks>
-    /// The same class of fact as <see cref="RowsAreWindows"/>, on the other axis. A cell answers "how
-    /// many peptides did one spectrum have to deal with", and that is a question about ONE
-    /// acquisition cycle: bin much wider than a cycle and the cell unions precursors that were never
-    /// in the same spectrum, so the count comes out artifactually large. A widened bin is therefore
-    /// not a resolution detail, it is a different quantity - and the reader has to be told.
+    /// <para>The same class of fact as <see cref="RowsAreWindows"/>, on the other axis: what a cell
+    /// counts is the one thing a reader must not be told wrongly.</para>
+    ///
+    /// <para><b>It no longer means the counts run high.</b> It did when a cell held the union of
+    /// everything that eluted during its column - widening then pooled cycles and inflated the
+    /// number. A cell now holds the greatest number of precursors co-eluting at any ONE INSTANT
+    /// inside its column, so the maximum over the map is the same however the columns are cut. That
+    /// bin independence is the whole point of the sweep, and it retired the inflation this flag was
+    /// added to warn about.</para>
+    ///
+    /// <para>What widening still changes is WHICH spectrum each cell speaks for. At about one
+    /// acquisition cycle a column is one spectrum, and the cell is what that spectrum resolved.
+    /// Wider, every cell reports the worst spectrum inside it rather than a typical one - so more
+    /// cells carry a high number and <see cref="PrecursorsPerSpectrumHistogram"/> shifts right, while
+    /// the extreme stays honest. The peak is reliable either way; the distribution is not.</para>
     /// </remarks>
     public bool RtBinWidened => RtBinRequested > 0 && RtBinMin > RtBinRequested * 1.001;
 
@@ -97,11 +118,10 @@ public sealed record PrecursorDensityMap(
                 // change with time. Dynamic DIA shifts its cycle's windows along m/z as the gradient runs,
                 // and scheduled slots overlap in m/z at different times - picking one window per row would
                 // show a single segment and blank every other one.
-                var time = RtLow + (c + 0.5) * RtBinMin;
                 var source = -1;
                 foreach (var i in candidates)
                 {
-                    if (!Rows[i].IsOnAt(time))
+                    if (!WasAcquired(i, c))
                         continue;
                     // Narrowest window wins, so overlapping windows show the finer structure.
                     if (source < 0 || Rows[i].Width < Rows[source].Width)
@@ -114,8 +134,9 @@ public sealed record PrecursorDensityMap(
     }
 
     /// <summary>
-    /// How many SPECTRA had each precursor load: <c>result[n]</c> is the number of spectra that had to
-    /// resolve exactly <c>n</c> precursors, for n = 0..<see cref="MaxCount"/>.
+    /// The distribution of the map's cells: <c>result[n]</c> is the number of acquired cells whose load
+    /// is exactly <c>n</c>, for n = 0..<see cref="MaxCount"/>. A cell is one spectrum only while a column
+    /// is about one acquisition cycle wide - <see cref="RtBinWidened"/> says what a wider one makes it.
     /// <para>
     /// The heatmap shows where the load is; this shows how it is distributed. A long tail says a few
     /// spectra are carrying many co-isolated precursors, which is what limits identification - and it is
@@ -148,6 +169,10 @@ public sealed record PrecursorDensityMap(
     /// This is the load over the gradient - where the instrument is working hardest. The spread between
     /// min and max at one time says whether the load is even across the m/z range or concentrated in a
     /// few windows, which the mean alone hides.
+    /// </para>
+    /// <para>
+    /// Averaged across WINDOWS at one time; each window contributes its cell at that column, which is one
+    /// spectrum's load at about one cycle and its worst spectrum's when wider (<see cref="RtBinWidened"/>).
     /// </para>
     /// <para>
     /// A time with no acquired spectrum at all yields NaN for all three rather than zero, so a gap in
@@ -185,11 +210,13 @@ public sealed record PrecursorDensityMap(
     }
 
     /// <summary>
-    /// Whether row <paramref name="i"/> was firing during RT bin <paramref name="j"/>. Always true for
-    /// ordinary DIA (a window is on for the whole gradient); false outside a scheduled window's interval.
+    /// Whether row <paramref name="i"/> was firing during RT column <paramref name="j"/> - the ONE rule
+    /// for "this cell is a spectrum", shared with the fill through
+    /// <see cref="PrecursorDensity.ColumnAcquired"/>, so a count can never land in a cell that
+    /// <see cref="ToDisplayGrid"/> draws as a gap and the summaries skip. Always true for ordinary DIA
+    /// (a window is on for the whole gradient); false outside a scheduled window's interval.
     /// </summary>
-    private bool WasAcquired(int i, int j) =>
-        Rows[i].IsOnAt(RtLow + (j + 0.5) * RtBinMin);
+    private bool WasAcquired(int i, int j) => PrecursorDensity.ColumnAcquired(Rows[i], RtLow, RtBinMin, j);
 
     /// <summary>The row containing <paramref name="mz"/>, or -1 (used by the tool's hover readout).</summary>
     public int RowAt(double mz)
@@ -199,17 +226,33 @@ public sealed record PrecursorDensityMap(
                 return i;
         return -1;
     }
+
+    /// <summary>
+    /// The column containing retention time <paramref name="rt"/>, or -1 when it is off the axis. The
+    /// sibling of <see cref="RowAt"/> for the hover readouts. Floor rather than a cast: a cast truncates
+    /// toward zero, so a cursor just left of the axis landed on column 0 and read out a cell it was not
+    /// over.
+    /// </summary>
+    public int ColumnAt(double rt)
+    {
+        if (!double.IsFinite(rt) || rt < RtLow)
+            return -1;
+        var col = (int)Math.Floor((rt - RtLow) / RtBinMin);
+        return col < RtBins ? col : -1;
+    }
 }
 
 /// <summary>
-/// "How many peptide precursors were detected in each DIA spectrum" - the m/z x RT density map behind
-/// the tool's Spectrum density tab, computed from the merged transition-level report.
+/// The m/z x RT co-elution map behind the tool's Spectrum density tab, computed from the merged
+/// transition-level report. What a cell holds is defined once, on <see cref="PrecursorDensityMap"/>.
 /// </summary>
 /// <remarks>
-/// Same construction as Cadenza's <c>CoverageCurves.BuildHeatmap</c> (a precursor contributes one count
-/// to every RT bin its peak spans, at its m/z row), but sourced from the PRISM report rather than a
-/// DIA-NN report: <c>Precursor Mz</c> gives the row, <c>Start Time</c>/<c>End Time</c> give the span, and
-/// <c>Detection Q Value</c> decides what counts as detected.
+/// The layout is Cadenza's <c>CoverageCurves.BuildHeatmap</c> - isolation windows across retention time -
+/// but not its counting: Cadenza adds one count to every RT bin a peak spans, which pools everything that
+/// eluted during the bin, where a cell here is the greatest number co-eluting at any one instant. Sourced
+/// from the PRISM report rather than a DIA-NN report: <c>Precursor Mz</c> gives the row,
+/// <c>Start Time</c>/<c>End Time</c> give the span, and <c>Detection Q Value</c> decides what counts as
+/// detected.
 /// </remarks>
 public static class PrecursorDensity
 {
@@ -220,16 +263,18 @@ public static class PrecursorDensity
     /// The default RT bin, in minutes.
     /// </summary>
     /// <remarks>
-    /// <para><b>This is a correctness bound, not a resolution preference.</b> A cell answers "how many
-    /// peptides did one spectrum have to deal with", which is a question about ONE acquisition cycle.
-    /// Bin much wider than a cycle and the cell unions precursors that were never co-isolated in the
-    /// same spectrum - they merely eluted within the same stretch of time - and the count comes out
-    /// artifactually large. The same applies to the load-over-time view, which reads the same
-    /// grid.</para>
+    /// <para><b>About one acquisition cycle, which is what makes a cell one spectrum.</b> A cell holds
+    /// the greatest number of precursors co-eluting at any instant inside its column
+    /// (<see cref="PrecursorDensityMap"/>), so the busiest cell does not move with the bin - but WHICH
+    /// spectrum a cell speaks for does. At about one cycle it is the spectrum acquired then; wider, it is
+    /// the worst spectrum inside the column, and the histogram and load curve become distributions of
+    /// column maxima rather than of spectra (<see cref="PrecursorDensityMap.RtBinWidened"/>).</para>
     ///
     /// <para>0.01 min is 0.6 s, about one cycle on the cohorts this was built for, and the same bin
-    /// the ion accounting views default to. It was 0.1 - ten times a cycle - inherited from Cadenza.
-    /// Do not widen it for a smoother-looking plot: the smoothing is the artifact.</para>
+    /// the ion accounting views default to. It was 0.1 - ten times a cycle - inherited from Cadenza,
+    /// and the tool's RT bin box kept that value after the constant changed, which is why
+    /// <c>DensityPaneDefaultsTests</c> pins the two together. Do not widen it for a smoother-looking
+    /// plot: the smoothing is what turns "one spectrum" into "the worst of ten".</para>
     /// </remarks>
     public const double DefaultRtBinMin = 0.01;
 
@@ -338,16 +383,20 @@ public static class PrecursorDensity
     }
 
     /// <summary>
-    /// Bin precursors on the acquisition's REAL isolation windows: each precursor adds a count to every
+    /// Bin precursors on the acquisition's REAL isolation windows: each precursor is credited to every
     /// window containing its m/z (more than one only for a staggered/overlapping scheme, where it really
-    /// was fragmented twice), for every RT bin its peak spans. This is the honest version of the map -
-    /// a cell is a spectrum, at the m/z boundaries the instrument actually used.
+    /// was fragmented twice), and each cell holds the co-elution defined on
+    /// <see cref="PrecursorDensityMap"/>. This is the honest version of the map - a cell is a spectrum,
+    /// at the m/z boundaries the instrument actually used.
     /// </summary>
     /// <remarks>
-    /// Precursors outside every window are counted in
+    /// <para>Precursors outside every window are counted in
     /// <see cref="PrecursorDensityMap.PrecursorsOutsideRows"/> rather than forced into the nearest row:
     /// a large count there means the scheme does not match the data (usually the wrong scheme picked for
-    /// a "Results only" document), and silently clamping would hide exactly that.
+    /// a "Results only" document), and silently clamping would hide exactly that.</para>
+    /// <para>A precursor with a non-finite m/z or boundary, or a peak that ends before it starts, is
+    /// dropped before anything looks at it - see <see cref="IsValid"/>. It counts as neither placed nor
+    /// outside.</para>
     /// </remarks>
     public static PrecursorDensityMap Bin(
         IReadOnlyList<DetectedPrecursor> precursors, IsolationScheme scheme,
@@ -357,16 +406,16 @@ public static class PrecursorDensity
             throw new ArgumentOutOfRangeException(nameof(rtBinMin), rtBinMin, "RT bin must be greater than 0.");
         if (!scheme.HasWindows)
             throw new ArgumentException($"Isolation scheme '{scheme.Name}' defines no windows.", nameof(scheme));
+        precursors = Valid(precursors);
         if (precursors.Count == 0)
             return new PrecursorDensityMap(scheme.Windows, 0, rtBinMin, new int[0, 0], scheme.Name);
 
         var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme, scheme.Windows.Count);
         var counts = new int[scheme.Windows.Count, nRt];
+        var peaks = new List<(double Start, double Stop)>?[scheme.Windows.Count];
         var outside = 0;
         foreach (var p in precursors)
         {
-            var from = Math.Max(0, (int)((p.RtStart - rtLo) / rtBin));
-            var to = Math.Min(nRt, (int)((p.RtStop - rtLo) / rtBin) + 1);
             var matched = false;
             // Covers(), not Contains(): for a scheduled (dynamic DIA) window the peak must also fall
             // inside the interval the window was firing, or a precursor would be credited to a same-m/z
@@ -375,13 +424,21 @@ public static class PrecursorDensity
             {
                 matched = true;
                 var window = scheme.Windows[row];
-                for (var j = from; j < to; j++)
-                    if (window.IsOnAt(rtLo + (j + 0.5) * rtBin))
-                        counts[row, j]++;
+
+                // Clipped to the stretch this window was actually firing, so an instant when the window
+                // was off cannot add to the concurrency of a column whose center it was on for. Covers()
+                // has already guaranteed the clip is not empty; an unscheduled window's NaN bounds mean
+                // always on.
+                var (start, stop) = window.IsScheduled
+                    ? (Math.Max(p.RtStart, window.RtStart), Math.Min(p.RtStop, window.RtStop))
+                    : (p.RtStart, p.RtStop);
+                (peaks[row] ??= new List<(double, double)>()).Add((start, stop));
             }
             if (!matched)
                 outside++;
         }
+        for (var row = 0; row < scheme.Windows.Count; row++)
+            FillRowByConcurrency(counts, row, peaks[row], scheme.Windows[row], rtLo, rtBin);
         return new PrecursorDensityMap(
             scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside, RtBinRequested: rtBinMin);
     }
@@ -389,7 +446,8 @@ public static class PrecursorDensity
     /// <summary>
     /// Bin precursors on a uniform m/z grid. This is the FALLBACK for when the acquisition's real windows
     /// are unknown: the cell edges are arbitrary, so a cell only approximates a spectrum. Prefer the
-    /// <see cref="IsolationScheme"/> overload, and label the plot honestly when using this one.
+    /// <see cref="IsolationScheme"/> overload, and label the plot honestly when using this one. Invalid
+    /// precursors are dropped exactly as there (<see cref="IsValid"/>).
     /// </summary>
     public static PrecursorDensityMap Bin(
         IReadOnlyList<DetectedPrecursor> precursors,
@@ -399,6 +457,7 @@ public static class PrecursorDensity
             throw new ArgumentOutOfRangeException(nameof(mzBinTh), mzBinTh, "m/z bin must be greater than 0.");
         if (!(rtBinMin > 0))
             throw new ArgumentOutOfRangeException(nameof(rtBinMin), rtBinMin, "RT bin must be greater than 0.");
+        precursors = Valid(precursors);
         if (precursors.Count == 0)
             return new PrecursorDensityMap(
                 Array.Empty<IsolationWindow>(), 0, rtBinMin, new int[0, 0], UniformSource(mzBinTh),
@@ -424,18 +483,95 @@ public static class PrecursorDensity
 
         var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, nMz: nMz);
         var counts = new int[nMz, nRt];
+        var peaks = new List<(double Start, double Stop)>?[nMz];
         foreach (var p in precursors)
         {
             var row = Math.Clamp((int)((p.Mz - mzLo) / mzBinTh), 0, nMz - 1);
-            var from = Math.Max(0, (int)((p.RtStart - rtLo) / rtBin));
-            var to = Math.Min(nRt, (int)((p.RtStop - rtLo) / rtBin) + 1);
-            for (var j = from; j < to; j++)
-                counts[row, j]++;
+            (peaks[row] ??= new List<(double, double)>()).Add((p.RtStart, p.RtStop));
         }
+        for (var row = 0; row < nMz; row++)
+            FillRowByConcurrency(counts, row, peaks[row], rows[row], rtLo, rtBin);
         return new PrecursorDensityMap(
             rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false,
             RtBinRequested: rtBinMin);
     }
+
+    /// <summary>
+    /// The precursors that can be placed at all: finite m/z and boundaries, and a peak that does not end
+    /// before it starts. <see cref="Load"/> filters the same way in SQL; this is for the public Bin, which
+    /// takes whatever it is given. Nothing downstream defends against these separately, and each one
+    /// fails quietly rather than loudly: a NaN start saturates the column cast to 0 and paints
+    /// concurrency from the axis start, an infinite stop makes the whole axis one column, and an inverted
+    /// peak closes before it opens and subtracts from its neighbors' concurrency.
+    /// </summary>
+    private static bool IsValid(DetectedPrecursor p) =>
+        double.IsFinite(p.Mz) && double.IsFinite(p.RtStart) && double.IsFinite(p.RtStop)
+        && p.RtStop >= p.RtStart;
+
+    /// <summary>The valid precursors (<see cref="IsValid"/>), the input itself when all of them are.</summary>
+    private static IReadOnlyList<DetectedPrecursor> Valid(IReadOnlyList<DetectedPrecursor> precursors) =>
+        precursors.All(IsValid) ? precursors : precursors.Where(IsValid).ToList();
+
+    /// <summary>
+    /// Fill one row with the cell defined on <see cref="PrecursorDensityMap"/>: the greatest number of
+    /// precursors co-eluting at any one instant inside each column, found by sweeping the peak
+    /// boundaries. Only columns the window was acquiring are written - the same
+    /// <see cref="ColumnAcquired"/> rule every view reads with - so a count can never sit in a cell
+    /// drawn as a gap.
+    /// </summary>
+    /// <remarks>
+    /// <para>Sweeping the sorted starts and stops gives the exact concurrency between consecutive
+    /// boundaries, and each such segment is written to every column it touches as a max. A peak is a
+    /// CLOSED interval, and three details follow from that. Opens sort before closes at equal times, so
+    /// two peaks meeting at one instant are concurrent there. The column containing a segment's end is
+    /// credited (Floor + 1, not Ceiling), because a spectrum acquired exactly at a stop is still inside
+    /// the peak. And a zero-length segment - two peaks meeting, or a zero-width peak - still writes the
+    /// one column holding its instant, wherever that falls, which is what makes the busiest cell
+    /// independent of how the columns are cut: every live instant reaches some column.</para>
+    /// <para>The instant at the very top of the axis belongs to the last column, which the clamp on
+    /// <c>from</c> provides; without it a zero-width peak at the final boundary had no column at all.</para>
+    /// </remarks>
+    private static void FillRowByConcurrency(
+        int[,] counts, int row, List<(double Start, double Stop)>? peaks, IsolationWindow window,
+        double rtLo, double rtBin)
+    {
+        if (peaks is null || peaks.Count == 0)
+            return;
+
+        var nRt = counts.GetLength(1);
+        var events = new List<(double Time, int Delta)>(peaks.Count * 2);
+        foreach (var (start, stop) in peaks)
+        {
+            events.Add((start, 1));
+            events.Add((stop, -1));
+        }
+        // Opens before closes at equal times, which is what makes touching peaks concurrent.
+        events.Sort((a, b) => a.Time != b.Time ? a.Time.CompareTo(b.Time) : b.Delta.CompareTo(a.Delta));
+
+        var live = 0;
+        for (var i = 0; i < events.Count - 1; i++)
+        {
+            live += events[i].Delta;
+            if (live <= 0)
+                continue;
+
+            var from = Math.Clamp((int)Math.Floor((events[i].Time - rtLo) / rtBin), 0, nRt - 1);
+            var to = Math.Min(nRt, (int)Math.Floor((events[i + 1].Time - rtLo) / rtBin) + 1);
+            for (var j = from; j < to; j++)
+                if (counts[row, j] < live && ColumnAcquired(window, rtLo, rtBin, j))
+                    counts[row, j] = live;
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="window"/> was firing during column <paramref name="j"/> of a grid that
+    /// starts at <paramref name="rtLo"/> with columns <paramref name="rtBin"/> minutes wide: on at the
+    /// column's center. This is the ONE definition of "this cell is a spectrum". The fill writes only
+    /// where it is true, and <see cref="PrecursorDensityMap"/>'s views count and draw only where it is
+    /// true, so the two cannot disagree. Always true for an unscheduled window.
+    /// </summary>
+    internal static bool ColumnAcquired(IsolationWindow window, double rtLo, double rtBin, int j) =>
+        window.IsOnAt(rtLo + (j + 0.5) * rtBin);
 
     /// <summary>Label that marks a map as approximate, so it can never be mistaken for real windows.</summary>
     public static string UniformSource(double mzBinTh) =>

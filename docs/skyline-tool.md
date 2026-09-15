@@ -35,7 +35,7 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 | Pane | What it is for |
 |------|----------------|
 | **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
-| **Spectrum density** | How many precursors were detected in each DIA spectrum of a run |
+| **Spectrum density** | How many precursors a single DIA spectrum had to resolve at once |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
 | **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
 
@@ -410,13 +410,17 @@ themselves as well as on the settings.
 
 ## Spectrum density
 
-A map of how many peptide precursors were detected in each DIA spectrum of a run: retention time across,
-precursor m/z up, color = precursors per cell. Pick the run from the drop-down, set the **RT bin**
-(default 0.01 min, which is 0.6 s — several acquisition cycles, and the same bin the Ion accounting
-views use) and the **max q-value** that counts as a detection (default 0.01). A very wide m/z range
-widens the RT bin to keep the grid bounded; the status line always names the bin actually used.
-Hovering reads out
-the isolation window and exact count under the cursor.
+A map of how many peptide precursors a single DIA spectrum had to resolve at once: retention time across,
+precursor m/z up, color = co-eluting precursors per cell. A cell is the most that overlapped at any one
+**instant**, not a tally of everything that passed through it - two peptides, one finishing before the
+other starts, are one and one. The busiest cell therefore does not grow when you widen the RT bin. What
+widening changes is which spectrum a cell speaks for: at about one acquisition cycle it is the spectrum
+acquired then, wider it is the worst of the several spectra inside the column, and the histogram and
+load curve shift right accordingly. Pick the run from the drop-down, set the **RT bin** (default
+0.01 min, which is 0.6 s - about one acquisition cycle, and the same bin the Ion accounting views use)
+and the **max q-value** that counts as a detection (default 0.01). A very wide m/z range widens the RT
+bin to keep the grid bounded; the status line always names the bin actually used, and says when it had
+to widen it. Hovering reads out the isolation window and exact count under the cursor.
 
 **The rows are the acquisition's real isolation windows**, not an assumed bin width, so a cell really is
 one DIA spectrum — including for variable-width and staggered schemes. This matters more than it sounds:
