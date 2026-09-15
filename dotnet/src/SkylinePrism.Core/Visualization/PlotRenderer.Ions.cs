@@ -213,22 +213,30 @@ public static partial class PlotRenderer
                     // the quantified bar it is required to nest ABOVE, which the report elsewhere
                     // calls impossible - while the title on the same image quoted the right share.
                     Value = Finite(explainedOf(rows[i])) / scale,
-                    FillColor = ExplainedBarColor,
+                    FillColor = ExplainedBarColor(rows[i].SampleType, i),
                     LineWidth = 0,
                     Size = 0.85,
                 });
             }
             plt.Add.Bars(explainedBars);
 
+            // One key per TYPE now, not one for the series: the explained bars carry each
+            // replicate's own hue, so a single swatch would be a color half of them are not.
             var measured = rows.Count(r => r.HasExplained && drawExplained(r));
-            var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
-            explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
-            explainedKey.MarkerStyle.Size = 14;
-            explainedKey.MarkerStyle.FillColor = ExplainedBarColor;
-            explainedKey.MarkerStyle.LineWidth = 0;
-            explainedKey.LegendText = measured == rows.Count
-                ? "explained by any b/y or precursor ion"
-                : $"explained by any b/y or precursor ion ({measured:N0} of {rows.Count:N0})";
+            var counted = measured == rows.Count
+                ? ""
+                : $" ({measured:N0} of {rows.Count:N0})";
+            foreach (var type in ExplainedTypes(rows, drawExplained))
+            {
+                var explainedKey = plt.Add.Marker(double.NaN, double.NaN);
+                explainedKey.MarkerStyle.Shape = MarkerShape.FilledSquare;
+                explainedKey.MarkerStyle.Size = 14;
+                explainedKey.MarkerStyle.FillColor = ExplainedBarColor(type, 0);
+                explainedKey.MarkerStyle.LineWidth = 0;
+                explainedKey.LegendText = string.IsNullOrWhiteSpace(type)
+                    ? "explained by any b/y or precursor ion" + counted
+                    : $"explained ({type}){counted}";
+            }
         }
 
         var assignedBars = new List<Bar>(rows.Count);
@@ -245,9 +253,7 @@ public static partial class PlotRenderer
                 // colors mean something and wrong here: a cohort with no sample types is one
                 // category, and a rainbow across it reads as several. Cycle only on a type that is
                 // present and unknown to GroupColor.
-                FillColor = string.IsNullOrWhiteSpace(rows[i].SampleType)
-                    ? Color.FromHex(TypeColors["experimental"])
-                    : GroupColor(rows[i].SampleType, i),
+                FillColor = QuantifiedBarColor(rows[i].SampleType, i),
                 LineWidth = 0,
                 Size = 0.85,
             });
@@ -260,9 +266,7 @@ public static partial class PlotRenderer
             var key = plt.Add.Marker(double.NaN, double.NaN);
             key.MarkerStyle.Shape = MarkerShape.FilledSquare;
             key.MarkerStyle.Size = 14;
-            key.MarkerStyle.FillColor = string.IsNullOrWhiteSpace(type)
-                ? Color.FromHex(TypeColors["experimental"])
-                : GroupColor(type, 0);
+            key.MarkerStyle.FillColor = QuantifiedBarColor(type, 0);
             key.MarkerStyle.LineWidth = 0;
             // "quantified" only once there is an explained series to tell it apart from; on its
             // own the old wording is what every existing report says and means the same thing.
@@ -328,14 +332,14 @@ public static partial class PlotRenderer
         if (showExplained)
         {
             var explainedLine = plt.Add.Scatter(x, explained.Select(v => v / scale).ToArray());
-            explainedLine.Color = ExplainedBarColor;
+            explainedLine.Color = ExplainedColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
             explainedLine.LegendText = "explained by any b/y or precursor ion";
         }
 
         var line = plt.Add.Scatter(x, assigned.Select(v => v / scale).ToArray());
-        line.Color = Color.FromHex(TypeColors["experimental"]);
+        line.Color = showExplained ? QuantifiedColor : Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained ? "quantified" : "assigned to a peptide";
@@ -406,7 +410,7 @@ public static partial class PlotRenderer
             var explainedLine = plt.Add.Scatter(
                 explainedPoints.Select(p => p.RtMin).ToArray(),
                 explainedPoints.Select(p => p.Fraction).ToArray());
-            explainedLine.Color = ExplainedBarColor;
+            explainedLine.Color = ExplainedColor;
             explainedLine.LineWidth = 3;
             explainedLine.MarkerSize = 0;
             explainedLine.LegendText = "explained fraction";
@@ -414,7 +418,7 @@ public static partial class PlotRenderer
 
         var line = plt.Add.Scatter(
             points.Select(p => p.RtMin).ToArray(), points.Select(p => p.Fraction).ToArray());
-        line.Color = Color.FromHex(TypeColors["experimental"]);
+        line.Color = showExplained ? QuantifiedColor : Color.FromHex(TypeColors["experimental"]);
         line.LineWidth = 3;
         line.MarkerSize = 0;
         line.LegendText = showExplained
@@ -512,7 +516,89 @@ public static partial class PlotRenderer
     /// The explained series' color: between the neutral acquired background and the saturated
     /// assigned bar, because the quantity it shows nests between them.
     /// </summary>
-    private static readonly Color ExplainedBarColor = Color.FromHex("#8fa8c8");
+    /// <summary>
+    /// The EXPLAINED bar for a replicate: its sample type's own color.
+    /// </summary>
+    /// <remarks>
+    /// Every ion plot draws the same three quantities nested - acquired, then explained, then
+    /// quantified - and each replicate also belongs to a sample type. Two things to encode, so they
+    /// take the two axes a color has: the HUE says whose replicate it is, and the SHADE says which of
+    /// the two nested quantities. A control stays a control at a glance, and the pair still reads as
+    /// one inside the other.
+    /// </remarks>
+    internal static Color ExplainedBarColor(string? sampleType, int index) =>
+        string.IsNullOrWhiteSpace(sampleType)
+            ? Color.FromHex(TypeColors["experimental"])
+            : GroupColor(sampleType, index);
+
+    /// <summary>
+    /// The QUANTIFIED bar for a replicate: the darker shade of the same hue.
+    /// </summary>
+    /// <remarks>
+    /// <para>Darker rather than lighter, and that is the whole reason this started: the explained bar
+    /// sits on the acquired one and the gradient trace sits on the acquired band, so a pale tint
+    /// disappears into a light gray background. Darkening moves away from it instead.</para>
+    ///
+    /// <para>Hand-picked per type rather than computed, because scaling a color toward black turns
+    /// orange to brown and red to maroon - the hue stops saying what it said. Anything not in the
+    /// table falls back to the computed shade, which is right for a cohort with its own type names
+    /// where no pair could have been chosen in advance.</para>
+    /// </remarks>
+    internal static Color QuantifiedBarColor(string? sampleType, int index)
+    {
+        var key = (sampleType ?? "").Trim().ToLowerInvariant().Replace(" ", "");
+        return key switch
+        {
+            "" or "experimental" or "unknown" => QuantifiedColor,
+            "qc" or "qualitycontrol" => Color.FromHex("#B35309"),
+            "reference" or "standard" or "std" => Color.FromHex("#7F1416"),
+            _ => Darker(GroupColor(sampleType, index)),
+        };
+    }
+
+    /// <summary>A color's darker shade, for a type with no hand-picked pair.</summary>
+    private static Color Darker(Color c) =>
+        new((byte)(c.R * 0.52), (byte)(c.G * 0.52), (byte)(c.B * 0.52), c.A);
+
+    /// <summary>
+    /// The sample types that actually have an explained bar drawn, in the rows' own order - so the
+    /// legend lists a swatch for each and only for those.
+    /// </summary>
+    private static IEnumerable<string> ExplainedTypes(
+        IReadOnlyList<IonAccountingRow> rows, Func<IonAccountingRow, bool> drawExplained) =>
+        rows.Where(r => r.HasExplained && drawExplained(r))
+            .Select(r => r.SampleType ?? "")
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The EXPLAINED series, on every ion plot - the fraction of the acquisition this analysis can
+    /// account for at all, which is the question these plots exist to answer.
+    /// </summary>
+    /// <remarks>
+    /// <para>It used to be drawn in the muted blue the bars use, and against the acquired band it was
+    /// barely there. The band is deliberately a blue-GRAY (<c>#969da8</c>, so a blue trace over it
+    /// does not look muddy), which means a pale blue line shares both its hue and its lightness -
+    /// the two ways a line can be told from a background. Making the band lighter is not the fix
+    /// either: it was darkened on purpose, having once rendered at about 88% white and been
+    /// invisible itself.</para>
+    ///
+    /// <para>So the two traces are separated by LIGHTNESS within one hue, rather than by a second
+    /// hue. Orange and red would read well on the band but both already mean something in this
+    /// report - <c>qc</c> and <c>reference</c> in <see cref="PlotRenderer.TypeColors"/> - and a
+    /// color that means a sample type on one plot should not mean a quantity on the next. Keeping
+    /// both traces blue also puts the emphasis where it belongs: explained is the headline number
+    /// and now carries the strongest color on the plot.</para>
+    /// </remarks>
+    private static readonly Color ExplainedColor = Color.FromHex(ExplainedColorHex);
+
+    /// <inheritdoc cref="ExplainedColor"/>
+    internal const string ExplainedColorHex = "#1F77B4";
+
+    /// <summary>
+    /// The QUANTIFIED series, nested inside the explained one - a darker blue, so it reads against
+    /// both the acquired band and the series it sits under. <see cref="ExplainedColor"/> says why.
+    /// </summary>
+    private static readonly Color QuantifiedColor = Color.FromHex("#08306b");
 
     /// <summary>
     /// Group cycles into retention-time bins. Bin membership is by the cycle's START time, so a

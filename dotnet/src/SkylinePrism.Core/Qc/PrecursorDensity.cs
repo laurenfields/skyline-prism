@@ -23,12 +23,25 @@ public sealed record PrecursorDensityMap(
     int[,] Counts,
     string RowSource,
     int PrecursorsOutsideRows = 0,
-    bool RowsAreWindows = true)
+    bool RowsAreWindows = true,
+    double RtBinRequested = 0)
 {
     // RowsAreWindows: whether a cell IS a spectrum. True when Rows are the acquisition's real isolation
     // windows; false on the approximate uniform-bin fallback, where a row is a bin no single spectrum
     // covered. Carried explicitly rather than inferred from RowSource - a display string is not a
     // contract, and what a cell counts is the one thing a reader must not be told wrongly.
+
+    /// <summary>
+    /// Whether the RT bin had to be widened past what the caller asked for.
+    /// </summary>
+    /// <remarks>
+    /// The same class of fact as <see cref="RowsAreWindows"/>, on the other axis. A cell answers "how
+    /// many peptides did one spectrum have to deal with", and that is a question about ONE
+    /// acquisition cycle: bin much wider than a cycle and the cell unions precursors that were never
+    /// in the same spectrum, so the count comes out artifactually large. A widened bin is therefore
+    /// not a resolution detail, it is a different quantity - and the reader has to be told.
+    /// </remarks>
+    public bool RtBinWidened => RtBinRequested > 0 && RtBinMin > RtBinRequested * 1.001;
 
     public int MzBins => Counts.GetLength(0);
     public int RtBins => Counts.GetLength(1);
@@ -203,11 +216,41 @@ public static class PrecursorDensity
     /// <summary>Default bin for the APPROXIMATE uniform fallback only (Cadenza's value).</summary>
     public const double DefaultMzBinTh = 2.0;
 
-    /// <summary>Cadenza's default RT bin, in minutes.</summary>
-    public const double DefaultRtBinMin = 0.1;
+    /// <summary>
+    /// The default RT bin, in minutes.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is a correctness bound, not a resolution preference.</b> A cell answers "how many
+    /// peptides did one spectrum have to deal with", which is a question about ONE acquisition cycle.
+    /// Bin much wider than a cycle and the cell unions precursors that were never co-isolated in the
+    /// same spectrum - they merely eluted within the same stretch of time - and the count comes out
+    /// artifactually large. The same applies to the load-over-time view, which reads the same
+    /// grid.</para>
+    ///
+    /// <para>0.01 min is 0.6 s, about one cycle on the cohorts this was built for, and the same bin
+    /// the ion accounting views default to. It was 0.1 - ten times a cycle - inherited from Cadenza.
+    /// Do not widen it for a smoother-looking plot: the smoothing is the artifact.</para>
+    /// </remarks>
+    public const double DefaultRtBinMin = 0.01;
 
-    /// <summary>Widen the requested bins if needed to keep the grid (and the render) bounded.</summary>
+    /// <summary>Widen the requested m/z bin if needed to keep the grid (and the render) bounded.</summary>
     private const int MaxBinsPerAxis = 4000;
+
+    /// <summary>
+    /// The RT axis gets its own, larger bound, because it is the axis a fine bin is actually wanted
+    /// on: 0.01 min over a two-hour gradient is 12,000 bins, and the old shared cap of 4,000 would
+    /// have widened it back to 0.03 - silently returning a coarser map than the one asked for.
+    /// </summary>
+    private const int MaxRtBins = 20000;
+
+    /// <summary>
+    /// The real bound, which neither axis cap expresses on its own: the grid is
+    /// <c>nMz x nRt</c> ints, so a fine bin on both axes at once is what runs the machine out of
+    /// memory. At 4 bytes a cell this is about 48 MB, and the RT bin is the one widened to stay
+    /// inside it - the m/z rows are the acquisition's own isolation windows and are not PRISM's to
+    /// coarsen.
+    /// </summary>
+    private const long MaxCells = 12_000_000;
 
     /// <summary>
     /// The merged-parquet columns this view needs, resolved to their actual spelling (the CSV export
@@ -317,7 +360,7 @@ public static class PrecursorDensity
         if (precursors.Count == 0)
             return new PrecursorDensityMap(scheme.Windows, 0, rtBinMin, new int[0, 0], scheme.Name);
 
-        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme);
+        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, scheme, scheme.Windows.Count);
         var counts = new int[scheme.Windows.Count, nRt];
         var outside = 0;
         foreach (var p in precursors)
@@ -339,7 +382,8 @@ public static class PrecursorDensity
             if (!matched)
                 outside++;
         }
-        return new PrecursorDensityMap(scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside);
+        return new PrecursorDensityMap(
+            scheme.Windows, rtLo, rtBin, counts, scheme.Name, outside, RtBinRequested: rtBinMin);
     }
 
     /// <summary>
@@ -378,7 +422,7 @@ public static class PrecursorDensity
         for (var i = 0; i < nMz; i++)
             rows[i] = new IsolationWindow(mzLo + i * mzBinTh, mzLo + (i + 1) * mzBinTh);
 
-        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin);
+        var (rtLo, nRt, rtBin) = RtGrid(precursors, rtBinMin, nMz: nMz);
         var counts = new int[nMz, nRt];
         foreach (var p in precursors)
         {
@@ -389,7 +433,8 @@ public static class PrecursorDensity
                 counts[row, j]++;
         }
         return new PrecursorDensityMap(
-            rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false);
+            rows, rtLo, rtBin, counts, UniformSource(mzBinTh), RowsAreWindows: false,
+            RtBinRequested: rtBinMin);
     }
 
     /// <summary>Label that marks a map as approximate, so it can never be mistaken for real windows.</summary>
@@ -397,7 +442,8 @@ public static class PrecursorDensity
         $"uniform {mzBinTh.ToString("0.###", CultureInfo.InvariantCulture)} Th bins (approximate)";
 
     private static (double RtLow, int Bins, double BinSize) RtGrid(
-        IReadOnlyList<DetectedPrecursor> precursors, double rtBinMin, IsolationScheme? scheme = null)
+        IReadOnlyList<DetectedPrecursor> precursors, double rtBinMin, IsolationScheme? scheme = null,
+        int nMz = 1)
     {
         double rtLo = double.PositiveInfinity, rtHi = double.NegativeInfinity;
         foreach (var p in precursors)
@@ -418,7 +464,11 @@ public static class PrecursorDensity
                 if (w.RtStop > rtHi) rtHi = w.RtStop;
             }
         }
-        var bin = Math.Max(rtBinMin, (rtHi - rtLo) / MaxBinsPerAxis);
+        // Both bounds, and the cell budget is the one that usually bites: a map with many
+        // isolation windows can afford fewer RT bins than one with few, and the axis cap alone cannot
+        // know that. Reported back in the map, so the plot never claims a bin it did not use.
+        var maxBins = (int)Math.Max(1, Math.Min(MaxRtBins, MaxCells / Math.Max(1, nMz)));
+        var bin = Math.Max(rtBinMin, (rtHi - rtLo) / maxBins);
         return (rtLo, Math.Max(1, (int)Math.Ceiling((rtHi - rtLo) / bin)), bin);
     }
 

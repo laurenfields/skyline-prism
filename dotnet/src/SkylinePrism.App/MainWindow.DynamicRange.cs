@@ -260,6 +260,31 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// The y-axis label: what is plotted, in the two words it takes.
+    /// </summary>
+    /// <remarks>
+    /// <para>It used to read <c>Log10 abundance (sum)</c>, where the parenthesis named the ROLLUP -
+    /// how peptides were combined into a protein - and a reader reasonably took it for the quantity
+    /// on the axis. The quantity is the MEAN across the selected replicates of whatever that rollup
+    /// produced, and the label said nothing about the mean at all.</para>
+    ///
+    /// <para>That is the difference that sends someone to Skyline's relative-abundance view
+    /// wondering why the numbers sit a replicate count apart: Skyline sums across replicates, this
+    /// averages. Both are defensible - a sum scales with how many replicates happened to be
+    /// acquired, a mean does not - and the axis now says which one it is rather than leaving it to
+    /// the status bar, which does not travel with a copied image.</para>
+    ///
+    /// <para>Singular when one replicate is selected, where a mean of one thing is just the thing.</para>
+    /// </remarks>
+    internal static string RangeYLabel(string rollup, int replicates)
+    {
+        var mean = replicates > 1 ? "mean " : "";
+        return rollup.Length > 0
+            ? $"Log10 {mean}abundance ({rollup} rollup)"
+            : $"Log10 {mean}abundance";
+    }
+
+    /// <summary>
     /// What that method's numbers ARE, in one clause - the thing worth knowing before comparing this
     /// plot against Skyline's relative-abundance view, which sums peak areas.
     /// <para>
@@ -727,7 +752,7 @@ public partial class MainWindow
         var rollup = _rangeRollupShown;
         PlotRenderer.DrawDynamicRange(
             plt, background, highlights,
-            yLabel: rollup.Length > 0 ? $"Log10 abundance ({rollup})" : "Log10 abundance",
+            yLabel: RangeYLabel(rollup, SelectedReplicateCount()),
             xLabel: RangeLevel == AbundanceLevel.Protein ? "Protein rank" : "Peptide rank");
 
         AddRangeLabels(plt, matcher, byList);
@@ -745,8 +770,33 @@ public partial class MainWindow
                 ? $"; {rollup} rollup"
                   + (RollupMeaning(rollup) is { Length: > 0 } meaning ? $" - {meaning}" : "")
                 : "")
+            + TransitionsUsed(_rangeOutputDir)
             + (_rangeRollupNote.Length > 0 ? $" [{_rangeRollupNote}]" : "")
             + (matched > 0 ? $"; {matched:N0} in {highlights.Count} list(s)" : "");
+    }
+
+    /// <summary>
+    /// Which transitions the abundances were built from, for the status line.
+    /// </summary>
+    /// <remarks>
+    /// <para>The one thing that makes this plot comparable to Skyline's relative-abundance view, and
+    /// the one thing neither plot showed. Skyline's peptide quantification settings choose the MS
+    /// level too - "All" there means <c>MsLevel == null</c>, which skips nothing and sums MS1
+    /// precursor areas alongside the MS2 fragments. PRISM has its own switch,
+    /// <c>transition_rollup.use_ms1</c>, off by default.</para>
+    ///
+    /// <para>Set differently, the two plots sit about two orders of magnitude apart on DIA data,
+    /// where the precursor areas dominate - and nothing on either plot says why. It cost a real
+    /// afternoon, so the answer is now on the plot that prompts the question.</para>
+    /// </remarks>
+    private string TransitionsUsed(string? outputDir)
+    {
+        var config = outputDir is null ? null : RangeRunConfig(outputDir);
+        if (config is null)
+            return "";
+        return config.TransitionRollup.UseMs1
+            ? "; MS1 precursor + MS2 fragment transitions"
+            : "; MS2 fragment transitions only (set transition_rollup.use_ms1 to include precursors)";
     }
 
     private int SelectedReplicateCount()
