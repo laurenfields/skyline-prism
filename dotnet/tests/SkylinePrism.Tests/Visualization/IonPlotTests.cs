@@ -272,6 +272,91 @@ public class IonPlotTests
         Assert.Equal(0, LegendEntries(plt));
     }
 
+    /// <summary>
+    /// The bars can be colored by any per-replicate label, not only the sample type - the tool's
+    /// Group-by control hands one in. Every replicate of a group shares its hue, the legend carries
+    /// one swatch per group in that same hue, and the sample type appears nowhere.
+    /// </summary>
+    [Fact]
+    public void GroupingColorsEveryBarOfAGroupAlikeAndNamesEachGroupOnce()
+    {
+        var result = Result(Row("s1", 40), Row("s2", 30), Row("s3", 35), Row("s4", 20));
+        var plate = new Dictionary<string, string>
+        {
+            ["s1"] = "Plate 1", ["s2"] = "Plate 1", ["s3"] = "Plate 2", ["s4"] = "Plate 2",
+        };
+        var plt = new Plot();
+
+        PlotRenderer.DrawIonAccounting(
+            plt, result, PlotRenderer.IonLevel.Ms2, groupOf: r => plate[r.Sample]);
+
+        // The quantified series is the last bar series added; its bars sit at 0..3 in row order.
+        var quantified = plt.GetPlottables<BarPlot>().Last().Bars.OrderBy(b => b.Position).ToList();
+        Assert.Equal(4, quantified.Count);
+        Assert.Equal(quantified[0].FillColor.ToHex(), quantified[1].FillColor.ToHex());
+        Assert.Equal(quantified[2].FillColor.ToHex(), quantified[3].FillColor.ToHex());
+        Assert.NotEqual(quantified[0].FillColor.ToHex(), quantified[2].FillColor.ToHex());
+
+        var keys = plt.GetPlottables<Marker>().Where(m => !string.IsNullOrEmpty(m.LegendText)).ToList();
+        var plate1 = Assert.Single(keys, k => k.LegendText.Contains("(Plate 1)"));
+        var plate2 = Assert.Single(keys, k => k.LegendText.Contains("(Plate 2)"));
+        Assert.DoesNotContain(keys, k => k.LegendText.Contains("experimental"));
+
+        // The swatch is the bars' own hue, so the legend can be read against the plot.
+        Assert.Equal(quantified[0].FillColor.ToHex(), plate1.MarkerStyle.FillColor.ToHex());
+        Assert.Equal(quantified[2].FillColor.ToHex(), plate2.MarkerStyle.FillColor.ToHex());
+    }
+
+    /// <summary>Without a group the bars are colored by sample type, as they always were.</summary>
+    [Fact]
+    public void WithoutAGroupTheLegendNamesTheSampleType()
+    {
+        var plt = new Plot();
+
+        PlotRenderer.DrawIonAccounting(
+            plt, Result(Row("s1", 40), Row("s2", 30)), PlotRenderer.IonLevel.Ms2);
+
+        var keys = plt.GetPlottables<Marker>().Where(m => !string.IsNullOrEmpty(m.LegendText)).ToList();
+        Assert.Single(keys, k => k.LegendText.Contains("(experimental)"));
+    }
+
+    /// <summary>
+    /// A cycled group color never lands on a fixed sample-type color. The fixed colors are palette
+    /// entries 0, 1, 3 and 7, and a group ranked onto one of those - "Vehicle" beside "QC" - came out
+    /// in the QC orange, so two explained series and two legend swatches shared one hue.
+    /// </summary>
+    [Fact]
+    public void ACycledGroupNeverTakesASampleTypesColor()
+    {
+        var result = Result(Explained("s1"), Explained("s2"));
+        var plt = new Plot();
+
+        PlotRenderer.DrawIonAccounting(
+            plt, result, PlotRenderer.IonLevel.Ms2, groupOf: r => r.Sample == "s1" ? "QC" : "Vehicle");
+
+        // Series in order: acquired, explained, quantified. The explained bars carry each group's own hue.
+        var explained = plt.GetPlottables<BarPlot>().ElementAt(1).Bars.OrderBy(b => b.Position).ToList();
+        Assert.Equal(2, explained.Count);
+        Assert.Equal(PlotRenderer.TypeColors["qc"], explained[0].FillColor.ToHex(), ignoreCase: true);
+        Assert.NotEqual(explained[0].FillColor.ToHex(), explained[1].FillColor.ToHex(), StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(explained[1].FillColor.ToHex(), PlotRenderer.TypeColors.Values, StringComparer.OrdinalIgnoreCase);
+
+        // And the rule itself, well past one wrap of the palette.
+        for (var k = 0; k < 40; k++)
+        {
+            Assert.DoesNotContain(
+                PlotRenderer.SampleColor(PlotRenderer.CycledPaletteIndex(k)).ToHex(),
+                PlotRenderer.TypeColors.Values, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>A row with an explained total, so the explained series is drawn.</summary>
+    private static IonAccountingRow Explained(string sample) =>
+        new(sample, "experimental", sample + ".raw", Ms2ReadStatus.Ok, "test", 1, 167,
+            Ms1Acquired: 1000, Ms2Acquired: 1000, Ms1Assigned: 100, Ms2Assigned: 100,
+            Ms2Explained: 300, HasExplained: true,
+            0, 60, 1000, 0, 0, 1, Array.Empty<double>(), Array.Empty<double>());
+
     /// <summary>Legend entries come from the plottables, so this counts what a reader would see.</summary>
     private static int LegendEntries(Plot plt) =>
         plt.GetPlottables()

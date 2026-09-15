@@ -128,8 +128,9 @@ rather than implying a single assignment.
 
 ### Checking a marker normalization
 
-When a run used `marker_normalization`, two extra entries appear in the **Plot** picker on the QC Plots
-tab. They are the two halves of the panel's PC1, read from `marker_normalization.csv` — the numbers the
+Two extra entries appear in the **Plot** picker on the QC Plots tab while **Normalize to a protein
+list** is ticked on the Settings tab - hidden otherwise, since only a run with it on writes the file
+they read. They are the two halves of the panel's PC1, read from `marker_normalization.csv` — the numbers the
 run actually subtracted, not a recomputation — so **Level** and **View** are grayed out for them: there
 is one score per replicate for the whole run, with no before/after and no peptide/protein version.
 
@@ -373,6 +374,12 @@ run in. A cache measured before the summed TIC was recorded falls back to Ions r
 you with an error. The gradient bin defaults to **0.01 min**: 0.6 s, shorter than one acquisition
 cycle on these instruments, so it bins essentially nothing and the trace is drawn at the rate the
 run was acquired at. The QC report uses the same bin.
+
+*Per replicate* also carries the QC Plots' **Group by** controls. Pick any column of the Replicates
+report (Sample Type by default) and every bar of a group takes the group's color, with the legend
+naming the groups; tick one or more values to show only those replicates, or tick none to show them
+all. The plot title says which replicates are shown, and the hover readout names a replicate's group
+beside it.
 
 The pane is a pure read of `ion_accounting.parquet` and `ion_cycles.parquet`, so switching replicate,
 level, view, quantity or bin width is instant. It opens on the **median** replicate by assigned

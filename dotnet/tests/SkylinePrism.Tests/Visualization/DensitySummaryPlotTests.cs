@@ -148,6 +148,28 @@ public class DensitySummaryPlotTests
         Assert.Equal(0, limits.Bottom, 6);
     }
 
+    /// <summary>
+    /// Both axes are counts - precursors across, spectra up - so both may label only whole numbers.
+    /// ScottPlot's automatic ticks label the half-steps on a short axis, and "0.5 precursors" or
+    /// "1.5 spectra" is not a load or a count anything carried.
+    /// </summary>
+    [Fact]
+    public void Histogram_LabelsOnlyWholeNumberLoadsAndCounts()
+    {
+        var map = DiaMap(); // MaxCount is 3 and the tallest bar is small: both axes are short
+        var plt = new Plot();
+
+        PlotRenderer.DrawPrecursorLoadHistogram(plt, map);
+        plt.GetImageBytes(1400, 900, ImageFormat.Png); // ticks are generated at render time
+
+        foreach (var axis in new[] { plt.Axes.Bottom.TickGenerator, plt.Axes.Left.TickGenerator })
+        {
+            var majors = axis.Ticks.Where(t => t.IsMajor).Select(t => t.Position).ToList();
+            Assert.NotEmpty(majors);
+            Assert.All(majors, p => Assert.Equal(Math.Round(p), p, 9));
+        }
+    }
+
     [Fact]
     public void Histogram_OnAnEmptyMap_SaysSoInsteadOfThrowing()
     {
