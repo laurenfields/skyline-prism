@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using MathNet.Numerics;
+using MathNet.Numerics.LinearAlgebra.Double;
+using MathNet.Numerics.LinearAlgebra.Factorization;
 using SkylinePrism.Core.Numerics;
 
 namespace SkylinePrism.Core.DifferentialAnalysis;
@@ -166,6 +168,98 @@ public static class EmpiricalBayes
         }
 
         return new SqueezeVarResult(varPost, new[] { s20 }, df2, warnings);
+    }
+
+    /// <summary>
+    /// Squeeze residual variances toward an intensity-dependent prior (limma-trend, Sartor 2006): the
+    /// prior scale follows a natural-spline trend in <paramref name="covariate"/> (mean log-intensity)
+    /// rather than a single global value. Ported from inmoose fitFDist's covariate path. The prior df is
+    /// still a single value; the prior scale is per feature. Assumes finite variances and covariate
+    /// (the caller falls back to the global prior otherwise), and falls back to global when the spline
+    /// degrees of freedom collapse below 2.
+    /// </summary>
+    public static SqueezeVarResult SqueezeVarTrend(ReadOnlySpan<double> variances, double dfResidual,
+        double[] covariate)
+    {
+        var n = variances.Length;
+        if (n == 0)
+            throw new ArgumentException("variances is empty", nameof(variances));
+        if (!(dfResidual > 1e-15) || double.IsInfinity(dfResidual))
+            throw new ArgumentException("dfResidual must be a finite value > 0", nameof(dfResidual));
+        if (covariate.Length != n)
+            throw new ArgumentException("covariate length must match variances", nameof(covariate));
+
+        // The trend path needs every feature usable; otherwise defer to the global prior.
+        for (var i = 0; i < n; i++)
+            if (double.IsNaN(variances[i]) || double.IsInfinity(variances[i]) || variances[i] <= -1e-15
+                || !double.IsFinite(covariate[i]))
+                return SqueezeVarGlobal(variances, dfResidual);
+
+        var distinctCovariate = new HashSet<double>();
+        foreach (var c in covariate)
+            distinctCovariate.Add(c);
+        var splineDf = 1 + (n >= 3 ? 1 : 0) + (n >= 6 ? 1 : 0) + (n >= 30 ? 1 : 0);
+        splineDf = Math.Min(splineDf, distinctCovariate.Count);
+        if (splineDf < 2)
+            return SqueezeVarGlobal(variances, dfResidual);
+
+        // Floor the variances away from zero (as fitFDist does) and move to log(F).
+        var x = new double[n];
+        for (var i = 0; i < n; i++)
+            x[i] = variances[i] < 0.0 ? 0.0 : variances[i];
+        var m = Stats.NanMedian(x);
+        if (m == 0.0)
+            m = 1.0;
+        var floor = 1e-5 * m;
+        for (var i = 0; i < n; i++)
+            if (x[i] < floor)
+                x[i] = floor;
+
+        var halfDf = dfResidual / 2.0;
+        var offset = SpecialFunctions.DiGamma(halfDf) - Math.Log(halfDf);
+        var e = new double[n];
+        for (var i = 0; i < n; i++)
+            e[i] = Math.Log(x[i]) - offset;
+
+        // Fit e on the natural-spline trend; the fitted values are the per-feature trend (emean) and the
+        // residual mean square feeds the prior df.
+        var design = NaturalSplineBasis.Build(covariate, splineDf, includeIntercept: true);
+        var d = DenseMatrix.OfArray(design);
+        var beta = d.QR(QRMethod.Thin).Solve(DenseVector.OfArray(e));
+        var fitted = d * beta;
+        double rss = 0;
+        for (var i = 0; i < n; i++)
+        {
+            var r = e[i] - fitted[i];
+            rss += r * r;
+        }
+
+        var evar = rss / (n - splineDf) - Trigamma(halfDf);
+
+        double df2;
+        var varPrior = new double[n];
+        if (evar > 0.0)
+        {
+            df2 = 2.0 * TrigammaInverse(evar);
+            var shift = SpecialFunctions.DiGamma(df2 / 2.0) - Math.Log(df2 / 2.0);
+            for (var i = 0; i < n; i++)
+                varPrior[i] = Math.Exp(fitted[i] + shift);
+        }
+        else
+        {
+            df2 = double.PositiveInfinity;
+            for (var i = 0; i < n; i++)
+                varPrior[i] = Math.Exp(fitted[i]);
+        }
+
+        var dfFinite = !double.IsInfinity(df2);
+        var varPost = new double[n];
+        for (var i = 0; i < n; i++)
+            varPost[i] = dfFinite
+                ? (dfResidual * variances[i] + df2 * varPrior[i]) / (dfResidual + df2)
+                : varPrior[i];
+
+        return new SqueezeVarResult(varPost, varPrior, df2, Array.Empty<string>());
     }
 
     /// <summary>

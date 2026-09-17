@@ -163,7 +163,8 @@ public static class Differential
         IReadOnlyList<int> groupAColumns,
         IReadOnlyList<int> groupBColumns,
         int minPerGroup = 2,
-        IReadOnlyList<Covariate>? covariates = null)
+        IReadOnlyList<Covariate>? covariates = null,
+        bool trend = false)
     {
         var nFeatures = exprLog2FeaturesBySamples.GetLength(0);
         var nColumns = exprLog2FeaturesBySamples.GetLength(1);
@@ -236,7 +237,22 @@ public static class Differential
         for (var i = 0; i < nTested; i++)
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
 
-        var squeezed = EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual);
+        SqueezeVarResult squeezed;
+        string variancePrior;
+        if (trend && fit.Amean.All(double.IsFinite))
+        {
+            squeezed = EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean);
+            variancePrior = "intensity-trend";
+        }
+        else
+        {
+            if (trend)
+                messages.Add("Mean expression has non-finite values - intensity-trend prior "
+                    + "unavailable, fell back to the global prior.");
+            squeezed = EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual);
+            variancePrior = "global";
+        }
+
         var dfTotal = fit.DfResidual + squeezed.DfPrior;
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
 
@@ -268,7 +284,7 @@ public static class Differential
         var ordered = rows.OrderBy(r => r.PValue).ToArray();
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
-            squeezed.DfPrior, "global", covariatesUsed, messages, squeezed.Warnings);
+            squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings);
     }
 
     /// <summary>

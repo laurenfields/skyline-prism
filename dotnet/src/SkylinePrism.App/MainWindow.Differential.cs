@@ -349,11 +349,12 @@ public partial class MainWindow
 
         var dataset = _diffDataset!;
         var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        var trend = DiffTrendCheck.IsChecked == true;
         DifferentialResult res;
         try
         {
             res = await Task.Run(() =>
-                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates));
+                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates, trend));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -519,11 +520,12 @@ public partial class MainWindow
 
         var dataset = _diffDataset!;
         var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        var trend = DiffTrendCheck.IsChecked == true;
         DifferentialResult res;
         try
         {
             res = await Task.Run(() =>
-                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates));
+                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates, trend));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {

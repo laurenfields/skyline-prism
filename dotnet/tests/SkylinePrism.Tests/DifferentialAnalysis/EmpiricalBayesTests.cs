@@ -104,6 +104,31 @@ public class EmpiricalBayesTests
     }
 
     [Fact]
+    public void SqueezeVarTrend_FiniteDfPrior_MatchesInmoose()
+    {
+        // squeezeVar(var, df=8, covariate=cov) with a covariate-driven trend plus residual scatter
+        // (splineDf=4). Validates the natural-spline trend fit + the finite-prior path.
+        var mult = new[] { 0.3, 0.6, 1.0, 1.8, 3.0 };
+        var var = new double[40];
+        var cov = new double[40];
+        for (var i = 0; i < 40; i++)
+        {
+            var[i] = 0.2 * (1.0 + 0.1 * (i % 11)) * mult[i % 5];
+            cov[i] = 5.0 + (i % 11) * 0.3;
+        }
+
+        var res = EmpiricalBayes.SqueezeVarTrend(var, 8.0, cov);
+
+        Assert.Equal(5.78755728336074, res.DfPrior, 8);
+        Assert.Equal(0.19404267835533553, res.VarPrior[0], 9);
+        Assert.Equal(0.2333032011592363, res.VarPrior[3], 9);
+        Assert.Equal(0.24843734065948617, res.VarPrior[10], 9);
+        Assert.Equal(0.1162666514055277, res.VarPost[0], 9);
+        Assert.Equal(0.3694821016082684, res.VarPost[3], 9);
+        Assert.Equal(0.17391371735487748, res.VarPost[10], 9);
+    }
+
+    [Fact]
     public void TrigammaInverse_MatchesInmoose()
     {
         // inmoose.limma.fitFDist.trigammaInverse (Newton path)

@@ -111,6 +111,23 @@ public class DifferentialTests
     }
 
     [Fact]
+    public void Run_TrendPrior_MatchesExplorer()
+    {
+        var res = Differential.Run(BuildMatrix(hetero: true), Ids, GroupA, GroupB, trend: true);
+
+        Assert.Equal("intensity-trend", res.VariancePrior);
+        Assert.True(double.IsPositiveInfinity(res.DfPrior));
+
+        var byId = res.Rows.ToDictionary(r => r.FeatureId);
+        Assert.Equal(3.44444444444444, byId["f0"].LogFc, 12);
+        Assert.Equal(2.6829479370580227, byId["f0"].T, 9);
+        AssertRel(0.007297635004183641, byId["f0"].PValue, 1e-9);
+        AssertRel(0.034911717404574286, byId["f0"].AdjPValue, 1e-9);
+        Assert.Equal(-2.622531131612897, byId["f2"].T, 9);
+        AssertRel(0.008727929351143571, byId["f2"].PValue, 1e-9);
+    }
+
+    [Fact]
     public void Run_WithCovariates_MatchesExplorer()
     {
         // age (numeric, mean-centered) + sex (categorical -> sex_M dummy after dropping F).

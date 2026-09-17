@@ -563,6 +563,9 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
+                                <CheckBox x:Name="DiffTrendCheck" Content="Trend prior" VerticalAlignment="Center"
+                                          Margin="16,0,0,0"
+                                          ToolTip="Use the intensity-trend variance prior (limma-trend) instead of the global prior for the Volcano and Enrichment tests." />
                                 <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
                                         Click="OnRunDifferential"
                                         ToolTip="Run the limma moderated-t contrast on the two groups." />
