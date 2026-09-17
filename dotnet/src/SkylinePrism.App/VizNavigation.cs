@@ -18,6 +18,7 @@ internal enum VizPane
     Density = 1,
     DynamicRange = 2,
     IonAccounting = 3,
+    Differential = 4,
 }
 
 /// <summary>
@@ -52,6 +53,7 @@ internal static class VizNavigation
             (int)VizPane.Density => VizPane.Density,
             (int)VizPane.DynamicRange => VizPane.DynamicRange,
             (int)VizPane.IonAccounting => VizPane.IonAccounting,
+            (int)VizPane.Differential => VizPane.Differential,
             _ => null,   // nothing selected yet (-1), or a row added to the XAML and not to this enum
         };
     }
