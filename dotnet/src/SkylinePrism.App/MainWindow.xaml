@@ -532,10 +532,11 @@
                             <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
                                 <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
                                 <ComboBox x:Name="DiffViewCombo" Width="110" SelectionChanged="OnDiffViewChanged"
-                                          ToolTip="Volcano (moderated-t), PCA of the samples, or peptide detection frequency.">
+                                          ToolTip="Volcano (moderated-t), PCA of the samples, peptide detection frequency, or g:Profiler enrichment of the significant hits.">
                                     <ComboBoxItem>Volcano</ComboBoxItem>
                                     <ComboBoxItem>PCA</ComboBoxItem>
                                     <ComboBoxItem>Detection</ComboBoxItem>
+                                    <ComboBoxItem>Enrichment</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffLevelCombo" Width="90" SelectionChanged="OnDiffLevelChanged"
@@ -551,6 +552,17 @@
                                 <TextBlock Text="vs B =" VerticalAlignment="Center" Margin="12,0,4,0" />
                                 <ComboBox x:Name="DiffBCombo" Width="150"
                                           ToolTip="Group B value (treatment; a positive log2 fold change means higher in B)." />
+                                <TextBlock Text="Adjust for:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffCovariatesCombo" Width="170" IsEditable="True" IsReadOnly="True"
+                                          Text="(none)"
+                                          ToolTip="Covariates to adjust the contrast for (Sex, PMI, batch...). Tick any metadata column; numeric columns are centered, categorical ones dummy-coded. A ticked covariate switches Detection to the Firth GLM.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
                                 <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
                                         Click="OnRunDifferential"
                                         ToolTip="Run the limma moderated-t contrast on the two groups." />

@@ -197,6 +197,24 @@ public class DifferentialTests
     }
 
     [Fact]
+    public void FromMetadata_InfersNumericVsCategorical()
+    {
+        // All non-null values parse as numbers -> numeric (integer-coded batch is centered, not dummied).
+        var numeric = Assert.IsType<NumericCovariate>(
+            Covariate.FromMetadata("batch", new string?[] { "1", "2", "3", null }));
+        Assert.Equal(1.0, numeric.Values[0], 12);
+        Assert.True(double.IsNaN(numeric.Values[3])); // null -> NaN (missing)
+
+        // Any non-numeric value -> categorical.
+        Assert.IsType<CategoricalCovariate>(
+            Covariate.FromMetadata("sex", new string?[] { "M", "F", "M" }));
+
+        // All-null -> categorical (will be skipped as missing downstream).
+        Assert.IsType<CategoricalCovariate>(
+            Covariate.FromMetadata("empty", new string?[] { null, null }));
+    }
+
+    [Fact]
     public void Run_RejectsOverlappingGroups()
     {
         Assert.Throws<ArgumentException>(() =>

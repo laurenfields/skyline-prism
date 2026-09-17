@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.DifferentialAnalysis.Detection;
+using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
 using SkylinePrism.Core.Visualization;
 
 namespace SkylinePrism.App;
@@ -33,6 +34,8 @@ public partial class MainWindow
     private Dictionary<string, string> _diffLabelById = new(StringComparer.Ordinal);
     private DetectionMatrixData? _detectionData;
     private string? _detectionDir;
+    private List<QcGroupValue> _diffCovariateValues = new();
+    private HttpJsonPoster? _diffPoster;
     private bool _diffSuppress;
     private int _diffRequest;
     private bool _diffLoaded;
@@ -44,6 +47,7 @@ public partial class MainWindow
         Volcano,
         Pca,
         Detection,
+        Enrichment,
     }
 
     private sealed record VolcanoRow(string Feature, double Log2FC, double P, double AdjP);
@@ -51,6 +55,12 @@ public partial class MainWindow
     private sealed record PcaVarRow(string Component, double VariancePct);
 
     private sealed record DetRow(string Peptide, double RateA, double RateB, double P, double Q);
+
+    private sealed record DetGlmRow(string Peptide, double RateA, double RateB, double LogOR, double P, double Q);
+
+    private sealed record EnrichRow(string Source, string Term, double PValue, double Fold);
+
+    private HttpJsonPoster DiffPoster => _diffPoster ??= new HttpJsonPoster();
 
     /// <summary>Forget the loaded matrix so the pane reloads on its next show (new dir / new run).</summary>
     private void InvalidateDifferential()
@@ -72,6 +82,7 @@ public partial class MainWindow
         {
             "PCA" => DiffView.Pca,
             "Detection" => DiffView.Detection,
+            "Enrichment" => DiffView.Enrichment,
             _ => DiffView.Volcano,
         };
 
@@ -192,6 +203,47 @@ public partial class MainWindow
             DiffACombo.SelectedIndex = -1;
             DiffBCombo.SelectedIndex = -1;
         }
+
+        PopulateDiffCovariates(col);
+    }
+
+    private void PopulateDiffCovariates(string groupByColumn)
+    {
+        if (_diffDataset is null)
+            return;
+
+        // Any metadata column can be a covariate except the sample id itself and the contrast column.
+        _diffCovariateValues = _diffDataset.MetadataColumns
+            .Where(c => c != groupByColumn && c != "sample")
+            .Select(c => new QcGroupValue { Name = c })
+            .ToList();
+        DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
+    }
+
+    /// <summary>Ticked covariates, with values aligned to <paramref name="targetSampleIds"/>, or null if none.</summary>
+    private IReadOnlyList<Covariate>? SelectedCovariatesFor(IReadOnlyList<string> targetSampleIds)
+    {
+        if (_diffDataset is null)
+            return null;
+        var chosen = _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        if (chosen.Count == 0)
+            return null;
+
+        var indexById = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < _diffDataset.SampleIds.Length; i++)
+            indexById[_diffDataset.SampleIds[i]] = i;
+
+        var result = new List<Covariate>(chosen.Count);
+        foreach (var col in chosen)
+        {
+            var colValues = _diffDataset.MetadataValues(col);
+            var aligned = new string?[targetSampleIds.Count];
+            for (var k = 0; k < targetSampleIds.Count; k++)
+                aligned[k] = indexById.TryGetValue(targetSampleIds[k], out var di) ? colValues[di] : null;
+            result.Add(Covariate.FromMetadata(col, aligned));
+        }
+
+        return result;
     }
 
     private async void OnDiffLevelChanged(object sender, SelectionChangedEventArgs e)
@@ -257,6 +309,9 @@ public partial class MainWindow
             case DiffView.Detection:
                 await RunDetectionAsync();
                 break;
+            case DiffView.Enrichment:
+                await RunEnrichmentAsync();
+                break;
             default:
                 await RunVolcanoAsync();
                 break;
@@ -293,10 +348,12 @@ public partial class MainWindow
         }
 
         var dataset = _diffDataset!;
+        var covariates = SelectedCovariatesFor(dataset.SampleIds);
         DifferentialResult res;
         try
         {
-            res = await Task.Run(() => Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b));
+            res = await Task.Run(() =>
+                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -310,8 +367,9 @@ public partial class MainWindow
             .ToList();
 
         var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
+        var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
         DiffStatusText.Text =
-            $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant.";
+            $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant{adj}.";
     }
 
     private async Task RunPcaAsync()
@@ -396,6 +454,42 @@ public partial class MainWindow
             return;
         }
 
+        var dropped = a.Count - aCols.Count + (b.Count - bCols.Count);
+        var droppedNote = dropped > 0 ? $" ({dropped} samples not in merged_data)" : string.Empty;
+
+        // A ticked covariate switches to the Firth-penalized GLM (adjusted detection); otherwise Fisher.
+        var covariates = SelectedCovariatesFor(det.SampleIds);
+        if (covariates is not null)
+        {
+            DetectionGlmResult glm;
+            try
+            {
+                glm = await Task.Run(() =>
+                    DetectionGlm.Run(det.Matrix, det.PeptideIds, aCols, bCols, covariates));
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                DiffStatusText.Text = "Adjusted detection failed: " + ex.Message;
+                return;
+            }
+
+            if (!glm.Identifiable)
+            {
+                ClearDiffOutput();
+                DiffStatusText.Text = "Adjusted detection is not identifiable (group confounded with the "
+                    + $"covariates, R^2={glm.GroupCollinearityR2:0.00}). Use the unadjusted view.";
+                return;
+            }
+
+            RenderDetectionGlm(glm.Rows);
+            DiffGrid.ItemsSource = glm.Rows.Take(1000)
+                .Select(r => new DetGlmRow(r.PeptideId, r.RateA, r.RateB, r.LogOr, r.P, r.Q)).ToList();
+            DiffStatusText.Text =
+                $"Adjusted detection (Firth GLM): {aVal} (n={aCols.Count}) vs {bVal} (n={bCols.Count}), "
+                + $"adjusted for {string.Join(", ", glm.CovariatesUsed)}, {glm.Rows.Count} peptides{droppedNote}.";
+            return;
+        }
+
         IReadOnlyList<DetectionRow> rows;
         try
         {
@@ -410,11 +504,113 @@ public partial class MainWindow
         RenderDetection(rows);
         DiffGrid.ItemsSource = rows.Take(1000)
             .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
-        var dropped = a.Count - aCols.Count + (b.Count - bCols.Count);
-        var droppedNote = dropped > 0 ? $" ({dropped} samples not in merged_data)" : string.Empty;
         DiffStatusText.Text =
             $"Detection (peptide-level, DetectionQValue < 0.01): {aVal} (n={aCols.Count}) vs " +
             $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}.";
+    }
+
+    private async Task RunEnrichmentAsync()
+    {
+        if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
+        {
+            DiffStatusText.Text = "Pick a group-by column and two different values.";
+            return;
+        }
+
+        var dataset = _diffDataset!;
+        var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        DifferentialResult res;
+        try
+        {
+            res = await Task.Run(() =>
+                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
+            return;
+        }
+
+        var (sig, background) = Enrichment.SigAndBackgroundGenes(
+            res, fid => _diffLabelById.GetValueOrDefault(fid), 0.05, 1.0);
+        if (sig.Count == 0)
+        {
+            ClearDiffOutput();
+            DiffStatusText.Text =
+                $"No significant genes (adj.P < 0.05, |log2FC| >= 1) for {aVal} vs {bVal} - nothing to enrich.";
+            return;
+        }
+
+        DiffStatusText.Text = $"Querying g:Profiler for {sig.Count} genes...";
+        List<EnrichmentTerm> terms;
+        try
+        {
+            terms = await Task.Run(() => Enrichment.GProfiler(sig, background, DiffPoster));
+        }
+        catch (Exception ex)
+        {
+            DiffStatusText.Text = "Enrichment request failed (needs internet access): " + ex.Message;
+            return;
+        }
+
+        RenderEnrichment(terms);
+        DiffGrid.ItemsSource = terms.Take(1000)
+            .Select(t => new EnrichRow(t.Source, t.TermName, t.PValue, t.FoldEnrichment)).ToList();
+        DiffStatusText.Text = terms.Count == 0
+            ? $"No enriched terms for {sig.Count} significant genes (background {background.Count})."
+            : $"{terms.Count} enriched terms for {sig.Count} significant genes (background {background.Count}).";
+    }
+
+    private void RenderEnrichment(IReadOnlyList<EnrichmentTerm> terms)
+    {
+        DiffPlot.Reset();
+        var plt = DiffPlot.Plot;
+        if (terms.Count > 0)
+        {
+            var ys = terms.Take(15).Select(t => -Math.Log10(Math.Max(t.PValue, 1e-300))).ToArray();
+            plt.Add.Bars(ys);
+            plt.XLabel("top enriched terms (ranked by p)");
+            plt.YLabel("-log10 p (g:SCS)");
+        }
+
+        PlotRenderer.StyleQcPlot(plt);
+        DiffPlot.Refresh();
+    }
+
+    private void RenderDetectionGlm(IReadOnlyList<DetectionGlmRow> rows)
+    {
+        DiffPlot.Reset();
+        var plt = DiffPlot.Plot;
+
+        var bgX = new List<double>();
+        var bgY = new List<double>();
+        var sigX = new List<double>();
+        var sigY = new List<double>();
+        foreach (var r in rows)
+        {
+            if (!double.IsFinite(r.LogOr) || !double.IsFinite(r.P))
+                continue;
+            var y = -Math.Log10(Math.Max(r.P, 1e-300));
+            if (r.Q < 0.05)
+            {
+                sigX.Add(r.LogOr);
+                sigY.Add(y);
+            }
+            else
+            {
+                bgX.Add(r.LogOr);
+                bgY.Add(y);
+            }
+        }
+
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, "q >= 0.05");
+        AddMarkers(plt, sigX, sigY, "#2ca02c", 7, "q < 0.05");
+        plt.Add.VerticalLine(0.0);
+        plt.ShowLegend();
+        plt.XLabel("log odds ratio (B / A)");
+        plt.YLabel("-log10 P");
+        PlotRenderer.StyleQcPlot(plt);
+        DiffPlot.Refresh();
     }
 
     private void OnDiffGridAutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
@@ -424,10 +620,15 @@ public partial class MainWindow
             "Log2FC" => ("log2FC", "0.###"),
             "AdjP" => ("adj.P", "0.##e0"),
             "P" => ("P", "0.##e0"),
+            "PValue" => ("p", "0.##e0"),
             "Q" => ("q", "0.##e0"),
+            "LogOR" => ("logOR", "0.###"),
             "RateA" => ("rate A", "0.00"),
             "RateB" => ("rate B", "0.00"),
             "VariancePct" => ("variance %", "0.0"),
+            "Fold" => ("fold", "0.0"),
+            "Source" => ("source", null),
+            "Term" => ("term", null),
             _ => (e.PropertyName, (string?)null),
         };
 

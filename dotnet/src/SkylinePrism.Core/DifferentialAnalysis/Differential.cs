@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using MathNet.Numerics.Distributions;
 using SkylinePrism.Core.Numerics;
@@ -25,6 +26,34 @@ public abstract class Covariate
 
     /// <summary>Covariate name, used to label design columns.</summary>
     public string Name { get; }
+
+    /// <summary>
+    /// Build a covariate from raw metadata strings, inferring the type the way pandas dtype inference
+    /// does: numeric if every non-null value parses as an invariant-culture number (so an integer-coded
+    /// batch is centered, not dummy-coded), otherwise categorical. Null entries are missing.
+    /// </summary>
+    public static Covariate FromMetadata(string name, string?[] values)
+    {
+        var anyNonNull = false;
+        foreach (var v in values)
+        {
+            if (v is null)
+                continue;
+            anyNonNull = true;
+            if (!double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                return new CategoricalCovariate(name, values);
+        }
+
+        if (!anyNonNull)
+            return new CategoricalCovariate(name, values);
+
+        var nums = new double[values.Length];
+        for (var i = 0; i < values.Length; i++)
+            nums[i] = values[i] is null
+                ? double.NaN
+                : double.Parse(values[i]!, NumberStyles.Float, CultureInfo.InvariantCulture);
+        return new NumericCovariate(name, nums);
+    }
 }
 
 /// <summary>
