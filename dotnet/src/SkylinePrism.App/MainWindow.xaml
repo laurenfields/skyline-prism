@@ -530,7 +530,14 @@
 
                         <DockPanel x:Name="DiffPane" Visibility="Collapsed">
                             <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
-                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="DiffViewCombo" Width="110" SelectionChanged="OnDiffViewChanged"
+                                          ToolTip="Volcano (moderated-t), PCA of the samples, or peptide detection frequency.">
+                                    <ComboBoxItem>Volcano</ComboBoxItem>
+                                    <ComboBoxItem>PCA</ComboBoxItem>
+                                    <ComboBoxItem>Detection</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffLevelCombo" Width="90" SelectionChanged="OnDiffLevelChanged"
                                           ToolTip="Protein- or peptide-level corrected matrix.">
                                     <ComboBoxItem>Protein</ComboBoxItem>
@@ -556,16 +563,9 @@
                                     <ColumnDefinition Width="360" />
                                 </Grid.ColumnDefinitions>
                                 <sp:WpfPlot Grid.Column="0" x:Name="DiffPlot" />
-                                <DataGrid Grid.Column="1" x:Name="DiffGrid" AutoGenerateColumns="False"
+                                <DataGrid Grid.Column="1" x:Name="DiffGrid" AutoGenerateColumns="True"
                                           IsReadOnly="True" CanUserAddRows="False" Margin="6,0,0,0"
-                                          GridLinesVisibility="Horizontal" HeadersVisibility="Column">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="Feature" Binding="{Binding Label}" Width="*" />
-                                        <DataGridTextColumn Header="log2FC" Binding="{Binding LogFcText}" Width="70" />
-                                        <DataGridTextColumn Header="P" Binding="{Binding PText}" Width="80" />
-                                        <DataGridTextColumn Header="adj.P" Binding="{Binding AdjPText}" Width="80" />
-                                    </DataGrid.Columns>
-                                </DataGrid>
+                                          GridLinesVisibility="Horizontal" HeadersVisibility="Column" />
                             </Grid>
                         </DockPanel>
                     </Grid>
