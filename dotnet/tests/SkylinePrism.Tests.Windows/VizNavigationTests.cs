@@ -85,6 +85,7 @@ public class VizNavigationTests
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Qc));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Density));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.IonAccounting));
+        Assert.False(VizNavigation.ShouldFollowSkylineSelection(VizPane.Differential));
         Assert.False(VizNavigation.ShouldFollowSkylineSelection(null));
     }
 
@@ -100,6 +101,7 @@ public class VizNavigationTests
         Assert.Equal(1, (int)VizPane.Density);
         Assert.Equal(2, (int)VizPane.DynamicRange);
         Assert.Equal(3, (int)VizPane.IonAccounting);
+        Assert.Equal(4, (int)VizPane.Differential);
     }
 
     /// <summary>

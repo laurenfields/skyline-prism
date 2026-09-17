@@ -1,6 +1,5 @@
 namespace SkylinePrism.App;
 
-/// <summary>One of the panes on the Visualization tab. The values are the nav rail's row order.</summary>
 /// <summary>
 /// The Analysis rail's panes, in the order the ListBox lists them - the index IS the enum value, the
 /// way <see cref="VizPane"/> works, so the two rails behave identically.
@@ -12,6 +11,7 @@ internal enum AnalysisPane
     Log = 2,
 }
 
+/// <summary>One of the panes on the Visualization tab. The values are the nav rail's row order.</summary>
 internal enum VizPane
 {
     Qc = 0,

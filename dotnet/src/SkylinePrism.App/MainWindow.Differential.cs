@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.DifferentialAnalysis.Detection;
 using SkylinePrism.Core.Visualization;
@@ -25,11 +26,18 @@ public partial class MainWindow
         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
     };
 
+    private static readonly HashSet<string> ReservedMetaColumns =
+        new(StringComparer.Ordinal) { "sample", "sample_type", "batch" };
+
     private DifferentialDataset? _diffDataset;
     private Dictionary<string, string> _diffLabelById = new(StringComparer.Ordinal);
     private DetectionMatrixData? _detectionData;
     private string? _detectionDir;
     private bool _diffSuppress;
+    private int _diffRequest;
+    private bool _diffLoaded;
+    private string? _diffLoadedDir;
+    private FeatureLevel _diffLoadedLevel;
 
     private enum DiffView
     {
@@ -38,11 +46,21 @@ public partial class MainWindow
         Detection,
     }
 
-    private sealed record VolcanoRow(string Feature, string log2FC, string P, string adj_P);
+    private sealed record VolcanoRow(string Feature, double Log2FC, double P, double AdjP);
 
-    private sealed record PcaVarRow(string Component, string Variance);
+    private sealed record PcaVarRow(string Component, double VariancePct);
 
-    private sealed record DetRow(string Peptide, string rate_A, string rate_B, string p, string q);
+    private sealed record DetRow(string Peptide, double RateA, double RateB, double P, double Q);
+
+    /// <summary>Forget the loaded matrix so the pane reloads on its next show (new dir / new run).</summary>
+    private void InvalidateDifferential()
+    {
+        _diffLoaded = false;
+        _diffLoadedDir = null;
+        _diffDataset = null;
+        _detectionData = null;
+        _detectionDir = null;
+    }
 
     private FeatureLevel DiffSelectedLevel() =>
         (DiffLevelCombo.SelectedItem as ComboBoxItem)?.Content as string == "Peptide"
@@ -63,6 +81,8 @@ public partial class MainWindow
         var dir = OutputDirBox.Text?.Trim();
         if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
         {
+            InvalidateDifferential();
+            ClearDiffOutput();
             DiffStatusText.Text = "Set a PRISM output directory above to run a contrast.";
             return;
         }
@@ -74,40 +94,79 @@ public partial class MainWindow
                 DiffViewCombo.SelectedIndex = 0;
             if (DiffLevelCombo.SelectedItem is null)
                 DiffLevelCombo.SelectedIndex = 0;
-
-            var level = DiffSelectedLevel();
-            DifferentialDataset ds;
-            try
-            {
-                ds = await Task.Run(() => DifferentialDataset.Load(dir, level));
-            }
-            catch (Exception ex)
-            {
-                _diffDataset = null;
-                DiffStatusText.Text = "Load failed: " + ex.Message;
-                return;
-            }
-
-            _diffDataset = ds;
-            _detectionData = null; // level/dir changed; the detection matrix is reloaded on demand
-            _diffLabelById = new Dictionary<string, string>(StringComparer.Ordinal);
-            for (var i = 0; i < ds.FeatureIds.Length; i++)
-                _diffLabelById[ds.FeatureIds[i]] =
-                    string.IsNullOrEmpty(ds.FeatureLabels[i]) ? ds.FeatureIds[i] : ds.FeatureLabels[i];
-
-            DiffGroupByCombo.ItemsSource = ds.MetadataColumns;
-            DiffGroupByCombo.SelectedItem = ds.MetadataColumns.FirstOrDefault(c => c == "sample_type")
-                ?? ds.MetadataColumns.FirstOrDefault();
-            PopulateDiffGroupValues();
-
-            DiffStatusText.Text =
-                $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
-                $"{ds.SampleIds.Length} samples. Pick groups and Run.";
         }
         finally
         {
             _diffSuppress = false;
         }
+
+        var level = DiffSelectedLevel();
+        if (_diffLoaded && _diffLoadedDir == dir && _diffLoadedLevel == level)
+            return; // already current for this directory + level
+
+        ClearDiffOutput();
+        DiffStatusText.Text = "Loading...";
+        var request = ++_diffRequest;
+
+        DifferentialDataset ds;
+        try
+        {
+            ds = await Task.Run(() => DifferentialDataset.Load(dir, level));
+        }
+        catch (Exception ex)
+        {
+            if (request == _diffRequest)
+            {
+                InvalidateDifferential();
+                DiffStatusText.Text = "Load failed: " + ex.Message;
+            }
+
+            return;
+        }
+
+        if (request != _diffRequest)
+            return; // a newer load superseded this one
+
+        _diffDataset = ds;
+        _diffLoaded = true;
+        _diffLoadedDir = dir;
+        _diffLoadedLevel = level;
+        _diffLabelById = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 0; i < ds.FeatureIds.Length; i++)
+            _diffLabelById[ds.FeatureIds[i]] =
+                string.IsNullOrEmpty(ds.FeatureLabels[i]) ? ds.FeatureIds[i] : ds.FeatureLabels[i];
+
+        _diffSuppress = true;
+        try
+        {
+            DiffGroupByCombo.ItemsSource = ds.MetadataColumns;
+            DiffGroupByCombo.SelectedItem = DefaultContrastColumn(ds);
+        }
+        finally
+        {
+            _diffSuppress = false;
+        }
+
+        PopulateDiffGroupValues();
+        DiffStatusText.Text =
+            $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
+            $"{ds.SampleIds.Length} samples. Pick groups and Run.";
+    }
+
+    /// <summary>Prefer the first non-reserved metadata column with at least two values; else sample_type.</summary>
+    private static string? DefaultContrastColumn(DifferentialDataset ds)
+    {
+        foreach (var col in ds.MetadataColumns)
+        {
+            if (ReservedMetaColumns.Contains(col))
+                continue;
+            var distinct = ds.MetadataValues(col).Where(v => !string.IsNullOrEmpty(v)).Distinct().Count();
+            if (distinct >= 2)
+                return col;
+        }
+
+        return ds.MetadataColumns.FirstOrDefault(c => c == "sample_type")
+            ?? ds.MetadataColumns.FirstOrDefault();
     }
 
     private void PopulateDiffGroupValues()
@@ -137,7 +196,7 @@ public partial class MainWindow
 
     private async void OnDiffLevelChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_diffSuppress || !IsLoaded)
+        if (_diffSuppress || !IsInitialized)
             return;
         try
         {
@@ -178,7 +237,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            DiffStatusText.Text = "Run failed: " + ex.Message;
+            ReportHandlerFailure(nameof(OnRunDifferential), ex);
         }
     }
 
@@ -193,13 +252,13 @@ public partial class MainWindow
         switch (DiffSelectedView())
         {
             case DiffView.Pca:
-                RunPca();
+                await RunPcaAsync();
                 break;
             case DiffView.Detection:
                 await RunDetectionAsync();
                 break;
             default:
-                RunVolcano();
+                await RunVolcanoAsync();
                 break;
         }
     }
@@ -225,7 +284,7 @@ public partial class MainWindow
         return true;
     }
 
-    private void RunVolcano()
+    private async Task RunVolcanoAsync()
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
@@ -233,49 +292,55 @@ public partial class MainWindow
             return;
         }
 
-        var res = Differential.Run(_diffDataset!.ExprLog2, _diffDataset.FeatureIds, a, b);
-        RenderVolcano(res);
+        var dataset = _diffDataset!;
+        DifferentialResult res;
+        try
+        {
+            res = await Task.Run(() => Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
+            return;
+        }
 
-        var inv = CultureInfo.InvariantCulture;
+        RenderVolcano(res);
         DiffGrid.ItemsSource = res.Rows.Select(r => new VolcanoRow(
-            _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId),
-            r.LogFc.ToString("0.###", inv),
-            r.PValue.ToString("0.##e0", inv),
-            r.AdjPValue.ToString("0.##e0", inv))).ToList();
+            _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue))
+            .ToList();
 
         var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
         DiffStatusText.Text =
             $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant.";
     }
 
-    private void RunPca()
+    private async Task RunPcaAsync()
     {
         if (DiffGroupByCombo.SelectedItem is not string col)
         {
-            DiffStatusText.Text = "Pick a group-by column to colour the PCA by.";
+            DiffStatusText.Text = "Pick a group-by column to color the PCA by.";
             return;
         }
 
-        var all = Enumerable.Range(0, _diffDataset!.SampleIds.Length).ToList();
+        var dataset = _diffDataset!;
+        var all = Enumerable.Range(0, dataset.SampleIds.Length).ToList();
         PcaResult pca;
         try
         {
-            pca = DifferentialPca.Compute(_diffDataset.ExprLog2, _diffDataset.SampleIds, all);
+            pca = await Task.Run(() => DifferentialPca.Compute(dataset.ExprLog2, dataset.SampleIds, all));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            DiffStatusText.Text = "PCA failed: " + ex.Message;
+            DiffStatusText.Text = "Cannot compute PCA: " + ex.Message;
             return;
         }
 
         RenderPca(pca, col);
-
-        var inv = CultureInfo.InvariantCulture;
         DiffGrid.ItemsSource = pca.VarianceRatio
-            .Select((v, i) => new PcaVarRow($"PC{i + 1}", (v * 100).ToString("0.0", inv) + "%"))
+            .Select((v, i) => new PcaVarRow($"PC{i + 1}", v * 100.0))
             .ToList();
         DiffStatusText.Text =
-            $"PCA over {all.Count} samples, {pca.NFeaturesUsed} complete features, coloured by {col}.";
+            $"PCA over {all.Count} samples, {pca.NFeaturesUsed} complete features, colored by {col}.";
     }
 
     private async Task RunDetectionAsync()
@@ -288,7 +353,10 @@ public partial class MainWindow
 
         var dir = OutputDirBox.Text?.Trim();
         if (string.IsNullOrEmpty(dir))
+        {
+            DiffStatusText.Text = "Set a PRISM output directory above.";
             return;
+        }
 
         DetectionMatrixData det;
         if (_detectionData is not null && _detectionDir == dir)
@@ -297,6 +365,12 @@ public partial class MainWindow
         }
         else
         {
+            if (_isRunning)
+            {
+                DiffStatusText.Text = "A PRISM run is in progress - wait for it to finish before reading detection.";
+                return;
+            }
+
             DiffStatusText.Text = "Loading detection matrix from merged_data...";
             try
             {
@@ -312,27 +386,61 @@ public partial class MainWindow
             _detectionDir = dir;
         }
 
+        var dataset = _diffDataset!;
         var detIndex = det.SampleIds.Select((s, i) => (s, i)).ToDictionary(x => x.s, x => x.i, StringComparer.Ordinal);
-        var aCols = a.Select(j => _diffDataset!.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
-        var bCols = b.Select(j => _diffDataset!.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
+        var aCols = a.Select(j => dataset.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
+        var bCols = b.Select(j => dataset.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
         if (aCols.Count == 0 || bCols.Count == 0)
         {
             DiffStatusText.Text = "The selected samples were not found in the detection matrix.";
             return;
         }
 
-        var rows = DetectionTest.Run(det.Matrix, det.PeptideIds, aCols, bCols);
-        RenderDetection(rows);
+        IReadOnlyList<DetectionRow> rows;
+        try
+        {
+            rows = await Task.Run(() => DetectionTest.Run(det.Matrix, det.PeptideIds, aCols, bCols));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            DiffStatusText.Text = "Detection test failed: " + ex.Message;
+            return;
+        }
 
-        var inv = CultureInfo.InvariantCulture;
-        DiffGrid.ItemsSource = rows.Take(1000).Select(r => new DetRow(
-            r.PeptideId,
-            r.RateA.ToString("0.00", inv),
-            r.RateB.ToString("0.00", inv),
-            r.P.ToString("0.##e0", inv),
-            r.Q.ToString("0.##e0", inv))).ToList();
+        RenderDetection(rows);
+        DiffGrid.ItemsSource = rows.Take(1000)
+            .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
+        var dropped = a.Count - aCols.Count + (b.Count - bCols.Count);
+        var droppedNote = dropped > 0 ? $" ({dropped} samples not in merged_data)" : string.Empty;
         DiffStatusText.Text =
-            $"Detection: {aVal} (n={aCols.Count}) vs {bVal} (n={bCols.Count}) over {rows.Count} peptides.";
+            $"Detection (peptide-level, DetectionQValue < 0.01): {aVal} (n={aCols.Count}) vs " +
+            $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}.";
+    }
+
+    private void OnDiffGridAutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
+    {
+        var (header, format) = e.PropertyName switch
+        {
+            "Log2FC" => ("log2FC", "0.###"),
+            "AdjP" => ("adj.P", "0.##e0"),
+            "P" => ("P", "0.##e0"),
+            "Q" => ("q", "0.##e0"),
+            "RateA" => ("rate A", "0.00"),
+            "RateB" => ("rate B", "0.00"),
+            "VariancePct" => ("variance %", "0.0"),
+            _ => (e.PropertyName, (string?)null),
+        };
+
+        e.Column.Header = header;
+        if (format is not null && e.Column is DataGridTextColumn text && text.Binding is Binding binding)
+            binding.StringFormat = format;
+    }
+
+    private void ClearDiffOutput()
+    {
+        DiffGrid.ItemsSource = null;
+        DiffPlot.Reset();
+        DiffPlot.Refresh();
     }
 
     private void RenderVolcano(DifferentialResult res)
@@ -362,13 +470,14 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, null);
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, "not significant");
         AddMarkers(plt, sigX, sigY, "#d62728", 7, "significant");
         plt.Add.VerticalLine(1.0);
         plt.Add.VerticalLine(-1.0);
         if (!double.IsNaN(pThresh))
             plt.Add.HorizontalLine(-Math.Log10(Math.Max(pThresh, 1e-300)));
 
+        plt.ShowLegend();
         plt.XLabel("log2 fold change (B / A)");
         plt.YLabel("-log10 P");
         PlotRenderer.StyleQcPlot(plt);
@@ -386,11 +495,17 @@ public partial class MainWindow
             return;
         }
 
-        var labels = _diffDataset!.MetadataValues(colorColumn);
+        var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < _diffDataset!.SampleIds.Length; i++)
+            byId[_diffDataset.SampleIds[i]] = i;
+        var labels = _diffDataset.MetadataValues(colorColumn);
+
         var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
         for (var i = 0; i < pca.SampleIds.Length; i++)
         {
-            var g = string.IsNullOrEmpty(labels[i]) ? "(none)" : labels[i]!;
+            var g = byId.TryGetValue(pca.SampleIds[i], out var idx) && !string.IsNullOrEmpty(labels[idx])
+                ? labels[idx]!
+                : "(none)";
             if (!groups.TryGetValue(g, out var lists))
                 groups[g] = lists = (new List<double>(), new List<double>());
             lists.X.Add(pca.Scores[i, 0]);
@@ -434,9 +549,10 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, null);
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, "q >= 0.05");
         AddMarkers(plt, sigX, sigY, "#2ca02c", 7, "q < 0.05");
         plt.Add.VerticalLine(0.0);
+        plt.ShowLegend();
         plt.XLabel("detection rate difference (B - A)");
         plt.YLabel("-log10 P");
         PlotRenderer.StyleQcPlot(plt);
