@@ -65,6 +65,24 @@ public class DifferentialPcaTests
     }
 
     [Fact]
+    public void Compute_MoreSamplesThanFeatures_LimitsComponentCount()
+    {
+        // 3 features x 6 samples: numpy's thin SVD yields min(nSamples, nFeatures) = 3 components,
+        // not 6 padded with zero-rank eigenpairs.
+        var m = new double[3, 6];
+        for (var f = 0; f < 3; f++)
+        for (var s = 0; s < 6; s++)
+            m[f, s] = 10.0 + ((f * 2 + s) % 5) / 2.0;
+
+        var ids = Enumerable.Range(0, 6).Select(s => $"s{s}").ToArray();
+        var res = DifferentialPca.Compute(m, ids, Enumerable.Range(0, 6).ToArray());
+
+        Assert.Equal(3, res.NFeaturesUsed);
+        Assert.Equal(3, res.VarianceRatio.Length);
+        Assert.Equal(3, res.Scores.GetLength(1));
+    }
+
+    [Fact]
     public void Compute_RejectsTooFewSamples()
     {
         Assert.Throws<ArgumentException>(() =>

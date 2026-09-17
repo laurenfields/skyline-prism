@@ -48,33 +48,61 @@ public static class DetectionMatrix
     {
         var dataset = OpenDataset(outputDirOrMergedRoot);
         var thr = qThreshold.ToString(CultureInfo.InvariantCulture);
+        var where = "\"PeptideModifiedSequenceUnimodIds\" IS NOT NULL"
+            + (term is null ? string.Empty : $" AND \"Protein\" ILIKE '%{Esc(term)}%'");
         var sql =
             "SELECT \"PeptideModifiedSequenceUnimodIds\" AS pep, \"Sample ID\" AS samp, " +
             $"MAX(CASE WHEN \"DetectionQValue\" IS NOT NULL AND \"DetectionQValue\" < {thr} " +
             "THEN 1 ELSE 0 END) AS det " +
-            $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)} " +
-            (term is null
-                ? "GROUP BY pep, samp"
-                : $"WHERE \"Protein\" ILIKE '%{Esc(term)}%' GROUP BY pep, samp");
+            $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)} WHERE {where} GROUP BY pep, samp";
 
-        var triples = new List<(string Pep, string Samp, int Det)>();
+        // Intern peptide/sample strings once and keep only compact (int, int, byte) triples, so a
+        // cohort-scale merged_data (tens of millions of pep x samp groups) does not materialize two
+        // fresh strings per group.
+        var pepIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var pepList = new List<string>();
+        var sampIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var sampList = new List<string>();
+        var triples = new List<(int P, int S, byte D)>();
         using (var conn = OpenBounded(dataset))
         using (var cmd = DuckDbTuning.StreamingCommand(conn, sql))
         using (var reader = cmd.ExecuteReader())
         {
             while (reader.Read())
-                triples.Add((reader.GetString(0), reader.GetString(1),
-                    Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture)));
+            {
+                var pep = reader.GetString(0);
+                var samp = reader.GetString(1);
+                var det = (byte)Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture);
+                if (!pepIndex.TryGetValue(pep, out var pi))
+                {
+                    pi = pepList.Count;
+                    pepIndex[pep] = pi;
+                    pepList.Add(pep);
+                }
+
+                if (!sampIndex.TryGetValue(samp, out var si))
+                {
+                    si = sampList.Count;
+                    sampIndex[samp] = si;
+                    sampList.Add(samp);
+                }
+
+                triples.Add((pi, si, det));
+            }
         }
 
-        var peptides = triples.Select(t => t.Pep).Distinct().OrderBy(p => p, StringComparer.Ordinal).ToArray();
-        var samples = triples.Select(t => t.Samp).Distinct().OrderBy(s => s, StringComparer.Ordinal).ToArray();
-        var pepIdx = peptides.Select((p, i) => (p, i)).ToDictionary(x => x.p, x => x.i);
-        var sampIdx = samples.Select((s, i) => (s, i)).ToDictionary(x => x.s, x => x.i);
+        var peptides = pepList.OrderBy(p => p, StringComparer.Ordinal).ToArray();
+        var samples = sampList.OrderBy(s => s, StringComparer.Ordinal).ToArray();
+        var pepToSorted = new int[pepList.Count];
+        var sampToSorted = new int[sampList.Count];
+        for (var i = 0; i < peptides.Length; i++)
+            pepToSorted[pepIndex[peptides[i]]] = i;
+        for (var i = 0; i < samples.Length; i++)
+            sampToSorted[sampIndex[samples[i]]] = i;
 
         var matrix = new double[peptides.Length, samples.Length];
-        foreach (var (pep, samp, det) in triples)
-            matrix[pepIdx[pep], sampIdx[samp]] = det;
+        foreach (var (p, s, d) in triples)
+            matrix[pepToSorted[p], sampToSorted[s]] = d;
 
         return new DetectionMatrixData(peptides, samples, matrix);
     }
@@ -91,7 +119,7 @@ public static class DetectionMatrix
         var sql =
             "SELECT DISTINCT \"PeptideModifiedSequenceUnimodIds\" AS pep, \"Protein\" AS prot " +
             $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)} " +
-            $"WHERE \"Protein\" ILIKE '%{Esc(term)}%'";
+            $"WHERE \"PeptideModifiedSequenceUnimodIds\" IS NOT NULL AND \"Protein\" ILIKE '%{Esc(term)}%'";
 
         var map = new Dictionary<string, string>();
         using var conn = OpenBounded(dataset);
@@ -111,7 +139,7 @@ public static class DetectionMatrix
     /// Shorten a cryptic protein string to a readable name (e.g. "S35U4_HUMAN"): the first
     /// pipe-delimited part ending in "_HUMAN", else the second part, else the string itself.
     /// </summary>
-    public static string CrypticShortLabel(string proteinString)
+    public static string CrypticShortLabel(string? proteinString)
     {
         var parts = (proteinString ?? string.Empty).Split('|');
         foreach (var p in parts)

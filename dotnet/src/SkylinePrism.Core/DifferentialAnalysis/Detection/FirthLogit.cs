@@ -97,8 +97,9 @@ public static class FirthLogit
         if (!inv.Enumerate().All(double.IsFinite))
             inv = xtwx.PseudoInverse();
 
+        // np.linalg.slogdet returns log|det| regardless of sign; only an exactly-singular matrix is -inf.
         var det = xtwx.Determinant();
-        var logdet = det > 0.0 ? Math.Log(det) : double.NegativeInfinity;
+        var logdet = det == 0.0 ? double.NegativeInfinity : Math.Log(Math.Abs(det));
 
         double ll = 0;
         for (var i = 0; i < n; i++)

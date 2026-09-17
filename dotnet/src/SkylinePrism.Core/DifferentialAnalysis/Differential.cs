@@ -125,7 +125,8 @@ public static class Differential
     /// Run the moderated-t contrast on a LOG2 abundance matrix. <paramref name="groupAColumns"/> and
     /// <paramref name="groupBColumns"/> are disjoint column indices into
     /// <paramref name="exprLog2FeaturesBySamples"/>; only features observed (non-NaN) in every selected
-    /// sample are tested. Covariates and the intensity-trend prior are not yet supported.
+    /// sample are tested. Optional <paramref name="covariates"/> adjust the contrast; the intensity-trend
+    /// variance prior is not yet supported.
     /// </summary>
     public static DifferentialResult Run(
         double[,] exprLog2FeaturesBySamples,

@@ -127,8 +127,11 @@ public static class DetectionGlm
         var groupR2 = 0.0;
         if (xRed.GetLength(1) > 1 && NumpyMath.Var(grp, 0) > 0)
         {
-            var coef = DenseMatrix.OfArray(xRed).QR().Solve(DenseVector.OfArray(grp));
-            var fitted = DenseMatrix.OfArray(xRed) * coef;
+            // SVD (min-norm least squares) matches numpy.linalg.lstsq and, unlike QR, stays finite when
+            // the reduced design is rank-deficient (nested categorical covariates).
+            var xRedMatrix = DenseMatrix.OfArray(xRed);
+            var coef = xRedMatrix.Svd().Solve(DenseVector.OfArray(grp));
+            var fitted = xRedMatrix * coef;
             var resid = new double[nS];
             for (var s = 0; s < nS; s++)
                 resid[s] = grp[s] - fitted[s];

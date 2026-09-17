@@ -122,7 +122,9 @@ public static class DifferentialPca
         for (var i = 0; i < nSamples; i++)
             totalVar += evals[i].Real;
 
-        var k = Math.Min(nComponents, nSamples);
+        // numpy's svd(full_matrices=False) yields min(nSamples, nFeatures) singular values; matching it
+        // avoids padding the tail with zero-rank components (which show as "-0.0%" variance).
+        var k = Math.Min(nComponents, Math.Min(nSamples, used));
         var scores = new double[nSamples, k];
         var varianceRatio = new double[k];
         for (var j = 0; j < k; j++)

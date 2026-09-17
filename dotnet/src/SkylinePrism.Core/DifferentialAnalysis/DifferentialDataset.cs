@@ -164,7 +164,13 @@ public sealed class DifferentialDataset
             var sampleId = fields[idIdx];
             var values = new string?[otherIdx.Length];
             for (var k = 0; k < otherIdx.Length; k++)
-                values[k] = otherIdx[k] < fields.Length ? fields[otherIdx[k]] : null;
+            {
+                // PRISM writes "" for a sample with no value; pandas reads that as NaN, and the
+                // covariate/finder contracts treat missing as null - so an empty cell is null, not "".
+                var raw = otherIdx[k] < fields.Length ? fields[otherIdx[k]] : null;
+                values[k] = string.IsNullOrEmpty(raw) ? null : raw;
+            }
+
             byRow[sampleId] = values;
         }
 

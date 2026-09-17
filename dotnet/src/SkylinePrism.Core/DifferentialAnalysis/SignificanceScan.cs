@@ -126,9 +126,9 @@ public static class SignificanceScan
             {
                 res = Differential.Run(exprLog2FeaturesBySamples, featureIds, ga, gb, minN, covariates);
             }
-            catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+            catch (Exception)
             {
-                continue;
+                continue; // a degenerate split is skipped, not fatal (matches the reference's except Exception)
             }
 
             var nSig = res.Rows.Count(r => r.AdjPValue < qCut && Math.Abs(r.LogFc) >= lfcCut);
@@ -259,9 +259,9 @@ public static class SignificanceScan
                 var res = Differential.Run(exprLog2FeaturesBySamples, featureIds, pa, pb, minN, covariates);
                 null_.Add(res.Rows.Count(r => r.AdjPValue < qCut && Math.Abs(r.LogFc) >= lfcCut));
             }
-            catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+            catch (Exception)
             {
-                // skip non-identifiable shuffles, as the reference does
+                // skip a degenerate shuffle, as the reference does (except Exception)
             }
         }
 
@@ -320,8 +320,9 @@ public static class SignificanceScan
     /// <summary>Order-independent key for an {A, B} pair so A-vs-B and B-vs-A collapse to one.</summary>
     private static string MirrorKey(List<string> a, List<string> b)
     {
-        var sa = string.Join(",", a.OrderBy(x => x, StringComparer.Ordinal));
-        var sb = string.Join(",", b.OrderBy(x => x, StringComparer.Ordinal));
-        return string.CompareOrdinal(sa, sb) <= 0 ? sa + "|" + sb : sb + "|" + sa;
+        // NUL / SOH separators so a level name containing ',' or '|' cannot forge a collision.
+        var sa = string.Join('\0', a.OrderBy(x => x, StringComparer.Ordinal));
+        var sb = string.Join('\0', b.OrderBy(x => x, StringComparer.Ordinal));
+        return string.CompareOrdinal(sa, sb) <= 0 ? sa + '' + sb : sb + '' + sa;
     }
 }

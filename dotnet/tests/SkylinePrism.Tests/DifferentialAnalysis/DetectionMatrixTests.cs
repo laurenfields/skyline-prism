@@ -47,7 +47,7 @@ public class DetectionMatrixTests
     [Fact]
     public void CrypticPeptideMap_FiltersByProteinTerm()
     {
-        // Most fixture proteins are Swiss-Prot human entries (…_HUMAN); 321 of the 327 peptides map to
+        // Most fixture proteins are Swiss-Prot human entries (..._HUMAN); 321 of the 327 peptides map to
         // a HUMAN-containing protein (the other 6 have non-human/contaminant protein strings).
         var map = DetectionMatrix.CrypticPeptideMap(CohortRoot, "HUMAN");
         Assert.Equal(321, map.Count);

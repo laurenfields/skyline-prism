@@ -23,6 +23,17 @@ public class DetectionTestTests
     }
 
     [Fact]
+    public void FisherExact_LargeCounts_MatchScipy()
+    {
+        // Large tables (log-gamma path); compared relatively since the p-values are tiny.
+        static void Rel(double expected, double actual) =>
+            Assert.True(System.Math.Abs(actual - expected) / expected <= 1e-9,
+                $"expected {expected:R}, actual {actual:R}");
+        Rel(1.1885236381381294e-19, FisherExact.TwoSidedP(150, 50, 60, 140));
+        Rel(1.1422937075022777e-192, FisherExact.TwoSidedP(1000, 200, 300, 900));
+    }
+
+    [Fact]
     public void DetectionTest_CountsAndAdjustsAndSorts()
     {
         // pep0 detected in all of A, none of B -> [[3,0],[0,3]] -> p 0.1.
