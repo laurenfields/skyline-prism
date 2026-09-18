@@ -282,39 +282,46 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Attach an external clinical metadata CSV, joined to the loaded samples by an auto-detected key
-    /// column (the explorer's attach_clinical). Its columns become available for grouping and covariate
-    /// adjustment. The path is remembered so a later level/reload re-applies it.
+    /// Choose an external clinical metadata CSV (a top-level input, beside the metadata report). The
+    /// path is remembered and applied whenever a differential dataset is loaded; if one is already
+    /// loaded, it is joined immediately and the Differential pane's selectors refresh.
     /// </summary>
-    private void OnAttachClinical(object sender, RoutedEventArgs e)
+    private void OnBrowseClinical(object sender, RoutedEventArgs e)
     {
-        if (_diffDataset is null)
-        {
-            DiffStatusText.Text = "Load a differential dataset first, then attach a clinical CSV.";
-            return;
-        }
-
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Attach clinical metadata CSV",
+            Title = "Choose clinical metadata CSV",
             Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
             CheckFileExists = true,
         };
         if (dlg.ShowDialog(this) != true)
             return;
 
+        _clinicalCsvPath = dlg.FileName;
+        ClinicalCsvBox.Text = dlg.FileName;
+
+        // If a differential dataset is already loaded, apply the join now; otherwise it will be applied
+        // the next time one loads (LoadDifferentialAsync re-applies _clinicalCsvPath).
+        if (_diffDataset is not null)
+            ApplyClinicalToLoadedDataset();
+    }
+
+    /// <summary>Join the remembered clinical CSV to the loaded dataset and refresh the selectors.</summary>
+    private void ApplyClinicalToLoadedDataset()
+    {
+        if (_diffDataset is null || _clinicalCsvPath is null || !File.Exists(_clinicalCsvPath))
+            return;
+
         try
         {
-            var result = _diffDataset.AttachClinical(dlg.FileName);
+            var result = _diffDataset.AttachClinical(_clinicalCsvPath);
             if (result.KeyColumn is null || result.AddedColumns.Count == 0)
             {
                 DiffStatusText.Text =
-                    $"No clinical column matched the samples (best match rate {result.MatchRate:P0}). " +
+                    $"Clinical CSV: no column matched the samples (best match rate {result.MatchRate:P0}). " +
                     "Nothing was added.";
                 return;
             }
-
-            _clinicalCsvPath = dlg.FileName;
 
             // Refresh the group-by choices so the new clinical columns appear; select the first one.
             _diffSuppress = true;

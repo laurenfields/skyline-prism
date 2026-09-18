@@ -40,18 +40,25 @@
         <Grid Grid.Row="3" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="200" />
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="140" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
+            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True"
+                      ToolTip="Report carrying replicate annotations (default reads the Replicates document grid)." />
             <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
             <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center"
-                     TextChanged="OnBatchColumnChanged" />
-            <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
-                       Text="Pick the report carrying replicate annotations (default reads the Replicates document grid), then the batch/plate column name." TextWrapping="Wrap" />
+                     TextChanged="OnBatchColumnChanged"
+                     ToolTip="The batch/plate column name within the metadata report." />
+            <TextBlock Grid.Column="4" Text="Clinical CSV:" VerticalAlignment="Center" Margin="16,0,8,0" />
+            <TextBox Grid.Column="5" x:Name="ClinicalCsvBox" VerticalAlignment="Center" IsReadOnly="True"
+                     ToolTip="Optional external clinical metadata CSV, joined to the samples by an auto-detected key column. Its columns become available in the Differential pane's Group by and Adjust for." />
+            <Button Grid.Column="6" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowseClinical"
+                    ToolTip="Choose a clinical metadata CSV to join to the samples." />
         </Grid>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
@@ -569,9 +576,6 @@
                                 <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
                                         Click="OnRunDifferential"
                                         ToolTip="Run the limma moderated-t contrast on the two groups." />
-                                <Button x:Name="DiffClinicalButton" Content="Clinical CSV..." Padding="12,2" Margin="8,0,0,0"
-                                        Click="OnAttachClinical"
-                                        ToolTip="Join an external clinical metadata CSV to the samples (key auto-detected by value). Its columns become available for Group by and Adjust for." />
                                 <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
