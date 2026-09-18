@@ -105,6 +105,13 @@ public partial class MainWindow : Window
         MetadataReportCombo.Items.Add(DefaultMetadataItem);
         MetadataReportCombo.SelectedIndex = 0;
 
+        // TESTING PRELOAD - remove before the PR to Mike. Points at Lauren's CSF run + clinical CSV so
+        // the Differential pane has data to open without browsing each launch. Guarded on existence, so
+        // it is a no-op on any other machine.
+        PreloadForTesting(
+            @"G:\Manuscripts\NovartisCrypticPeptide_Reorganized\Novartis-Yubin\CSF\2026-07-Novartis-EV-CSF_2026-08-01_15-51-57\PRISM-Output\PRISM_out_ref_check",
+            @"G:\Manuscripts\NovartisCrypticPeptide_Reorganized\Novartis-Yubin\CSF\metadata\CSF_metadata_merged.csv");
+
         TransitionRollupCombo.SelectedIndex = 0;
         PeptideNormCombo.SelectedIndex = 0;
         SharedPeptideCombo.SelectedIndex = 0; // all_groups, matching PrismConfig's default
@@ -1419,6 +1426,21 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _runCancellation;
 
     // Enable Run only once an output directory is set and an input exists (and no run is in progress).
+    /// <summary>
+    /// TESTING ONLY - remove before the PR. Pre-fill the output directory and clinical CSV if they exist
+    /// on this machine, so the Differential pane opens on real data without browsing each launch.
+    /// </summary>
+    private void PreloadForTesting(string outputDir, string clinicalCsv)
+    {
+        if (Directory.Exists(outputDir))
+            OutputDirBox.Text = outputDir;
+        if (File.Exists(clinicalCsv))
+        {
+            _clinicalCsvPath = clinicalCsv;
+            ClinicalCsvBox.Text = clinicalCsv;
+        }
+    }
+
     private void OnOutputDirChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         UpdateRunEnabled();
