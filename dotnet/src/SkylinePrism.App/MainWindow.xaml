@@ -604,9 +604,17 @@
 
                         <DockPanel x:Name="MarkersPane" Visibility="Collapsed">
                             <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
-                                <TextBlock Text="Panel:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                                <ComboBox x:Name="MarkersPanelCombo" Width="230" SelectionChanged="OnMarkersPanelChanged"
-                                          ToolTip="A protein list to evaluate (your lists + PRISM's shipped panels). Manage them from the Dynamic Range 'Protein lists...' editor." />
+                                <TextBlock Text="Panels:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="MarkersPanelCombo" Width="240" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick panels)"
+                                          ToolTip="One or more protein lists to evaluate together (your lists + PRISM's shipped panels). Tick several to union them into one heatmap. Manage lists from the Dynamic Range 'Protein lists...' editor.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
                                 <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="MarkersLevelCombo" Width="90" SelectionChanged="OnMarkersLevelChanged"
                                           ToolTip="Protein- or peptide-level corrected matrix. Panels match by gene symbol, so protein level is usual.">

@@ -22,8 +22,36 @@ public partial class MainWindow
     private string? _markersDir;
     private FeatureLevel _markersLevel;
     private bool _markersSuppress;
+    private List<SelectablePanel> _markersPanelItems = new();
 
-    private sealed record MarkerPanelChoice(string Display, ProteinList List);
+    /// <summary>A protein list offered in the Markers panel picker, tickable for a multi-panel union.</summary>
+    private sealed class SelectablePanel : System.ComponentModel.INotifyPropertyChanged
+    {
+        private bool _isSelected;
+
+        public required string Display { get; init; }
+        public required ProteinList List { get; init; }
+
+        /// <summary>Raised on tick/untick so the pane can re-render and refresh the summary text.</summary>
+        public Action? Changed { get; init; }
+
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set
+            {
+                if (_isSelected == value)
+                    return;
+                _isSelected = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSelected)));
+                Changed?.Invoke();
+            }
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        public override string ToString() => Display;
+    }
 
     private async Task LoadMarkersAsync()
     {
@@ -105,19 +133,55 @@ public partial class MainWindow
 
     private void PopulateMarkersPanels()
     {
-        var selected = (MarkersPanelCombo.SelectedItem as MarkerPanelChoice)?.List.Name;
-        var choices = ProteinListSet.Load().WithBuiltIns()
+        // Preserve any current selection by list name across a reload.
+        var previouslySelected = new HashSet<string>(
+            _markersPanelItems.Where(i => i.IsSelected).Select(i => i.List.Name), StringComparer.Ordinal);
+
+        _markersPanelItems = ProteinListSet.Load().WithBuiltIns()
             .Where(l => l.Members.Count > 0)
             .OrderBy(l => l.Category, StringComparer.Ordinal)
             .ThenBy(l => l.Name, StringComparer.Ordinal)
-            .Select(l => new MarkerPanelChoice(
-                string.IsNullOrEmpty(l.Category) ? l.Name : $"{l.Category}: {l.Name}", l))
+            .Select(l => new SelectablePanel
+            {
+                Display = string.IsNullOrEmpty(l.Category) ? l.Name : $"{l.Category}: {l.Name}",
+                List = l,
+                Changed = OnMarkersPanelToggled,
+            })
             .ToList();
 
-        MarkersPanelCombo.DisplayMemberPath = nameof(MarkerPanelChoice.Display);
-        MarkersPanelCombo.ItemsSource = choices;
-        var restore = choices.FirstOrDefault(c => c.List.Name == selected);
-        MarkersPanelCombo.SelectedItem = restore ?? choices.FirstOrDefault();
+        // Restore prior ticks; if nothing was selected, tick the first panel so the pane is not empty.
+        var restoredAny = false;
+        foreach (var item in _markersPanelItems)
+            if (previouslySelected.Contains(item.List.Name))
+            {
+                item.IsSelected = true;
+                restoredAny = true;
+            }
+
+        if (!restoredAny && _markersPanelItems.Count > 0)
+            _markersPanelItems[0].IsSelected = true;
+
+        MarkersPanelCombo.ItemsSource = _markersPanelItems;
+        UpdateMarkersPanelSummary();
+    }
+
+    private void OnMarkersPanelToggled()
+    {
+        if (_markersSuppress)
+            return;
+        UpdateMarkersPanelSummary();
+        RenderMarkers();
+    }
+
+    private void UpdateMarkersPanelSummary()
+    {
+        var selected = _markersPanelItems.Where(i => i.IsSelected).ToList();
+        MarkersPanelCombo.Text = selected.Count switch
+        {
+            0 => "(pick panels)",
+            1 => selected[0].List.Name,
+            _ => $"{selected.Count} panels",
+        };
     }
 
     private FeatureLevel MarkersSelectedLevel() =>
@@ -137,13 +201,6 @@ public partial class MainWindow
         {
             ReportHandlerFailure(nameof(OnMarkersLevelChanged), ex);
         }
-    }
-
-    private void OnMarkersPanelChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_markersSuppress)
-            return;
-        RenderMarkers();
     }
 
     private void OnMarkersGroupByChanged(object sender, SelectionChangedEventArgs e)
@@ -182,9 +239,22 @@ public partial class MainWindow
             : _markersDataset;
         if (ds is null)
             return;
-        if (MarkersPanelCombo.SelectedItem is not MarkerPanelChoice choice
-            || MarkersGroupByCombo.SelectedItem is not string groupCol)
+        if (MarkersGroupByCombo.SelectedItem is not string groupCol)
             return;
+
+        var selectedPanels = _markersPanelItems.Where(i => i.IsSelected).Select(i => i.List).ToList();
+        if (selectedPanels.Count == 0)
+        {
+            MarkersHeatPlot.Reset();
+            MarkersHeatPlot.Refresh();
+            MarkersBoxPlot.Reset();
+            MarkersBoxPlot.Refresh();
+            MarkersStatusText.Text = "Pick one or more panels to evaluate.";
+            MarkersNoteText.Text = "Tick panels in the Panels list. Several tick together into one heatmap.";
+            return;
+        }
+
+        var combined = CombinePanels(selectedPanels);
 
         string?[] groups;
         try
@@ -198,7 +268,7 @@ public partial class MainWindow
 
         var perSample = (MarkersViewCombo.SelectedItem as ComboBoxItem)?.Content as string == "Per sample";
         var result = MarkerPanel.Evaluate(ds.ExprLog2, ds.FeatureIds, ds.FeatureLabels, groups,
-            ds.SampleIds, choice.List, perSample);
+            ds.SampleIds, combined, perSample);
 
         if (result.MarkerLabels.Length == 0)
         {
@@ -207,7 +277,7 @@ public partial class MainWindow
             MarkersBoxPlot.Reset();
             MarkersBoxPlot.Refresh();
             MarkersStatusText.Text =
-                $"None of {choice.List.Name}'s {result.Total} members matched a {_markersLevel.ToString().ToLowerInvariant()} feature.";
+                $"None of {combined.Name}'s {result.Total} members matched a {_markersLevel.ToString().ToLowerInvariant()} feature.";
             MarkersNoteText.Text = result.NotDetected.Count == 0
                 ? "No members detected in this run."
                 : "Not detected: " + string.Join(", ", result.NotDetected);
@@ -218,18 +288,37 @@ public partial class MainWindow
         var heat = MarkersHeatPlot.Plot;
         PlotRenderer.DrawValueHeatmap(heat, result.Heatmap, result.ColumnLabels, result.MarkerLabels,
             result.SymmetricMax, "row z-score", annotate: !perSample && result.MarkerLabels.Length <= 30);
-        heat.Title($"{choice.List.Name} (row z-scored log2) - "
+        heat.Title($"{combined.Name} (row z-scored log2) - "
             + (perSample ? "per sample" : $"group means by {groupCol}"));
         MarkersHeatPlot.Refresh();
 
         DrawMarkerBoxplot(result, groupCol);
 
         MarkersStatusText.Text =
-            $"{choice.List.Name}: found {result.Found}/{result.Total} members across "
+            $"{combined.Name}: found {result.Found}/{result.Total} members across "
             + $"{result.GroupNames.Length} groups.";
         MarkersNoteText.Text = result.NotDetected.Count == 0
             ? "All panel members detected. Boxplot below is each sample's mean marker z-score per group."
             : $"Not detected ({result.NotDetected.Count}): " + string.Join(", ", result.NotDetected);
+    }
+
+    /// <summary>Union several panels' members (dedup by match token) into one list for a combined heatmap.</summary>
+    private static ProteinList CombinePanels(IReadOnlyList<ProteinList> panels)
+    {
+        if (panels.Count == 1)
+            return panels[0];
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var members = new List<string>();
+        foreach (var panel in panels)
+            foreach (var member in panel.Members)
+            {
+                var token = ProteinList.MatchToken(member);
+                if (token.Length > 0 && seen.Add(token))
+                    members.Add(member);
+            }
+
+        return new ProteinList { Name = $"{panels.Count} panels", Members = members };
     }
 
     private void DrawMarkerBoxplot(MarkerPanelResult result, string groupCol)
