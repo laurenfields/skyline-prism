@@ -579,6 +579,12 @@
                                 <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
+                            <Border DockPanel.Dock="Bottom" Background="#FFF8E1" BorderBrush="#E0C97A"
+                                    BorderThickness="1" CornerRadius="3" Margin="6,4,6,6" Padding="8,5">
+                                <TextBlock x:Name="DiffCaveatText" Foreground="#5C4A00" TextWrapping="Wrap"
+                                           FontSize="11.5"
+                                           Text="Load a run and pick a view for its interpretation notes." />
+                            </Border>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

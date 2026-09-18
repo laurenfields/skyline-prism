@@ -173,6 +173,7 @@ public partial class MainWindow
         }
 
         PopulateDiffGroupValues();
+        UpdateDiffCaveat();
         DiffStatusText.Text =
             $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
             $"{ds.SampleIds.Length} samples. Pick groups and Run.";
@@ -381,6 +382,7 @@ public partial class MainWindow
             return;
         }
 
+        UpdateDiffCaveat();
         switch (DiffSelectedView())
         {
             case DiffView.Pca:
@@ -396,6 +398,40 @@ public partial class MainWindow
                 await RunVolcanoAsync();
                 break;
         }
+    }
+
+    /// <summary>
+    /// Show the honest interpretation caveats for the current view, carried over from the explorer's
+    /// README so the native tool does not lose them. These are the methodology limits a reader must keep
+    /// in mind, not error messages.
+    /// </summary>
+    private void UpdateDiffCaveat()
+    {
+        DiffCaveatText.Text = DiffSelectedView() switch
+        {
+            DiffView.Pca =>
+                "PCA is on the log2 matrix, complete-case (only features present in every sample), "
+                + "feature-mean-centered and unscaled. The axis SIGN is arbitrary - a component and its "
+                + "negative are equivalent, so orientation can differ from other tools while distances and "
+                + "variance-explained do not. Colour is metadata only; PCA itself is unsupervised.",
+            DiffView.Detection =>
+                "Detection recovers genuine on/off from transition-level merged_data (a cell counts as "
+                + "detected only where DetectionQValue < 0.01), which the dense abundance matrix cannot "
+                + "show. Per-peptide Fisher exact test, or Firth-penalized logistic regression when "
+                + "covariates are set. Peptides from one protein are correlated, so the BH q-values are "
+                + "exploratory ranking, not protein-level significance.",
+            DiffView.Enrichment =>
+                "Enrichment runs g:Profiler over the significant hits against the tested background and "
+                + "needs network access. It only re-describes the hit list - any inflation from the "
+                + "caveats on the Volcano or Detection views is carried straight into it. Exploratory.",
+            _ =>
+                "Volcano is limma moderated-t on the log2 corrected matrix, which is DENSE: Skyline "
+                + "integrates a peak boundary for every replicate, so an 'undetected' peptide is imputed "
+                + "baseline, not missing - a fold change can reflect baseline noise rather than real "
+                + "signal (use the Detection view for on/off). At peptide level BH q-values are "
+                + "anti-conservative (peptides from one protein are correlated). When batch and condition "
+                + "are confounded, add batch under 'Adjust for'.",
+        };
     }
 
     private bool TryGetGroups(out string col, out List<int> groupA, out List<int> groupB,
