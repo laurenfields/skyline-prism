@@ -316,6 +316,7 @@
                         <ListBoxItem x:Name="IonNavItem" Content="Ion Accounting" Padding="10,7"
                                      Visibility="Collapsed" />
                         <ListBoxItem x:Name="DiffNavItem" Content="Differential" Padding="10,7" />
+                        <ListBoxItem x:Name="MarkersNavItem" Content="Markers" Padding="10,7" />
                     </ListBox>
                     <Grid Grid.Column="1">
                         <DockPanel x:Name="QcPane">
@@ -598,6 +599,48 @@
                                           SelectionMode="Single"
                                           IsReadOnly="True" CanUserAddRows="False" Margin="6,0,0,0"
                                           GridLinesVisibility="Horizontal" HeadersVisibility="Column" />
+                            </Grid>
+                        </DockPanel>
+
+                        <DockPanel x:Name="MarkersPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="Panel:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="MarkersPanelCombo" Width="230" SelectionChanged="OnMarkersPanelChanged"
+                                          ToolTip="A protein list to evaluate (your lists + PRISM's shipped panels). Manage them from the Dynamic Range 'Protein lists...' editor." />
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersLevelCombo" Width="90" SelectionChanged="OnMarkersLevelChanged"
+                                          ToolTip="Protein- or peptide-level corrected matrix. Panels match by gene symbol, so protein level is usual.">
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersGroupByCombo" Width="150" SelectionChanged="OnMarkersGroupByChanged"
+                                          ToolTip="Metadata column that defines the groups (columns of the heatmap when showing group means)." />
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersViewCombo" Width="130" SelectionChanged="OnMarkersViewChanged"
+                                          ToolTip="Heatmap columns: one per group (means) or one per sample.">
+                                    <ComboBoxItem>Group means</ComboBoxItem>
+                                    <ComboBoxItem>Per sample</ComboBoxItem>
+                                </ComboBox>
+                                <Button x:Name="MarkersReloadButton" Content="Reload" Padding="12,2" Margin="16,0,0,0"
+                                        Click="OnMarkersReload"
+                                        ToolTip="Re-read the corrected matrix and refresh the panel list." />
+                                <TextBlock x:Name="MarkersStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <Border DockPanel.Dock="Bottom" Background="#F3F4F6" BorderBrush="#D0D4DA"
+                                    BorderThickness="1" CornerRadius="3" Margin="6,4,6,6" Padding="8,5">
+                                <TextBlock x:Name="MarkersNoteText" Foreground="#444" TextWrapping="Wrap"
+                                           FontSize="11.5"
+                                           Text="Pick a panel to evaluate its members across your groups." />
+                            </Border>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="3*" />
+                                    <RowDefinition Height="2*" />
+                                </Grid.RowDefinitions>
+                                <sp:WpfPlot Grid.Row="0" x:Name="MarkersHeatPlot" />
+                                <sp:WpfPlot Grid.Row="1" x:Name="MarkersBoxPlot" />
                             </Grid>
                         </DockPanel>
                     </Grid>

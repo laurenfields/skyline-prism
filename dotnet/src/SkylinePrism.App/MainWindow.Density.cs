@@ -176,6 +176,7 @@ public partial class MainWindow
         RangePane.Visibility = pane == VizPane.DynamicRange ? Visibility.Visible : Visibility.Collapsed;
         IonPane.Visibility = pane == VizPane.IonAccounting ? Visibility.Visible : Visibility.Collapsed;
         DiffPane.Visibility = pane == VizPane.Differential ? Visibility.Visible : Visibility.Collapsed;
+        MarkersPane.Visibility = pane == VizPane.Markers ? Visibility.Visible : Visibility.Collapsed;
 
         SetRangeFollowActive(VizNavigation.ShouldFollowSkylineSelection(pane));
 
@@ -198,6 +199,8 @@ public partial class MainWindow
         }
         else if (pane == VizPane.Differential)
             await LoadDifferentialAsync();
+        else if (pane == VizPane.Markers)
+            await LoadMarkersAsync();
     }
 
     private async void OnDensityReload(object sender, RoutedEventArgs e)

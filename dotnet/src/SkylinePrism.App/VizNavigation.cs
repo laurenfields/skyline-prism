@@ -19,6 +19,7 @@ internal enum VizPane
     DynamicRange = 2,
     IonAccounting = 3,
     Differential = 4,
+    Markers = 5,
 }
 
 /// <summary>
@@ -54,6 +55,7 @@ internal static class VizNavigation
             (int)VizPane.DynamicRange => VizPane.DynamicRange,
             (int)VizPane.IonAccounting => VizPane.IonAccounting,
             (int)VizPane.Differential => VizPane.Differential,
+            (int)VizPane.Markers => VizPane.Markers,
             _ => null,   // nothing selected yet (-1), or a row added to the XAML and not to this enum
         };
     }
