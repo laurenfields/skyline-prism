@@ -256,11 +256,15 @@ public sealed class DifferentialDataset
         var (sampleIdToRow, metaColumns) = ReadSampleMetadata(metaPath);
 
         var table = ParquetTable.Load(matrixPath);
-        var sampleCols = table.ColumnNames.Where(sampleIdToRow.ContainsKey).ToArray();
-        if (sampleCols.Length == 0)
+        var alignment = AlignSampleColumns(table.ColumnNames, sampleIdToRow, metaColumns);
+        if (alignment.Count == 0)
             throw new InvalidOperationException(
-                "No sample columns in the matrix matched sample_metadata.csv sample ids.");
-        var annotCols = table.ColumnNames.Where(c => !sampleIdToRow.ContainsKey(c)).ToList();
+                "No sample columns in the matrix matched sample_metadata.csv sample ids " +
+                "(neither the full sample_id nor the bare replicate name before '__@__').");
+        var sampleCols = alignment.Select(a => a.Col).ToArray();
+        var alignedMeta = alignment.Select(a => a.Meta).ToArray();
+        var matched = new HashSet<string>(sampleCols, StringComparer.Ordinal);
+        var annotCols = table.ColumnNames.Where(c => !matched.Contains(c)).ToList();
 
         var idColumn = ChooseColumn(table, level == FeatureLevel.Protein
             ? new[] { "protein_group" }
@@ -290,12 +294,73 @@ public sealed class DifferentialDataset
         {
             var values = new string?[sampleCols.Length];
             for (var j = 0; j < sampleCols.Length; j++)
-                values[j] = sampleIdToRow[sampleCols[j]][m];
+                values[j] = alignedMeta[j][m];
             metaByColumn[metaColumns[m]] = values;
         }
 
         return new DifferentialDataset(level, exprLog2, featureIds, featureLabels, sampleCols,
             idColumn, labelColumn, metaColumns, metaByColumn);
+    }
+
+    /// <summary>
+    /// Align the matrix's sample columns to the metadata rows. Exact <c>sample_id</c> match is
+    /// preferred; if it matches nothing, fall back to the bare replicate name (the part before the
+    /// <c>__@__</c> document separator), which equals the metadata <c>sample</c> value. The fallback
+    /// exists because some PRISM runs wrote the corrected matrix with one document/batch stem
+    /// (e.g. <c>...__@__PRISM</c>) but <c>sample_metadata.csv</c> with another (e.g.
+    /// <c>...__@__merged_data</c>); the bare replicate name is identical in both. A bare name matched
+    /// to more than one metadata row is ambiguous and skipped. Returned columns keep the matrix's
+    /// column names (they index the matrix), each paired with its resolved metadata row.
+    /// </summary>
+    internal static List<(string Col, string?[] Meta)> AlignSampleColumns(
+        IReadOnlyList<string> parquetCols,
+        IReadOnlyDictionary<string, string?[]> sampleIdToRow,
+        IReadOnlyList<string> metaColumns)
+    {
+        var exact = new List<(string, string?[])>();
+        foreach (var c in parquetCols)
+            if (sampleIdToRow.TryGetValue(c, out var row))
+                exact.Add((c, row));
+        if (exact.Count > 0)
+            return exact;
+
+        // Fallback: match on the bare replicate name (before "__@__"), requiring it to be unique.
+        var sampleIdx = -1;
+        for (var i = 0; i < metaColumns.Count; i++)
+            if (string.Equals(metaColumns[i], "sample", StringComparison.Ordinal))
+            {
+                sampleIdx = i;
+                break;
+            }
+
+        var bareToRows = new Dictionary<string, List<string?[]>>(StringComparer.Ordinal);
+        foreach (var kv in sampleIdToRow)
+        {
+            var bare = sampleIdx >= 0 && !string.IsNullOrEmpty(kv.Value[sampleIdx])
+                ? StripDocSuffix(kv.Value[sampleIdx]!)
+                : StripDocSuffix(kv.Key);
+            if (!bareToRows.TryGetValue(bare, out var lst))
+            {
+                lst = new List<string?[]>();
+                bareToRows[bare] = lst;
+            }
+
+            lst.Add(kv.Value);
+        }
+
+        var result = new List<(string, string?[])>();
+        foreach (var c in parquetCols)
+            if (bareToRows.TryGetValue(StripDocSuffix(c), out var lst) && lst.Count == 1)
+                result.Add((c, lst[0]));
+
+        return result;
+    }
+
+    /// <summary>The replicate name before the <c>__@__</c> document separator (or the whole string).</summary>
+    private static string StripDocSuffix(string s)
+    {
+        var idx = s.IndexOf("__@__", StringComparison.Ordinal);
+        return idx >= 0 ? s.Substring(0, idx) : s;
     }
 
     private static string ChooseColumn(ParquetTable table, string[] preferred, List<string> fallback)

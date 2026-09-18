@@ -107,6 +107,59 @@ public class DifferentialDatasetTests
     }
 
     [Fact]
+    public void AlignSampleColumns_ExactSampleIdMatch_Preferred()
+    {
+        var meta = new System.Collections.Generic.Dictionary<string, string?[]>
+        {
+            ["R1__@__b"] = new string?[] { "R1", "experimental" },
+            ["R2__@__b"] = new string?[] { "R2", "experimental" },
+        };
+        var cols = new[] { "protein_group", "R1__@__b", "R2__@__b" };
+
+        var aligned = DifferentialDataset.AlignSampleColumns(cols, meta, new[] { "sample", "sample_type" });
+
+        Assert.Equal(new[] { "R1__@__b", "R2__@__b" }, aligned.Select(a => a.Col));
+        Assert.Equal("R1", aligned[0].Meta[0]);
+    }
+
+    [Fact]
+    public void AlignSampleColumns_FallsBackToBareReplicateName_OnStemMismatch()
+    {
+        // Matrix columns use one document stem, metadata sample_id uses another; the bare replicate
+        // name (before "__@__") is identical, matching the metadata "sample" value.
+        var meta = new System.Collections.Generic.Dictionary<string, string?[]>
+        {
+            ["R1__@__merged_data"] = new string?[] { "R1", "experimental" },
+            ["R2__@__merged_data"] = new string?[] { "R2", "qc" },
+        };
+        var cols = new[] { "protein_group", "R1__@__PRISM", "R2__@__PRISM" };
+
+        var aligned = DifferentialDataset.AlignSampleColumns(cols, meta, new[] { "sample", "sample_type" });
+
+        // Columns keep the matrix names; metadata is resolved by bare name.
+        Assert.Equal(new[] { "R1__@__PRISM", "R2__@__PRISM" }, aligned.Select(a => a.Col));
+        Assert.Equal("experimental", aligned[0].Meta[1]);
+        Assert.Equal("qc", aligned[1].Meta[1]);
+    }
+
+    [Fact]
+    public void AlignSampleColumns_AmbiguousBareName_Skipped()
+    {
+        // Two metadata rows share the bare name "R1" (batch collision); it cannot be resolved.
+        var meta = new System.Collections.Generic.Dictionary<string, string?[]>
+        {
+            ["R1__@__b1"] = new string?[] { "R1", "experimental" },
+            ["R1__@__b2"] = new string?[] { "R1", "qc" },
+            ["R2__@__b1"] = new string?[] { "R2", "experimental" },
+        };
+        var cols = new[] { "R1__@__X", "R2__@__X" };
+
+        var aligned = DifferentialDataset.AlignSampleColumns(cols, meta, new[] { "sample", "sample_type" });
+
+        Assert.Equal(new[] { "R2__@__X" }, aligned.Select(a => a.Col)); // R1 ambiguous, dropped
+    }
+
+    [Fact]
     public void AttachClinical_NoMatch_AddsNothing()
     {
         var d = DifferentialDataset.Load(MiniOutput, FeatureLevel.Protein);
