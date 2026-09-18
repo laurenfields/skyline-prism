@@ -43,6 +43,16 @@ public partial class MainWindow
     private string? _diffLoadedDir;
     private FeatureLevel _diffLoadedLevel;
 
+    // Volcano click-to-boxplot state: each plotted point's location + feature id, the per-feature row for
+    // the title, and the two groups' sample indices so the boxplot can pull that feature's abundances.
+    private List<(ScottPlot.Coordinates Loc, string FeatureId)> _volcanoPoints = new();
+    private Dictionary<string, DifferentialRow> _volcanoRowById = new(StringComparer.Ordinal);
+    private List<int> _volcanoGroupA = new();
+    private List<int> _volcanoGroupB = new();
+    private string _volcanoAName = "A";
+    private string _volcanoBName = "B";
+    private FeatureDetailWindow? _featureDetailWindow;
+
     private enum DiffView
     {
         Volcano,
@@ -478,6 +488,10 @@ public partial class MainWindow
             return;
         }
 
+        _volcanoGroupA = a;
+        _volcanoGroupB = b;
+        _volcanoAName = aVal;
+        _volcanoBName = bVal;
         RenderVolcano(res);
         DiffGrid.ItemsSource = res.Rows.Select(r => new VolcanoRow(
             _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue))
@@ -486,7 +500,8 @@ public partial class MainWindow
         var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
         var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
         DiffStatusText.Text =
-            $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant{adj}.";
+            $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant{adj}. "
+            + "Click a point for its per-sample boxplot.";
     }
 
     private async Task RunPcaAsync()
@@ -762,6 +777,66 @@ public partial class MainWindow
         DiffPlot.Refresh();
     }
 
+    /// <summary>
+    /// On the Volcano view, a click near a point opens a per-feature boxplot of that feature's log2
+    /// abundance split by the two contrast groups (the explorer's "Feature detail").
+    /// </summary>
+    private void OnDiffPlotMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0 || _diffDataset is null)
+            return;
+
+        var plt = DiffPlot.Plot;
+        var pos = e.GetPosition(DiffPlot);
+        var scale = DiffPlot.DisplayScale;
+        var cursor = new ScottPlot.Pixel(pos.X * scale, pos.Y * scale);
+        var idx = QcPlotChrome.NearestPoint(
+            _volcanoPoints.Select(p => plt.GetPixel(p.Loc)).ToList(), cursor);
+        if (idx < 0)
+            return;
+
+        ShowFeatureDetail(_volcanoPoints[idx].FeatureId);
+    }
+
+    private void ShowFeatureDetail(string featureId)
+    {
+        if (_diffDataset is null)
+            return;
+        var row = Array.IndexOf(_diffDataset.FeatureIds, featureId);
+        if (row < 0)
+            return;
+
+        var aVals = new List<double>();
+        foreach (var s in _volcanoGroupA)
+        {
+            var v = _diffDataset.ExprLog2[row, s];
+            if (double.IsFinite(v))
+                aVals.Add(v);
+        }
+
+        var bVals = new List<double>();
+        foreach (var s in _volcanoGroupB)
+        {
+            var v = _diffDataset.ExprLog2[row, s];
+            if (double.IsFinite(v))
+                bVals.Add(v);
+        }
+
+        var label = _diffLabelById.GetValueOrDefault(featureId, featureId);
+        _volcanoRowById.TryGetValue(featureId, out var dr);
+
+        if (_featureDetailWindow is null)
+        {
+            _featureDetailWindow = new FeatureDetailWindow { Owner = this };
+            _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
+        }
+
+        _featureDetailWindow.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
+            dr?.AdjPValue ?? double.NaN, _volcanoAName, aVals, _volcanoBName, bVals);
+        _featureDetailWindow.Show();
+        _featureDetailWindow.Activate();
+    }
+
     private void RenderVolcano(DifferentialResult res)
     {
         DiffPlot.Reset();
@@ -772,9 +847,14 @@ public partial class MainWindow
         var sigX = new List<double>();
         var sigY = new List<double>();
         var pThresh = double.NaN;
+        _volcanoPoints = new List<(ScottPlot.Coordinates, string)>(res.Rows.Count);
+        _volcanoRowById = new Dictionary<string, DifferentialRow>(StringComparer.Ordinal);
         foreach (var r in res.Rows)
         {
             var y = -Math.Log10(Math.Max(r.PValue, 1e-300));
+            if (double.IsFinite(r.LogFc) && double.IsFinite(y))
+                _volcanoPoints.Add((new ScottPlot.Coordinates(r.LogFc, y), r.FeatureId));
+            _volcanoRowById[r.FeatureId] = r;
             if (r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0)
             {
                 sigX.Add(r.LogFc);

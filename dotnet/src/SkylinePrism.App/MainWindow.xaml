@@ -590,7 +590,8 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="360" />
                                 </Grid.ColumnDefinitions>
-                                <sp:WpfPlot Grid.Column="0" x:Name="DiffPlot" />
+                                <sp:WpfPlot Grid.Column="0" x:Name="DiffPlot"
+                                            MouseLeftButtonDown="OnDiffPlotMouseDown" />
                                 <DataGrid Grid.Column="1" x:Name="DiffGrid" AutoGenerateColumns="True"
                                           AutoGeneratingColumn="OnDiffGridAutoGeneratingColumn"
                                           IsReadOnly="True" CanUserAddRows="False" Margin="6,0,0,0"
