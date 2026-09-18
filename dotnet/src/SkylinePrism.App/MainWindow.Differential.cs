@@ -61,7 +61,7 @@ public partial class MainWindow
         Enrichment,
     }
 
-    private sealed record VolcanoRow(string Feature, double Log2FC, double P, double AdjP);
+    private sealed record VolcanoRow(string Feature, double Log2FC, double P, double AdjP, string FeatureId);
 
     private sealed record PcaVarRow(string Component, double VariancePct);
 
@@ -494,7 +494,8 @@ public partial class MainWindow
         _volcanoBName = bVal;
         RenderVolcano(res);
         DiffGrid.ItemsSource = res.Rows.Select(r => new VolcanoRow(
-            _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue))
+            _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue,
+            r.FeatureId))
             .ToList();
 
         var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
@@ -748,6 +749,13 @@ public partial class MainWindow
 
     private void OnDiffGridAutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
     {
+        // FeatureId backs click-to-boxplot from the grid; it is not a column the user needs to see.
+        if (e.PropertyName == "FeatureId")
+        {
+            e.Cancel = true;
+            return;
+        }
+
         var (header, format) = e.PropertyName switch
         {
             "Log2FC" => ("log2FC", "0.###"),
@@ -796,6 +804,13 @@ public partial class MainWindow
             return;
 
         ShowFeatureDetail(_volcanoPoints[idx].FeatureId);
+    }
+
+    /// <summary>Selecting a hit row in the sidebar opens the same per-feature boxplot as a volcano click.</summary>
+    private void OnDiffGridSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DiffGrid.SelectedItem is VolcanoRow vr)
+            ShowFeatureDetail(vr.FeatureId);
     }
 
     private void ShowFeatureDetail(string featureId)
