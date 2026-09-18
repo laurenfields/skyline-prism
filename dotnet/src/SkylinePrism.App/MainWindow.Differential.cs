@@ -799,7 +799,9 @@ public partial class MainWindow
         foreach (var (g, lists) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
             AddMarkers(plt, lists.X, lists.Y, DiffPalette[ci++ % DiffPalette.Length], 11, g);
 
-        plt.ShowLegend();
+        // Dock the legend OUTSIDE the data area (like the Streamlit app): a color column can have many
+        // groups, and an in-plot legend covers the main sample cluster.
+        plt.ShowLegend(ScottPlot.Edge.Right);
         var inv = CultureInfo.InvariantCulture;
         plt.XLabel($"PC1 ({(pca.VarianceRatio[0] * 100).ToString("0.0", inv)}%)");
         plt.YLabel($"PC2 ({(pca.VarianceRatio[1] * 100).ToString("0.0", inv)}%)");
