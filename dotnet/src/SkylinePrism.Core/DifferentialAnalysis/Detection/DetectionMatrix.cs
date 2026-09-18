@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using DuckDB.NET.Data;
 using SkylinePrism.Core.IO;
 
@@ -47,12 +48,13 @@ public static class DetectionMatrix
         string? term = "cryptic")
     {
         var dataset = OpenDataset(outputDirOrMergedRoot);
+        var cols = ResolveColumns(dataset);
         var thr = qThreshold.ToString(CultureInfo.InvariantCulture);
-        var where = "\"PeptideModifiedSequenceUnimodIds\" IS NOT NULL"
-            + (term is null ? string.Empty : $" AND \"Protein\" ILIKE '%{Esc(term)}%'");
+        var where = $"\"{cols.Peptide}\" IS NOT NULL"
+            + (term is null ? string.Empty : $" AND \"{cols.Protein}\" ILIKE '%{Esc(term)}%'");
         var sql =
-            "SELECT \"PeptideModifiedSequenceUnimodIds\" AS pep, \"Sample ID\" AS samp, " +
-            $"MAX(CASE WHEN \"DetectionQValue\" IS NOT NULL AND \"DetectionQValue\" < {thr} " +
+            $"SELECT \"{cols.Peptide}\" AS pep, \"{cols.Sample}\" AS samp, " +
+            $"MAX(CASE WHEN \"{cols.DetectionQ}\" IS NOT NULL AND \"{cols.DetectionQ}\" < {thr} " +
             "THEN 1 ELSE 0 END) AS det " +
             $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)} WHERE {where} GROUP BY pep, samp";
 
@@ -116,10 +118,11 @@ public static class DetectionMatrix
         string term = "cryptic")
     {
         var dataset = OpenDataset(outputDirOrMergedRoot);
+        var cols = ResolveColumns(dataset);
         var sql =
-            "SELECT DISTINCT \"PeptideModifiedSequenceUnimodIds\" AS pep, \"Protein\" AS prot " +
+            $"SELECT DISTINCT \"{cols.Peptide}\" AS pep, \"{cols.Protein}\" AS prot " +
             $"FROM {MergedParquetReader.Scan(dataset.ScanTarget)} " +
-            $"WHERE \"PeptideModifiedSequenceUnimodIds\" IS NOT NULL AND \"Protein\" ILIKE '%{Esc(term)}%'";
+            $"WHERE \"{cols.Peptide}\" IS NOT NULL AND \"{cols.Protein}\" ILIKE '%{Esc(term)}%'";
 
         var map = new Dictionary<string, string>();
         using var conn = OpenBounded(dataset);
@@ -163,6 +166,38 @@ public static class DetectionMatrix
         DuckDbTuning.Apply(conn, DuckDbMerge.AutoMemoryBudgetMb(),
             DuckDbMerge.ResolveTempDirectory(dataset.Root));
         return conn;
+    }
+
+    /// <summary>
+    /// Resolve the merged_data column names this loader needs, tolerating naming variants (the current
+    /// pipeline writes "PeptideModifiedSequenceUnimodIds"/"DetectionQValue"; older exports use the
+    /// spaced Skyline headers "Peptide Modified Sequence Unimod Ids"/"Detection Q Value"). Matching
+    /// ignores case, spaces and punctuation.
+    /// </summary>
+    private static (string Peptide, string Sample, string DetectionQ, string Protein) ResolveColumns(
+        MergedDataset dataset)
+    {
+        var names = ParquetTable.ReadColumnNames(dataset.RepresentativeFile());
+        var byNorm = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var n in names)
+            byNorm.TryAdd(Normalize(n), n);
+
+        string Find(string logical) => byNorm.TryGetValue(Normalize(logical), out var actual)
+            ? actual
+            : throw new InvalidOperationException(
+                $"merged_data has no column matching '{logical}'. Columns: {string.Join(", ", names)}");
+
+        return (Find("PeptideModifiedSequenceUnimodIds"), Find("Sample ID"),
+            Find("DetectionQValue"), Find("Protein"));
+    }
+
+    private static string Normalize(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var ch in s)
+            if (char.IsLetterOrDigit(ch))
+                sb.Append(char.ToLowerInvariant(ch));
+        return sb.ToString();
     }
 
     private static string Esc(string s) => s.Replace("'", "''");

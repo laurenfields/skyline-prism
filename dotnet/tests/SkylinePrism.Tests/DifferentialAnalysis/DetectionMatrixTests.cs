@@ -57,6 +57,18 @@ public class DetectionMatrixTests
         Assert.Empty(DetectionMatrix.CrypticPeptideMap(CohortRoot, "no-such-cryptic-term"));
     }
 
+    [Fact]
+    public void Load_LegacySpacedColumnNames_Resolves()
+    {
+        // The mini fixture's merged_data uses the older spaced Skyline headers ("Peptide Modified
+        // Sequence Unimod Ids", "Detection Q Value"); the loader must resolve them like the current
+        // camelCase form.
+        var data = DetectionMatrix.Load(Fixtures.Path2("mini", "e2e-sum", "output"), qThreshold: 0.01, term: null);
+        Assert.True(data.PeptideIds.Length > 0);
+        Assert.True(data.SampleIds.Length > 0);
+        Assert.All(data.Matrix.Cast<double>(), v => Assert.True(v == 0.0 || v == 1.0));
+    }
+
     [Theory]
     [InlineData("sp|P0DP02|HVC33_HUMAN", "HVC33_HUMAN")]
     [InlineData("CRYPTIC_UNIQUE|Q9Y2|S35U4_HUMAN", "S35U4_HUMAN")]
