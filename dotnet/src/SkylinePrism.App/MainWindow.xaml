@@ -569,6 +569,9 @@
                                 <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
                                         Click="OnRunDifferential"
                                         ToolTip="Run the limma moderated-t contrast on the two groups." />
+                                <Button x:Name="DiffClinicalButton" Content="Clinical CSV..." Padding="12,2" Margin="8,0,0,0"
+                                        Click="OnAttachClinical"
+                                        ToolTip="Join an external clinical metadata CSV to the samples (key auto-detected by value). Its columns become available for Group by and Adjust for." />
                                 <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>

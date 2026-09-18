@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Tests.TestSupport;
@@ -64,5 +65,66 @@ public class DifferentialDatasetTests
         Assert.Equal(-0.06552109959229187, byId["PG0001"].LogFc, 9);
         AssertRel(0.6155448330123279, byId["PG0001"].PValue, 1e-9);
         AssertRel(0.78184737677963, byId["PG0003"].AdjPValue, 1e-9);
+    }
+
+    [Fact]
+    public void AttachClinical_JoinsByAutoDetectedKey_AddsColumns()
+    {
+        var d = DifferentialDataset.Load(MiniOutput, FeatureLevel.Protein);
+        var sampleNames = d.MetadataValues("sample");
+
+        // Build a clinical CSV keyed on the sample name, assigning a Diagnosis by matrix position so
+        // every sample maps exactly once (a one-to-one key the inference should prefer).
+        var path = Path.Combine(Path.GetTempPath(), $"prism-clin-{Guid.NewGuid():N}.csv");
+        try
+        {
+            using (var w = new StreamWriter(path))
+            {
+                w.WriteLine("PatientName,Diagnosis");
+                for (var i = 0; i < sampleNames.Length; i++)
+                    w.WriteLine($"{sampleNames[i]},{(i % 2 == 0 ? "AD" : "Control")}");
+            }
+
+            var before = d.MetadataColumns.Count;
+            var result = d.AttachClinical(path);
+
+            Assert.Equal("PatientName", result.KeyColumn);
+            Assert.Equal(1.0, result.MatchRate, 9); // every sample name is present in the CSV
+            Assert.Contains("Diagnosis", result.AddedColumns);
+            Assert.Equal(before + 1, d.MetadataColumns.Count);
+
+            // Every sample got a non-null Diagnosis and both categories are represented. (Bare sample
+            // names collide across merged plates, so exact per-index values are not asserted.)
+            var diag = d.MetadataValues("Diagnosis");
+            Assert.All(diag, v => Assert.False(string.IsNullOrEmpty(v)));
+            Assert.Contains("AD", diag);
+            Assert.Contains("Control", diag);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AttachClinical_NoMatch_AddsNothing()
+    {
+        var d = DifferentialDataset.Load(MiniOutput, FeatureLevel.Protein);
+        var before = d.MetadataColumns.Count;
+
+        var path = Path.Combine(Path.GetTempPath(), $"prism-clin-{Guid.NewGuid():N}.csv");
+        try
+        {
+            File.WriteAllText(path, "Unrelated,Value\nZZZ-999,foo\nYYY-888,bar\n");
+            var result = d.AttachClinical(path);
+
+            Assert.Null(result.KeyColumn);
+            Assert.Empty(result.AddedColumns);
+            Assert.Equal(before, d.MetadataColumns.Count);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

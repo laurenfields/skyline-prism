@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using SkylinePrism.Core.IO;
 
 namespace SkylinePrism.Core.DifferentialAnalysis;
@@ -13,6 +14,10 @@ public enum FeatureLevel
     Peptide,
 }
 
+/// <summary>Outcome of joining a clinical metadata CSV to a dataset.</summary>
+public sealed record ClinicalAttachResult(
+    string? KeyColumn, double MatchRate, int ClinicalColumnCount, IReadOnlyList<string> AddedColumns);
+
 /// <summary>
 /// A loaded PRISM output ready for differential analysis, ported from the explorer's
 /// <c>load_prism</c>. Reads the corrected (LINEAR-scale) protein or peptide matrix and
@@ -23,6 +28,7 @@ public enum FeatureLevel
 public sealed class DifferentialDataset
 {
     private readonly Dictionary<string, string?[]> _metaByColumn;
+    private readonly List<string> _metadataColumns;
 
     private DifferentialDataset(FeatureLevel level, double[,] exprLog2, string[] featureIds,
         string[] featureLabels, string[] sampleIds, string idColumn, string labelColumn,
@@ -35,7 +41,7 @@ public sealed class DifferentialDataset
         SampleIds = sampleIds;
         IdColumn = idColumn;
         LabelColumn = labelColumn;
-        MetadataColumns = metadataColumns;
+        _metadataColumns = metadataColumns.ToList();
         _metaByColumn = metaByColumn;
     }
 
@@ -61,13 +67,178 @@ public sealed class DifferentialDataset
     public string LabelColumn { get; }
 
     /// <summary>Metadata columns available for building a contrast (e.g. sample_type, batch, ...).</summary>
-    public IReadOnlyList<string> MetadataColumns { get; }
+    public IReadOnlyList<string> MetadataColumns => _metadataColumns;
 
     /// <summary>Metadata values for <paramref name="column"/>, aligned to <see cref="SampleIds"/>.</summary>
     public string?[] MetadataValues(string column) =>
         _metaByColumn.TryGetValue(column, out var v)
             ? v
             : throw new ArgumentException($"Unknown metadata column '{column}'.", nameof(column));
+
+    /// <summary>
+    /// Join a clinical metadata CSV to the samples, ported from the explorer's <c>attach_clinical</c>.
+    /// The identifier column is auto-detected by value (<c>infer_clinical_key</c>): the column whose
+    /// values best match the sample names, preferring near one-to-one columns so a low-cardinality
+    /// column cannot win by coincidence. Every other clinical column is added to
+    /// <see cref="MetadataColumns"/> (suffixed <c>_clin</c> on a name clash), aligned to
+    /// <see cref="SampleIds"/>, so it becomes available for grouping and covariates. Returns null key
+    /// column (and adds nothing) when nothing matches at least half the samples.
+    /// </summary>
+    public ClinicalAttachResult AttachClinical(string clinicalCsvPath)
+    {
+        if (!File.Exists(clinicalCsvPath))
+            throw new FileNotFoundException($"Clinical CSV not found: {clinicalCsvPath}", clinicalCsvPath);
+
+        var lines = File.ReadAllLines(clinicalCsvPath);
+        if (lines.Length < 2)
+            return new ClinicalAttachResult(null, 0.0, 0, Array.Empty<string>());
+
+        var header = CsvLine.Split(lines[0]);
+        var rows = new List<string[]>(lines.Length - 1);
+        for (var r = 1; r < lines.Length; r++)
+            if (!string.IsNullOrEmpty(lines[r]))
+                rows.Add(CsvLine.Split(lines[r]));
+
+        var n = SampleIds.Length;
+        var names = _metaByColumn.TryGetValue("sample", out var s) ? s : null;
+        var sampleTok = new List<string>[n];
+        var nameUp = new string[n];
+        for (var i = 0; i < n; i++)
+        {
+            var nm = names?[i] ?? SampleIds[i];
+            sampleTok[i] = SampleKeys(nm);
+            nameUp[i] = nm.Trim().ToUpperInvariant();
+        }
+
+        string? bestCol = null;
+        double bestRate = 0;
+        Dictionary<int, int>? bestMap = null;
+        var bestScore = -1.0;
+        for (var c = 0; c < header.Length; c++)
+        {
+            var mapping = MatchClinicalColumn(rows, c, sampleTok, nameUp, n);
+            if (mapping.Count == 0)
+                continue;
+            var rate = mapping.Count / (double)n;
+            var oneToOne = mapping.Values.Distinct().Count() / (double)mapping.Count;
+            var score = rate * oneToOne;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestCol = header[c];
+                bestRate = rate;
+                bestMap = mapping;
+            }
+        }
+
+        if (bestCol is null || bestMap is null || bestRate < 0.5)
+            return new ClinicalAttachResult(null, bestRate, 0, Array.Empty<string>());
+
+        var keyIdx = Array.IndexOf(header, bestCol);
+        var added = new List<string>();
+        for (var c = 0; c < header.Length; c++)
+        {
+            if (c == keyIdx)
+                continue;
+            var name = _metaByColumn.ContainsKey(header[c]) ? header[c] + "_clin" : header[c];
+            var values = new string?[n];
+            for (var i = 0; i < n; i++)
+            {
+                if (bestMap.TryGetValue(i, out var r) && c < rows[r].Length && !string.IsNullOrEmpty(rows[r][c]))
+                    values[i] = rows[r][c];
+                else
+                    values[i] = null;
+            }
+
+            _metaByColumn[name] = values;
+            _metadataColumns.Add(name);
+            added.Add(name);
+        }
+
+        return new ClinicalAttachResult(bestCol, bestRate, header.Length - 1, added);
+    }
+
+    /// <summary>Candidate identifier tokens for a sample name (full name, trailing token, then every
+    /// token), upper-cased and de-duplicated - the explorer's <c>_sample_keys</c>.</summary>
+    private static List<string> SampleKeys(string name)
+    {
+        var nm = (name ?? string.Empty).Trim();
+        var parts = Regex.Split(nm, @"[-_\s/]+").Where(p => p.Length > 0).ToList();
+        var raw = new List<string> { nm };
+        if (parts.Count > 0)
+            raw.Add(parts[^1]);
+        raw.AddRange(parts);
+
+        var outp = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var k in raw)
+        {
+            var ku = k.ToUpperInvariant();
+            if (ku.Length > 0 && seen.Add(ku))
+                outp.Add(ku);
+        }
+
+        return outp;
+    }
+
+    /// <summary>Map sample index to clinical row index for one column by exact token then substring
+    /// match - the explorer's <c>_match_clinical_column</c>.</summary>
+    private static Dictionary<int, int> MatchClinicalColumn(List<string[]> rows, int colIdx,
+        List<string>[] sampleTok, string[] nameUp, int n)
+    {
+        var valToRow = new Dictionary<string, int>(StringComparer.Ordinal);
+        var longVals = new List<(string Val, int Row)>();
+        for (var r = 0; r < rows.Count; r++)
+        {
+            if (colIdx >= rows[r].Length)
+                continue;
+            var raw = rows[r][colIdx];
+            if (string.IsNullOrEmpty(raw))
+                continue;
+            var key = raw.Trim().ToUpperInvariant();
+            if (key.Length == 0 || valToRow.ContainsKey(key))
+                continue;
+            valToRow[key] = r;
+            if (key.Length >= 3)
+                longVals.Add((key, r));
+        }
+
+        var mapping = new Dictionary<int, int>();
+        for (var i = 0; i < n; i++)
+        {
+            var hit = -1;
+            foreach (var k in sampleTok[i])
+                if (valToRow.TryGetValue(k, out var r))
+                {
+                    hit = r;
+                    break;
+                }
+
+            if (hit < 0)
+            {
+                var up = nameUp[i];
+                foreach (var k in sampleTok[i])
+                {
+                    if (k.Length < 4)
+                        continue;
+                    foreach (var (val, r) in longVals)
+                        if (val.Contains(k, StringComparison.Ordinal) || up.Contains(val, StringComparison.Ordinal))
+                        {
+                            hit = r;
+                            break;
+                        }
+
+                    if (hit >= 0)
+                        break;
+                }
+            }
+
+            if (hit >= 0)
+                mapping[i] = hit;
+        }
+
+        return mapping;
+    }
 
     /// <summary>
     /// Load the corrected matrix and sample metadata from a run's <paramref name="outputDir"/>.

@@ -34,6 +34,7 @@ public partial class MainWindow
     private Dictionary<string, string> _diffLabelById = new(StringComparer.Ordinal);
     private DetectionMatrixData? _detectionData;
     private string? _detectionDir;
+    private string? _clinicalCsvPath;
     private List<QcGroupValue> _diffCovariateValues = new();
     private HttpJsonPoster? _diffPoster;
     private bool _diffSuppress;
@@ -146,6 +147,19 @@ public partial class MainWindow
         for (var i = 0; i < ds.FeatureIds.Length; i++)
             _diffLabelById[ds.FeatureIds[i]] =
                 string.IsNullOrEmpty(ds.FeatureLabels[i]) ? ds.FeatureIds[i] : ds.FeatureLabels[i];
+
+        // Re-apply a previously attached clinical CSV to the freshly loaded dataset (best-effort).
+        if (_clinicalCsvPath is not null && File.Exists(_clinicalCsvPath))
+        {
+            try
+            {
+                ds.AttachClinical(_clinicalCsvPath);
+            }
+            catch
+            {
+                // a mismatched clinical file just adds nothing; not fatal
+            }
+        }
 
         _diffSuppress = true;
         try
@@ -265,6 +279,65 @@ public partial class MainWindow
         if (_diffSuppress)
             return;
         PopulateDiffGroupValues();
+    }
+
+    /// <summary>
+    /// Attach an external clinical metadata CSV, joined to the loaded samples by an auto-detected key
+    /// column (the explorer's attach_clinical). Its columns become available for grouping and covariate
+    /// adjustment. The path is remembered so a later level/reload re-applies it.
+    /// </summary>
+    private void OnAttachClinical(object sender, RoutedEventArgs e)
+    {
+        if (_diffDataset is null)
+        {
+            DiffStatusText.Text = "Load a differential dataset first, then attach a clinical CSV.";
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Attach clinical metadata CSV",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog(this) != true)
+            return;
+
+        try
+        {
+            var result = _diffDataset.AttachClinical(dlg.FileName);
+            if (result.KeyColumn is null || result.AddedColumns.Count == 0)
+            {
+                DiffStatusText.Text =
+                    $"No clinical column matched the samples (best match rate {result.MatchRate:P0}). " +
+                    "Nothing was added.";
+                return;
+            }
+
+            _clinicalCsvPath = dlg.FileName;
+
+            // Refresh the group-by choices so the new clinical columns appear; select the first one.
+            _diffSuppress = true;
+            try
+            {
+                DiffGroupByCombo.ItemsSource = null;
+                DiffGroupByCombo.ItemsSource = _diffDataset.MetadataColumns;
+                DiffGroupByCombo.SelectedItem = result.AddedColumns[0];
+            }
+            finally
+            {
+                _diffSuppress = false;
+            }
+
+            PopulateDiffGroupValues();
+            DiffStatusText.Text =
+                $"Attached {result.AddedColumns.Count} clinical column(s) via key '{result.KeyColumn}' " +
+                $"(matched {result.MatchRate:P0} of samples): {string.Join(", ", result.AddedColumns)}.";
+        }
+        catch (Exception ex)
+        {
+            DiffStatusText.Text = $"Could not attach clinical CSV: {ex.Message}";
+        }
     }
 
     private async void OnDiffViewChanged(object sender, SelectionChangedEventArgs e)
