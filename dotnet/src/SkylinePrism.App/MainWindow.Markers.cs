@@ -202,9 +202,9 @@ public partial class MainWindow
 
         if (result.MarkerLabels.Length == 0)
         {
-            MarkersHeatPlot.Plot.Clear();
+            MarkersHeatPlot.Reset();
             MarkersHeatPlot.Refresh();
-            MarkersBoxPlot.Plot.Clear();
+            MarkersBoxPlot.Reset();
             MarkersBoxPlot.Refresh();
             MarkersStatusText.Text =
                 $"None of {choice.List.Name}'s {result.Total} members matched a {_markersLevel.ToString().ToLowerInvariant()} feature.";
@@ -214,8 +214,8 @@ public partial class MainWindow
             return;
         }
 
+        MarkersHeatPlot.Reset();
         var heat = MarkersHeatPlot.Plot;
-        heat.Clear();
         PlotRenderer.DrawValueHeatmap(heat, result.Heatmap, result.ColumnLabels, result.MarkerLabels,
             result.SymmetricMax, "row z-score", annotate: !perSample && result.MarkerLabels.Length <= 30);
         heat.Title($"{choice.List.Name} (row z-scored log2) - "
@@ -234,8 +234,8 @@ public partial class MainWindow
 
     private void DrawMarkerBoxplot(MarkerPanelResult result, string groupCol)
     {
+        MarkersBoxPlot.Reset();
         var plt = MarkersBoxPlot.Plot;
-        plt.Clear();
 
         var boxes = new List<ScottPlot.Box>();
         for (var g = 0; g < result.GroupNames.Length; g++)
@@ -289,10 +289,24 @@ public partial class MainWindow
         for (var g = 0; g < pos.Length; g++)
             pos[g] = g;
         plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, result.GroupNames);
-        plt.Axes.SetLimitsX(-0.6, result.GroupNames.Length - 0.4);
         plt.XLabel(groupCol);
         plt.YLabel("mean marker z-score");
         PlotRenderer.StyleQcPlot(plt);
+
+        // Pin both axes: X to the group slots, Y to the actual score range (auto-scale over-pads to
+        // a round +/-10 when the panel scores sit near zero).
+        var allScores = result.PanelScoreByGroup.SelectMany(v => v).Where(double.IsFinite).ToList();
+        double yMin = -1, yMax = 1;
+        if (allScores.Count > 0)
+        {
+            yMin = allScores.Min();
+            yMax = allScores.Max();
+            var pad = Math.Max(0.2, (yMax - yMin) * 0.1);
+            yMin -= pad;
+            yMax += pad;
+        }
+
+        plt.Axes.SetLimits(-0.6, result.GroupNames.Length - 0.4, yMin, yMax);
         MarkersBoxPlot.Refresh();
     }
 }

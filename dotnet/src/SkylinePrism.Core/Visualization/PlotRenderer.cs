@@ -920,11 +920,17 @@ public static partial class PlotRenderer
         plt.Axes.Top.FrameLineStyle.Width = 0;
         plt.Axes.Left.MajorTickStyle.Length = 0;
         plt.Axes.Bottom.MajorTickStyle.Length = 0;
-        plt.Axes.Left.TickLabelStyle.FontSize = 12;
+        // Row labels shrink as the panel grows so a big marker set does not overlap into an unreadable
+        // smear; columns are far fewer, so they keep a readable size.
+        plt.Axes.Left.TickLabelStyle.FontSize = nRows > 60 ? 6 : nRows > 45 ? 7 : nRows > 30 ? 9 : 12;
         plt.Axes.Bottom.TickLabelStyle.FontSize = 12;
         plt.Axes.Left.TickLabelStyle.Alignment = Alignment.MiddleRight;
         plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
         plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
+
+        // Pin the view to the cell extent so the grid fills the plot (auto-scale leaves it floating in a
+        // corner when the plot is much wider than the grid, and the colorbar/annotations skew the fit).
+        plt.Axes.SetLimits(0, nCols, 0, nRows);
     }
 
     /// <summary>
