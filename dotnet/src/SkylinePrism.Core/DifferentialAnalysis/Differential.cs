@@ -127,7 +127,7 @@ public sealed class DifferentialResult
     /// <summary>Empirical-Bayes prior degrees of freedom. May be <see cref="double.PositiveInfinity"/>.</summary>
     public double DfPrior { get; }
 
-    /// <summary>Variance-prior mode; currently always <c>global</c>.</summary>
+    /// <summary>Which variance prior was fitted (<c>global</c>, <c>intensity_trend</c>, ...).</summary>
     public string VariancePrior { get; }
 
     /// <summary>Design columns actually used, excluding the intercept and group term.</summary>
@@ -144,9 +144,14 @@ public sealed class DifferentialResult
 /// Two-group differential abundance via a limma empirical-Bayes moderated t-test, ported from the
 /// PRISM Differential Explorer's <c>differential</c> (prism_diff_explorer.py). Fits the shared design
 /// [intercept, groupB] per feature (<see cref="LinearModel"/>), moderates the residual variances
-/// (<see cref="EmpiricalBayes"/>, global prior), and reports the moderated t, its two-sided p-value on
-/// <c>df_residual + df_prior</c> degrees of freedom, and the Benjamini-Hochberg adjusted p-value. B is
-/// the treatment arm, so a positive <c>logFC</c> is higher in B.
+/// (<see cref="EmpiricalBayes"/>, under the prior <see cref="DifferentialOptions.Prior"/> selects), and
+/// reports the moderated t, its two-sided p-value on <c>df_residual + df_prior</c> degrees of freedom,
+/// and the adjusted p-value under <see cref="DifferentialOptions.Correction"/>. B is the treatment arm,
+/// so a positive <c>logFC</c> is higher in B.
+///
+/// <para>The simple tests (<see cref="SimpleTests"/>) and the paired designs route through the same
+/// <see cref="Run(double[,], IReadOnlyList{string}, IReadOnlyList{int}, IReadOnlyList{int}, DifferentialOptions)"/>
+/// entry point, so every caller gets the same row shape whichever estimator ran.</para>
 /// </summary>
 public static class Differential
 {

@@ -20,7 +20,7 @@ as the GitHub Release description and fails if it is missing.
 - **Per-feature boxplots.** Clicking a point on the Volcano plot - or a row in the hit table - opens a
   detail window with that feature's log2 abundance split into a boxplot per contrast group, with jittered
   per-sample points and the log2FC / adj.P in the title. Hovering a point names the replicate it came
-  from. The per-group counts are labelled non-missing values rather than detections, because a Skyline
+  from. The per-group counts are labeled non-missing values rather than detections, because a Skyline
   export integrates an imputed peak boundary for every replicate - a finite value there need not be a
   detection (the Detection view is the on/off signal).
 - **Attach an external clinical CSV.** A top-level "Clinical CSV" input (beside the metadata report)
@@ -42,6 +42,15 @@ as the GitHub Release description and fails if it is missing.
   is offered separately as limma-trend: the two share a name in the literature but are different
   estimators and disagree by a median 3-7% on p-values, so the status line and the tooltip both name
   which one produced a result.
+- **`prism differential`: the whole statistical menu, headless.** The contrasts the Differential pane
+  runs are now a CLI command, so they no longer need Skyline or Windows:
+  `prism differential -d output/ --group-by condition -a Control -b Disease`. It takes `--level`,
+  `--design`, `--pair-by`, `--test`, `--prior`, `--prior-from-controls`, `--adjust-for`,
+  `--correction` and `--alpha`, and writes a results CSV whose header records the contrast, its
+  direction and the method that produced it. Each arm takes several levels and is their union, the
+  same as the pane's tick lists. The pane and the command share the arm resolution and the
+  estimators, so a contrast set up by clicking and one typed out give the same numbers - checked on
+  a 192-sample cohort, where the two agree bit for bit on log2FC, p and adjusted p.
 - **Either contrast arm can be the union of several groups.** A and B are tick lists, so
   e.g. `experimental + reference` can be contrasted against `qc` as a single arm. A value ticked in
   both arms is refused rather than silently dropped from one, because which side lost it would
@@ -50,7 +59,7 @@ as the GitHub Release description and fails if it is missing.
   **Test** (moderated t, Welch t, Student t, Mann-Whitney; paired t and Wilcoxon under a paired
   design) and **Correct** (Benjamini-Hochberg, Benjamini-Yekutieli, Holm, Bonferroni, none). The
   controls follow each other: a test that does not apply to the current design is hidden, the
-  variance prior appears only for the moderated t, and "Adjust for" greys out for the tests that
+  variance prior appears only for the moderated t, and "Adjust for" grays out for the tests that
   have no design matrix to hold a covariate. Every estimator is pinned to scipy or statsmodels by
   committed goldens, and the status line names the method, the sample counts actually used, and
   anything the request could not honor.
@@ -64,7 +73,7 @@ as the GitHub Release description and fails if it is missing.
   level out of the residual so a shift is tested against within-subject noise rather than against the
   spread between people. Subjects present in only one arm, or with several samples in an arm, are
   left out and counted rather than silently paired.
-- **The Detection view honours a paired design.** With a pairing column and no covariates it runs
+- **The Detection view honors a paired design.** With a pairing column and no covariates it runs
   **McNemar's exact test** over the matched subjects instead of treating the arms as independent.
   Only the discordant pairs carry information, so both counts are reported beside the rates rather
   than left implied. A ticked covariate still falls back to the unpaired Firth GLM - adjusting a
@@ -93,7 +102,7 @@ as the GitHub Release description and fails if it is missing.
   O(samples^2) loop per feature.
 - **The QC PCA can be grouped by the run's own metadata and by a clinical CSV.** Its "Group by"
   list used to come only from an exported Skyline Replicates report, so a run produced by the CLI
-  offered nothing but Sample Type - and a batch-correction tool could not colour its PCA by batch.
+  offered nothing but Sample Type - and a batch-correction tool could not color its PCA by batch.
   It now also reads the run's `sample_metadata.csv` (which supplies `batch`) and any clinical CSV
   attached in the Differential pane. The QC PCA also gained a component-pair selector up to PC6,
   with each component's variance-explained on its axis.

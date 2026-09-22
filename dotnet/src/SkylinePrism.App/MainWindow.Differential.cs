@@ -209,28 +209,13 @@ public partial class MainWindow
     /// The run's QC and reference sample columns, for fitting the variance prior on controls rather
     /// than on the contrast groups. Null when there are too few to fit anything.
     /// </summary>
-    /// <remarks>
-    /// Two is the minimum a variance can be computed from at all, so fewer than that is not a thin
-    /// prior but no prior - the caller turns the option off rather than falling back silently.
-    /// </remarks>
+    /// <remarks>Grouping and the two-sample floor are <see cref="ControlSampleTypes.PriorGroups"/>.</remarks>
     private IReadOnlyList<IReadOnlyList<int>>? DiffControlColumns()
     {
         if (_diffDataset is null || !_diffDataset.MetadataColumns.Contains("sample_type"))
             return null;
 
-        var types = _diffDataset.MetadataValues("sample_type");
-
-        // One group per control TYPE, not one pooled set: the variance is computed within a group,
-        // so pooling QC and reference - different materials, injected at different amounts - would
-        // count the systematic gap between them as measurement noise.
-        var groups = Enumerable.Range(0, types.Length)
-            .Where(i => QcGroupFilter.IsControlValue(types[i]))
-            .GroupBy(i => types[i], StringComparer.Ordinal)
-            .Select(g => (IReadOnlyList<int>)g.ToList())
-            .Where(g => g.Count >= 2) // a group of one has no variance to contribute
-            .ToList();
-
-        return groups.Count > 0 ? groups : null;
+        return ControlSampleTypes.PriorGroups(_diffDataset.MetadataValues("sample_type"));
     }
 
     /// <summary>What the contrast views should run: the current selections, as Core sees them.</summary>
@@ -775,32 +760,16 @@ public partial class MainWindow
 
         var aSet = _diffAValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
         var bSet = _diffBValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
-        if (aSet.Count == 0 || bSet.Count == 0)
-            return false;
-
-        // A value in both arms would put the same samples on both sides of the contrast, which is
-        // not a contrast. Refused here rather than silently dropped from one side, because which
-        // side it was dropped from would change the answer.
-        if (aSet.Intersect(bSet, StringComparer.Ordinal).Any())
+        var arms = ContrastArms.Resolve(_diffDataset.MetadataValues(c), aSet, bSet);
+        if (!arms.Ok)
             return false;
 
         col = c;
-        aVal = string.Join(" + ", aSet);
-        bVal = string.Join(" + ", bSet);
-        var inA = new HashSet<string>(aSet, StringComparer.Ordinal);
-        var inB = new HashSet<string>(bSet, StringComparer.Ordinal);
-        var meta = _diffDataset.MetadataValues(c);
-        for (var j = 0; j < meta.Length; j++)
-        {
-            if (meta[j] is not { } v)
-                continue;
-            if (inA.Contains(v))
-                groupA.Add(j);
-            else if (inB.Contains(v))
-                groupB.Add(j);
-        }
-
-        return groupA.Count > 0 && groupB.Count > 0;
+        aVal = ContrastArms.Describe(aSet);
+        bVal = ContrastArms.Describe(bSet);
+        groupA = arms.A.ToList();
+        groupB = arms.B.ToList();
+        return true;
     }
 
     /// <summary>

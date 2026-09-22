@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using SkylinePrism.Core.Config;
+using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
@@ -39,6 +41,7 @@ public static class Program
                 "run" => CmdRun(rest),
                 "merge" => CmdMerge(rest),
                 "qc" => CmdQc(rest),
+                "differential" => CmdDifferential(rest),
                 "ion-accounting" => CmdIonAccounting(rest),
                 "isolation-scheme" => CmdIsolationScheme(rest),
                 "compare" => CmdCompare(rest),
@@ -185,6 +188,248 @@ public static class Program
         Console.WriteLine($"QC report written to: {path}");
         return 0;
     }
+
+    /// <summary>
+    /// Two-group differential abundance against a finished output directory - the whole statistical
+    /// menu the Differential pane offers, from a headless shell.
+    /// </summary>
+    /// <remarks>
+    /// Its own command, and never part of <c>prism run</c>: a contrast is a question asked OF a
+    /// finished result, and the same result answers many of them. It reads
+    /// <c>corrected_{peptides,proteins}.parquet</c> and <c>sample_metadata.csv</c> and writes
+    /// nothing back, so it cannot disturb the run it reads.
+    ///
+    /// <para>Arms are resolved by <see cref="ContrastArms"/>, the same code the GUI uses, so a
+    /// selection made in the pane and one typed here cannot mean different samples.</para>
+    /// </remarks>
+    private static int CmdDifferential(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string> { "-a", "--group-a", "-b", "--group-b", "--adjust-for" });
+        var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
+        var groupBy = opts.GetSingleOrNull("-g", "--group-by");
+        // Both spellings on both arms: a level with a space in it is one -a argument, several levels
+        // are several, and a comma-separated list is what a reader reaches for first.
+        var aLevels = SplitLevels(opts.GetList("-a", "--group-a"));
+        var bLevels = SplitLevels(opts.GetList("-b", "--group-b"));
+        if (dir is null || groupBy is null || aLevels.Count == 0 || bLevels.Count == 0)
+        {
+            Console.Error.WriteLine(
+                "Usage: prism differential -d <output-dir> --group-by <column> -a <level...> -b <level...>");
+            Console.Error.WriteLine("Run 'prism differential --help' for the full option list.");
+            return 2;
+        }
+
+        var level = (opts.GetSingleOrNull("--level") ?? "protein").ToLowerInvariant() switch
+        {
+            "peptide" or "peptides" => FeatureLevel.Peptide,
+            "protein" or "proteins" => FeatureLevel.Protein,
+            var other => throw new ArgumentException($"--level must be protein or peptide, not '{other}'"),
+        };
+
+        var dataset = DifferentialDataset.Load(dir, level);
+        if (!dataset.MetadataColumns.Contains(groupBy))
+            throw new ArgumentException(
+                $"No metadata column '{groupBy}'. Available: {string.Join(", ", dataset.MetadataColumns)}");
+
+        var arms = ContrastArms.Resolve(dataset.MetadataValues(groupBy), aLevels, bLevels);
+        if (!arms.Ok)
+        {
+            Console.Error.WriteLine($"Error: {arms.Error}");
+            var present = dataset.MetadataValues(groupBy)
+                .Where(v => !string.IsNullOrEmpty(v)).Distinct(StringComparer.Ordinal)
+                .OrderBy(v => v, StringComparer.Ordinal);
+            Console.Error.WriteLine($"Values of '{groupBy}': {string.Join(", ", present)}");
+            return 2;
+        }
+
+        var options = DifferentialOptionsFrom(opts, dataset, groupBy);
+        var result = Differential.Run(dataset.ExprLog2, dataset.FeatureIds, arms.A, arms.B, options);
+
+        var aLabel = ContrastArms.Describe(aLevels);
+        var bLabel = ContrastArms.Describe(bLevels);
+        Console.WriteLine($"{options.Describe()}: {groupBy} = {bLabel} vs {aLabel}");
+        Console.WriteLine(
+            $"  n = {result.NA} vs {result.NB}; {result.NFeaturesTested} of {result.NFeaturesTotal} "
+            + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
+        foreach (var m in result.Messages.Concat(result.Warnings))
+            Console.WriteLine($"  {m}");
+
+        // The count is the headline, so say what it counts: the same list under BY and under BH is
+        // two different claims, and a bare "41 significant" records neither.
+        var alpha = ParseDouble(opts.GetSingleOrNull("--alpha"), 0.05);
+        var hits = result.Rows.Count(r => r.AdjPValue <= alpha);
+        Console.WriteLine($"  {hits} at adjusted p <= {alpha.ToString(CultureInfo.InvariantCulture)}"
+            + $" ({CorrectionName(options.Correction)})");
+
+        var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
+        WriteDifferentialCsv(outPath, result, dataset, options, groupBy, aLabel, bLabel);
+        Console.WriteLine($"Results written to: {outPath}");
+        return 0;
+    }
+
+    /// <summary>Levels from repeated flags and/or comma-separated lists, in the order given.</summary>
+    private static List<string> SplitLevels(IEnumerable<string> raw) =>
+        raw.SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+           .ToList();
+
+    private static double ParseDouble(string? text, double fallback) =>
+        text is not null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? v : fallback;
+
+    private static string CorrectionName(MultipleTesting correction) => correction switch
+    {
+        MultipleTesting.BenjaminiHochberg => "Benjamini-Hochberg",
+        MultipleTesting.BenjaminiYekutieli => "Benjamini-Yekutieli",
+        MultipleTesting.Bonferroni => "Bonferroni",
+        MultipleTesting.Holm => "Holm",
+        _ => "uncorrected",
+    };
+
+    /// <summary>The statistical selections, read from the flags the same way the pane reads combos.</summary>
+    private static DifferentialOptions DifferentialOptionsFrom(
+        ParsedOptions opts, DifferentialDataset dataset, string groupBy)
+    {
+        var design = (opts.GetSingleOrNull("--design") ?? "unpaired").ToLowerInvariant() switch
+        {
+            "unpaired" => DifferentialDesign.Unpaired,
+            "paired" => DifferentialDesign.Paired,
+            var other => throw new ArgumentException($"--design must be unpaired or paired, not '{other}'"),
+        };
+        var test = (opts.GetSingleOrNull("--test") ?? "moderated").ToLowerInvariant() switch
+        {
+            "moderated" or "moderated-t" => DifferentialTest.ModeratedT,
+            "welch" or "welch-t" => DifferentialTest.WelchT,
+            "student" or "student-t" => DifferentialTest.StudentT,
+            "paired-t" => DifferentialTest.PairedT,
+            "wilcoxon" => DifferentialTest.Wilcoxon,
+            "mann-whitney" or "mannwhitney" => DifferentialTest.MannWhitney,
+            var other => throw new ArgumentException($"Unknown --test '{other}'"),
+        };
+        var prior = (opts.GetSingleOrNull("--prior") ?? "intensity-trend").ToLowerInvariant() switch
+        {
+            "intensity-trend" => VariancePrior.IntensityTrend,
+            "global" => VariancePrior.Global,
+            "limma-trend" => VariancePrior.LimmaTrend,
+            "peptide-count" => VariancePrior.PeptideCount,
+            var other => throw new ArgumentException($"Unknown --prior '{other}'"),
+        };
+        var correction = (opts.GetSingleOrNull("--correction") ?? "bh").ToLowerInvariant() switch
+        {
+            "bh" or "benjamini-hochberg" => MultipleTesting.BenjaminiHochberg,
+            "by" or "benjamini-yekutieli" => MultipleTesting.BenjaminiYekutieli,
+            "holm" => MultipleTesting.Holm,
+            "bonferroni" => MultipleTesting.Bonferroni,
+            "none" => MultipleTesting.None,
+            var other => throw new ArgumentException($"Unknown --correction '{other}'"),
+        };
+
+        string?[]? subjects = null;
+        var pairBy = opts.GetSingleOrNull("--pair-by");
+        if (design == DifferentialDesign.Paired)
+        {
+            if (pairBy is null)
+                throw new ArgumentException("--design paired needs --pair-by <column> to match samples on.");
+            if (!dataset.MetadataColumns.Contains(pairBy))
+                throw new ArgumentException($"No metadata column '{pairBy}' to pair by.");
+            subjects = dataset.MetadataValues(pairBy);
+        }
+        else if (pairBy is not null)
+        {
+            // Silently ignoring it would report an unpaired result for a command that reads paired.
+            throw new ArgumentException("--pair-by needs --design paired.");
+        }
+
+        var covariates = new List<Covariate>();
+        foreach (var name in SplitLevels(opts.GetList("--adjust-for")))
+        {
+            if (!dataset.MetadataColumns.Contains(name))
+                throw new ArgumentException($"No metadata column '{name}' to adjust for.");
+            if (string.Equals(name, groupBy, StringComparison.Ordinal))
+                throw new ArgumentException(
+                    $"'{name}' is the contrast itself; adjusting for it would leave nothing to test.");
+            covariates.Add(Covariate.FromMetadata(name, dataset.MetadataValues(name)));
+        }
+        if (covariates.Count > 0 && test != DifferentialTest.ModeratedT)
+            throw new ArgumentException(
+                "--adjust-for needs --test moderated; the other tests have no design matrix to put a "
+                + "covariate in.");
+
+        IReadOnlyList<IReadOnlyList<int>>? priorGroups = null;
+        if (opts.GetSingleOrNull("--prior-from-controls") is not null)
+        {
+            if (!dataset.MetadataColumns.Contains("sample_type"))
+                throw new ArgumentException("--prior-from-controls needs a sample_type column.");
+            priorGroups = ControlSampleTypes.PriorGroups(dataset.MetadataValues("sample_type"))
+                ?? throw new ArgumentException(
+                    "--prior-from-controls found no control type with two or more replicates.");
+        }
+
+        return new DifferentialOptions
+        {
+            Design = design,
+            Test = test,
+            Prior = prior,
+            Correction = correction,
+            SubjectLabels = subjects,
+            PeptideCounts = dataset.PeptideCounts,
+            PriorGroupColumns = priorGroups,
+            Covariates = covariates.Count > 0 ? covariates : null,
+            MinPerGroup = (int)ParseDouble(opts.GetSingleOrNull("--min-per-group"), 2),
+        };
+    }
+
+    /// <summary>
+    /// Write the result table, in the row order the test produced (most significant first).
+    /// </summary>
+    /// <remarks>
+    /// The header carries the contrast and the method as <c>#</c> comment lines, because a results
+    /// file outlives the shell it was produced in and "which way round is the fold change" is the
+    /// first question anyone asks of one. Invariant culture throughout, as every other PRISM writer:
+    /// a decimal comma would make the file unreadable as CSV.
+    /// </remarks>
+    private static void WriteDifferentialCsv(
+        string path, DifferentialResult result, DifferentialDataset dataset,
+        DifferentialOptions options, string groupBy, string aLabel, string bLabel)
+    {
+        var dirName = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(dirName))
+            Directory.CreateDirectory(dirName);
+
+        using var w = new StreamWriter(path);
+        w.WriteLine($"# contrast: {groupBy} = {bLabel} vs {aLabel} (positive log2FC is higher in {bLabel})");
+        w.WriteLine($"# method: {options.Describe()}, {CorrectionName(options.Correction)}");
+        w.WriteLine($"# n: {result.NA} vs {result.NB}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
+        w.WriteLine("feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
+            + "p_value,adj_p_value,mean_a,mean_b");
+        foreach (var r in result.Rows)
+        {
+            // A feature the matrix carried no annotation for keeps its id and leaves the rest
+            // empty, rather than repeating the id into columns that mean something else.
+            var identity = dataset.IdentityOf(r.FeatureId);
+            w.WriteLine(string.Join(',', new[]
+            {
+                Csv(r.FeatureId),
+                Csv(identity?.Label ?? r.FeatureId),
+                Csv(Join(identity?.Genes)),
+                Csv(Join(identity?.ProteinNames)),
+                Csv(Join(identity?.Accessions)),
+                Num(r.LogFc), Num(r.Fc), Num(r.AveExpr), Num(r.T),
+                Num(r.PValue), Num(r.AdjPValue), Num(r.MeanA), Num(r.MeanB),
+            }));
+        }
+    }
+
+    /// <summary>A shared feature's several groups, semicolon-joined so the cell stays one field.</summary>
+    private static string Join(IReadOnlyList<string>? values) =>
+        values is null ? string.Empty : string.Join(';', values.Where(v => !string.IsNullOrEmpty(v)));
+
+    private static string Num(double v) =>
+        double.IsNaN(v) ? string.Empty : v.ToString("G17", CultureInfo.InvariantCulture);
+
+    private static string Csv(string v) =>
+        v.Contains(',') || v.Contains('"') || v.Contains('\n')
+            ? '"' + v.Replace("\"", "\"\"") + '"'
+            : v;
 
     /// <summary>
     /// Measure acquired and assigned ions from the instrument files, and cache the result.
@@ -511,6 +756,7 @@ public static class Program
         "run" => RunHelp,
         "merge" => MergeHelp,
         "qc" => QcHelp,
+        "differential" => DifferentialHelp,
         "ion-accounting" => IonAccountingHelp,
         "isolation-scheme" => IsolationSchemeHelp,
         "compare" => CompareHelp,
@@ -532,6 +778,9 @@ public static class Program
             # Merge several Skyline reports into one parquet
             prism merge plate1.csv plate2.csv -o data.parquet
 
+            # Test disease against control at protein level
+            prism differential -d output/ --group-by condition -a Control -b Disease
+
             # Emit an annotated configuration template
             prism config-template -o config.yaml
 
@@ -541,6 +790,7 @@ public static class Program
             run                Run the full PRISM pipeline (rollup, normalize, batch-correct, QC)
             merge              Merge Skyline transition reports into one parquet
             qc                 (Re)generate the QC report from an existing output directory
+            differential       Two-group differential abundance on a finished output directory
             ion-accounting     Count acquired ions and the fraction assigned to a peptide
             isolation-scheme   Read the acquisition's DIA isolation windows and record them
             compare            Compare control-sample CVs between two runs
@@ -604,6 +854,64 @@ public static class Program
             -c, --config <FILE>   YAML configuration (optional; QC report settings only)
                 --no-save-plots   Embed the plots only; do not write qc_plots/*.png
             -h, --help            Show this help
+        """;
+
+    private const string DifferentialHelp = """
+        prism differential - Two-group differential abundance on a finished output directory
+
+        Tests one contrast against the corrected peptide or protein matrix a `prism run`
+        already produced, and writes a results table. Reads the output directory and
+        writes nothing back into it except the results file, so it cannot disturb the run.
+
+        This is the same engine, and the same statistical menu, as the Skyline tool's
+        Differential pane; the arms are resolved by the same code, so a contrast set up
+        in the pane and one typed here mean the same samples.
+
+        Usage: prism differential -d <output-dir> --group-by <column> -a <level...> -b <level...>
+
+        Required:
+            -d, --dir DIR          Output directory from `prism run`
+            -g, --group-by COL     Metadata column defining the groups
+            -a, --group-a LEVEL... Level(s) forming arm A (the reference arm)
+            -b, --group-b LEVEL... Level(s) forming arm B (the treatment arm)
+
+        Each arm takes several levels - repeat the flag, list them space-separated, or
+        comma-separate them - and the arm is their union. A level cannot be in both arms.
+        A positive log2FC means higher in B.
+
+        Options:
+            --level LEVEL          protein (default) or peptide
+            --design DESIGN        unpaired (default) or paired
+            --pair-by COL          Metadata column matching each subject's two samples;
+                                   required by, and only valid with, --design paired
+            --test TEST            moderated (default), welch, student, paired-t,
+                                   wilcoxon, mann-whitney
+            --prior PRIOR          Variance prior for the moderated t: intensity-trend
+                                   (default, matches the lab's proteomics-toolkit),
+                                   global, limma-trend, peptide-count
+            --prior-from-controls  Fit the variance prior on the QC and reference
+                                   replicates instead of on the contrast groups
+            --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
+            --correction METHOD    bh (default), by, holm, bonferroni, none
+            --alpha A              Adjusted-p threshold for the printed count (default 0.05)
+            --min-per-group N      Minimum samples per arm (default 2)
+            -o, --output FILE      Results CSV (default <output-dir>/differential.csv)
+
+        EXAMPLES:
+            # Disease against control, protein level, default moderated t
+            prism differential -d output/ --group-by condition -a Control -b Disease
+
+            # Two severity levels pooled into one arm, adjusted for sex and age
+            prism differential -d output/ --group-by stage -a Control Mild -b Severe \
+                --adjust-for sex,age
+
+            # A within-subject design: each subject's pre and post sample
+            prism differential -d output/ --group-by timepoint -a Pre -b Post \
+                --design paired --pair-by subject --test paired-t
+
+            # Peptide level, where BY is the correction to reach for
+            prism differential -d output/ --level peptide --group-by condition \
+                -a Control -b Disease --correction by
         """;
 
     private const string IonAccountingHelp = """

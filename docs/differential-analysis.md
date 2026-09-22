@@ -68,6 +68,42 @@ and not a mixed model; those are a different estimator and are not implemented. 
 that each subject's overall level leaves the residual, so a within-subject shift is tested against
 within-subject noise instead of against the spread between people.
 
+## From the command line
+
+The same analysis, against the same output directory, without Skyline or Windows:
+
+```bash
+prism differential -d output/ --group-by condition -a Control -b Disease
+```
+
+`prism differential` takes the whole menu above as flags - `--level`, `--design`, `--pair-by`,
+`--test`, `--prior`, `--prior-from-controls`, `--adjust-for`, `--correction` - and writes a results
+CSV (`differential.csv` in the output directory unless `-o` says otherwise) whose header records the
+contrast, its direction and the method that produced it. `prism differential --help` lists every
+flag with its default.
+
+Each arm takes several levels, and the arm is their **union**, so a three-level column can be
+collapsed into a two-group contrast in one command:
+
+```bash
+prism differential -d output/ --group-by stage -a Control Mild -b Severe --adjust-for sex,age
+```
+
+A level named on both sides is refused rather than dropped from one, because which side it was
+dropped from would change the answer and nothing in the output would record the choice.
+
+The pane and the command resolve their arms through the same `ContrastArms` in Core, and run the
+same `Differential.Run`, so a contrast set up by clicking and one typed out mean the same samples
+and give the same numbers - checked on a 192-sample cohort, where the two agree bit for bit on
+log2FC, p and adjusted p.
+
+One caveat worth knowing before comparing two runs of your own: **which arm is A and which is B is
+not a pure sign flip.** Swapping them reverses the sign of log2FC as you would expect, but it also
+changes the order values are accumulated in, so the magnitudes move in the last digit or two
+(around 1e-13 relative on that cohort). That is floating-point summation order, not a difference in
+what was computed - but it means two results are only comparable digit-for-digit if the arms were
+given the same way round.
+
 ## PRISM and `proteomics-toolkit` are not interchangeable
 
 The lab's [`proteomics-toolkit`](https://github.com/uw-maccosslab/proteomics-toolkit) implements the

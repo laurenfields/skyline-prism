@@ -582,6 +582,13 @@ suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
 [differential-analysis.md](differential-analysis.md), which also records where PRISM and the lab's
 `proteomics-toolkit` agree and where they do not.
 
+> [!NOTE]
+> **The same contrasts run headlessly.** `prism differential -d <output-dir> --group-by <column>
+> -a <level...> -b <level...>` takes the whole menu this pane offers - level, design, pairing column,
+> test, variance prior, covariates, correction - and writes a results CSV. It shares the arm
+> resolution and the estimators with this pane, so the two cannot disagree. See
+> [differential-analysis.md](differential-analysis.md#from-the-command-line).
+
 ### Attaching a clinical CSV
 
 The **Clinical CSV** input at the top of the window (beside the metadata report) joins an external
