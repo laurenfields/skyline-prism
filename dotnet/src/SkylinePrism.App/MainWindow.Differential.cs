@@ -218,6 +218,88 @@ public partial class MainWindow
         return ControlSampleTypes.PriorGroups(_diffDataset.MetadataValues("sample_type"));
     }
 
+    /// <summary>
+    /// The hit rule the pane is currently showing: which p, what cut, and how big an effect.
+    /// </summary>
+    /// <remarks>
+    /// Read on the UI thread and passed down, never re-read inside a Task.Run - touching a WPF
+    /// control from a worker thread throws, and this pane has already shipped that bug once.
+    /// </remarks>
+    private SignificanceRule DiffRule() => new()
+    {
+        UseAdjusted = (DiffPKindCombo.SelectedItem as ComboBoxItem)?.Tag as string != "Raw",
+        PThreshold = ComboNumber(DiffPCutCombo, fallback: 0.05, min: 0.0, max: 1.0),
+        Log2FcThreshold = ComboNumber(DiffEffectCutCombo, fallback: 1.0, min: 0.0, max: double.MaxValue),
+    };
+
+    /// <summary>
+    /// The number an editable combo is showing, or <paramref name="fallback"/> when it is not a
+    /// usable one.
+    /// </summary>
+    /// <remarks>
+    /// Silently falling back rather than refusing, because this runs on every keystroke-completed
+    /// edit and a half-typed "0.0" is a normal intermediate state, not an error worth a dialog. The
+    /// status line always prints the rule actually applied, so a rejected entry is visible there
+    /// rather than being swallowed. Out-of-range is clamped for the same reason: a p-value cut of 2
+    /// is a typo, and admitting every feature is a worse answer than admitting the usual ones.
+    /// </remarks>
+    private static double ComboNumber(ComboBox combo, double fallback, double min, double max)
+    {
+        var text = (combo.SelectedItem as ComboBoxItem)?.Content as string ?? combo.Text;
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+               && double.IsFinite(v)
+            ? Math.Clamp(v, min, max)
+            : fallback;
+    }
+
+    /// <summary>
+    /// A threshold changed. Only the hit RULE moved, not the model, so nothing needs refitting -
+    /// but re-running is what keeps every view agreeing, and a contrast is milliseconds once the
+    /// matrix is loaded.
+    /// </summary>
+    private async void OnDiffThresholdChanged(object sender, EventArgs e)
+    {
+        try
+        {
+            if (_diffSuppress || _diffDataset is null)
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffThresholdChanged), ex);
+        }
+    }
+
+    // WPF gives these three events three different delegate types, and a handler has to match its
+    // own exactly - so they are thin wrappers over the one body above rather than three copies that
+    // could drift.
+    private void OnDiffThresholdSelected(object sender, SelectionChangedEventArgs e)
+        => OnDiffThresholdChanged(sender, e);
+
+    private void OnDiffThresholdLostFocus(object sender, System.Windows.RoutedEventArgs e)
+        => OnDiffThresholdChanged(sender, e);
+
+    /// <summary>Enter in an editable threshold box commits it, the way tabbing away does.</summary>
+    private void OnDiffThresholdKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter)
+            return;
+        // Moving focus raises LostFocus, which is the one handler that runs the contrast - so the
+        // two routes commit through exactly the same path rather than two that can drift.
+        if (sender is System.Windows.UIElement el)
+            el.MoveFocus(new System.Windows.Input.TraversalRequest(
+                System.Windows.Input.FocusNavigationDirection.Next));
+    }
+
+    /// <summary>
+    /// What the effect on the volcano's x-axis is called, for the status line and the hit rule.
+    /// </summary>
+    private string DiffEffectName() => "log2FC";
+
+    /// <summary>The volcano's x-axis name.</summary>
+    private string DiffXAxisLabel() => "log2 fold change (B / A)";
+
     /// <summary>What the contrast views should run: the current selections, as Core sees them.</summary>
     private DifferentialOptions DiffOptions(IReadOnlyList<Covariate>? covariates) =>
         new()
@@ -344,6 +426,16 @@ public partial class MainWindow
                 DiffTestCombo.SelectedIndex = 0; // Moderated t
             if (DiffDesignCombo.SelectedItem is null)
                 DiffDesignCombo.SelectedIndex = 0; // Unpaired
+            // The hit rule's three controls. Index 0 is the conventional cut in each - adjusted p,
+            // 0.05, two-fold - and none of them is preselected in the XAML, because a Selector that
+            // raises SelectionChanged from EndInit runs the handler part way through
+            // InitializeComponent. See XamlInitializationOrderTests.
+            if (DiffPKindCombo.SelectedItem is null)
+                DiffPKindCombo.SelectedIndex = 0;
+            if (DiffPCutCombo.SelectedItem is null)
+                DiffPCutCombo.SelectedIndex = 0;
+            if (DiffEffectCutCombo.SelectedItem is null)
+                DiffEffectCutCombo.SelectedIndex = 0;
             if (DiffCorrectionCombo.SelectedItem is null)
                 DiffCorrectionCombo.SelectedIndex = 0; // Benjamini-Hochberg
         }
@@ -806,6 +898,10 @@ public partial class MainWindow
         var dataset = _diffDataset!;
         var covariates = SelectedCovariatesFor(dataset.SampleIds);
         var options = DiffOptions(covariates);
+        // Read BEFORE the worker starts. Reading it after the await would also work today, but the
+        // pane has already shipped one cross-thread control read from inside a Task.Run lambda, and
+        // a local captured up here cannot become one.
+        var rule = DiffRule();
         DifferentialResult res;
         try
         {
@@ -825,13 +921,13 @@ public partial class MainWindow
         (_volcanoGroupA, _volcanoGroupB) = ContrastColumns(a, b);
         _volcanoAName = aVal;
         _volcanoBName = bVal;
-        RenderVolcano(res);
+        RenderVolcano(res, rule);
         DiffGrid.ItemsSource = res.Rows.Select(r => new VolcanoRow(
             _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue,
             r.FeatureId))
             .ToList();
 
-        var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
+        var nSig = res.Rows.Count(rule.IsSignificant);
         var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
         // Name the method. With a menu this size the status line is the only record of what
         // produced a hit list, and any message Core raised (an unhonored covariate, a prior that
@@ -842,7 +938,8 @@ public partial class MainWindow
         // sizes would credit the result with samples that took no part in it.
         DiffStatusText.Text =
             $"{options.Describe()}: {aVal} (n={res.NA}) vs {bVal} (n={res.NB}) - "
-            + $"{res.NFeaturesTested} tested, {nSig} significant{adj}.{note} "
+            + $"{res.NFeaturesTested} tested, {nSig} significant ({rule.Describe(DiffEffectName())})"
+            + $"{adj}.{note} "
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
 
@@ -1086,6 +1183,8 @@ public partial class MainWindow
 
         var covariates = SelectedCovariatesFor(dataset.SampleIds);
         var options = DiffOptions(covariates);
+        // Same reason as the volcano path: read on the UI thread, before the worker exists.
+        var rule = DiffRule();
         DifferentialResult res;
         try
         {
@@ -1103,12 +1202,13 @@ public partial class MainWindow
             return;
 
         var (sig, background) = Enrichment.SigAndBackgroundGenes(
-            res, fid => _diffGeneById.GetValueOrDefault(fid), 0.05, 1.0);
+            res, fid => _diffGeneById.GetValueOrDefault(fid), rule);
         if (sig.Count == 0)
         {
             ClearDiffOutput();
             DiffStatusText.Text =
-                $"No significant genes (adj.P < 0.05, |log2FC| >= 1) for {aVal} vs {bVal} - nothing to enrich.";
+                $"No significant genes ({rule.Describe(DiffEffectName())}) for {aVal} vs {bVal} - "
+                + "nothing to enrich.";
             return;
         }
 
@@ -1544,7 +1644,12 @@ public partial class MainWindow
         _featureDetailWindow.Activate();
     }
 
-    private void RenderVolcano(DifferentialResult res)
+    /// <summary>
+    /// Draw the volcano. <paramref name="rule"/> is passed in rather than read here, so the points'
+    /// colouring, the guide lines and the caller's hit count are one decision made once - and so
+    /// this method never touches a WPF control that a worker thread might own.
+    /// </summary>
+    private void RenderVolcano(DifferentialResult res, SignificanceRule rule)
     {
         DiffPlot.Reset();
         var plt = DiffPlot.Plot;
@@ -1557,16 +1662,16 @@ public partial class MainWindow
         _volcanoRowById = new Dictionary<string, DifferentialRow>(StringComparer.Ordinal);
         foreach (var r in res.Rows)
         {
-            // The value the hit rule is applied to, which is also what the axis is labelled with:
-            // AdjPValue, and with Correct = None that column simply holds the raw p. Plotting raw p
-            // while deciding on q used to put the cut-off line at whatever raw p the weakest
-            // surviving hit happened to have - a number that moved with the data and matched nothing
-            // the reader could see.
-            var y = -Math.Log10(Math.Max(r.AdjPValue, 1e-300));
+            // The value the rule judges by, which is also what the axis is labelled with - so
+            // the cut-off line always sits where the colouring changes. Plotting one p while
+            // deciding on the other used to put the line at whatever raw p the weakest surviving
+            // hit happened to have: a number that moved with the data and matched nothing the
+            // reader could see.
+            var y = -Math.Log10(Math.Max(rule.PValueOf(r), 1e-300));
             if (double.IsFinite(r.LogFc) && double.IsFinite(y))
                 _volcanoPoints.Add((new ScottPlot.Coordinates(r.LogFc, y), r.FeatureId));
             _volcanoRowById[r.FeatureId] = r;
-            if (r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0)
+            if (rule.IsSignificant(r))
             {
                 sigX.Add(r.LogFc);
                 sigY.Add(y);
@@ -1580,23 +1685,30 @@ public partial class MainWindow
 
         AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
         AddMarkers(plt, sigX, sigY, "#d62728", DiffSigPointSize, "significant");
-        plt.Add.VerticalLine(1.0);
-        plt.Add.VerticalLine(-1.0);
-        // Now an exact, readable threshold rather than a data-dependent one: q = 0.05.
-        plt.Add.HorizontalLine(-Math.Log10(0.05));
+        // The guides ARE the rule, read from the same object that coloured the points, so the red
+        // region and the lines cannot disagree. A zero effect cut draws no vertical guides, because
+        // a line at zero would read as a threshold rather than as its absence.
+        if (rule.Log2FcThreshold > 0)
+        {
+            plt.Add.VerticalLine(rule.Log2FcThreshold);
+            plt.Add.VerticalLine(-rule.Log2FcThreshold);
+        }
+
+        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
 
         // Both overlays belong to this Plot instance, so they are recreated with it and must be
         // re-seeded rather than carried over from the previous contrast.
         AddVolcanoOverlays(plt);
 
         plt.ShowLegend();
-        plt.XLabel("log2 fold change (B / A)");
+        plt.XLabel(DiffXAxisLabel());
         var corrected = DiffSelectedCorrection() != MultipleTesting.None;
-        // Name what is actually on the axis. With a correction applied that is the adjusted value,
-        // and ties in it show up as horizontal bands - a property of the step-up transform, not a
-        // rendering fault. With Correct = None the same column holds the RAW p, and calling it
-        // adjusted would be the plainest kind of mislabelling.
-        plt.YLabel(corrected ? "-log10(adjusted p-value)" : "-log10(p-value)");
+        // Name what is actually on the axis - the rule decides, because the reader can now ask for
+        // the raw p explicitly. Ties in an adjusted value show up as horizontal bands, which is a
+        // property of the step-up transform and not a rendering fault. With Correct = None the
+        // adjusted column simply holds the raw p, and calling it adjusted either way would be the
+        // plainest kind of mislabelling.
+        plt.YLabel(rule.YAxisLabel(corrected));
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
     }

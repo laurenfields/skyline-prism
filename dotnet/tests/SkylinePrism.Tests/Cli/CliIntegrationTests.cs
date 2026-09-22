@@ -276,12 +276,21 @@ public class CliIntegrationTests
             Assert.StartsWith("# contrast: sample_type = experimental vs qc", lines[0], StringComparison.Ordinal);
             Assert.Contains("positive log2FC is higher in experimental", lines[0], StringComparison.Ordinal);
             Assert.StartsWith("# method:", lines[1], StringComparison.Ordinal);
+            // The rule is recorded, and recorded as NOT having filtered the rows - every tested
+            // feature is in the file, so a reader must not take the header as a description of
+            // which rows survived.
+            Assert.Contains(lines, l => l.StartsWith("# hit rule", StringComparison.Ordinal)
+                                        && l.Contains("NOT filtered", StringComparison.Ordinal));
+
+            // Found by its content rather than its index, so adding another comment line is not a
+            // test failure - the index is what broke when the hit rule was added.
+            var headerIndex = Array.FindIndex(lines, l => l.StartsWith("feature_id,", StringComparison.Ordinal));
             Assert.Equal(
                 "feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
                 + "p_value,adj_p_value,mean_a,mean_b",
-                lines[3]);
+                lines[headerIndex]);
 
-            var rows = lines.Skip(4).Where(l => l.Length > 0).ToList();
+            var rows = lines.Skip(headerIndex + 1).Where(l => l.Length > 0).ToList();
             Assert.NotEmpty(rows);
 
             // Rows come out most significant first, and the p-values are real numbers in invariant

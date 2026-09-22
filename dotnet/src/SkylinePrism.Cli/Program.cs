@@ -256,13 +256,13 @@ public static class Program
 
         // The count is the headline, so say what it counts: the same list under BY and under BH is
         // two different claims, and a bare "41 significant" records neither.
-        var alpha = ParseDouble(opts.GetSingleOrNull("--alpha"), 0.05);
-        var hits = result.Rows.Count(r => r.AdjPValue <= alpha);
-        Console.WriteLine($"  {hits} at adjusted p <= {alpha.ToString(CultureInfo.InvariantCulture)}"
-            + $" ({CorrectionName(options.Correction)})");
+        var rule = SignificanceRuleFrom(opts);
+        var hits = result.Rows.Count(rule.IsSignificant);
+        Console.WriteLine(
+            $"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe()}, {CorrectionName(options.Correction)})");
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
-        WriteDifferentialCsv(outPath, result, dataset, options, groupBy, aLabel, bLabel);
+        WriteDifferentialCsv(outPath, result, dataset, options, rule, groupBy, aLabel, bLabel);
         Console.WriteLine($"Results written to: {outPath}");
         return 0;
     }
@@ -283,6 +283,21 @@ public static class Program
         MultipleTesting.Bonferroni => "Bonferroni",
         MultipleTesting.Holm => "Holm",
         _ => "uncorrected",
+    };
+
+    /// <summary>
+    /// The hit rule, from the same flags the pane offers as controls.
+    /// </summary>
+    /// <remarks>
+    /// <c>--alpha</c> keeps its old meaning as the p-value cut. It used to be applied to the
+    /// adjusted p unconditionally; <c>--raw-p</c> now moves it to the uncorrected one, and the
+    /// printed rule says which, so a logged run cannot be mistaken for a corrected one.
+    /// </remarks>
+    private static SignificanceRule SignificanceRuleFrom(ParsedOptions opts) => new()
+    {
+        PThreshold = ParseDouble(opts.GetSingleOrNull("--alpha"), 0.05),
+        UseAdjusted = opts.GetSingleOrNull("--raw-p") is null,
+        Log2FcThreshold = ParseDouble(opts.GetSingleOrNull("--min-log2fc"), 1.0),
     };
 
     /// <summary>The statistical selections, read from the flags the same way the pane reads combos.</summary>
@@ -389,7 +404,7 @@ public static class Program
     /// </remarks>
     private static void WriteDifferentialCsv(
         string path, DifferentialResult result, DifferentialDataset dataset,
-        DifferentialOptions options, string groupBy, string aLabel, string bLabel)
+        DifferentialOptions options, SignificanceRule rule, string groupBy, string aLabel, string bLabel)
     {
         var dirName = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dirName))
@@ -399,6 +414,9 @@ public static class Program
         w.WriteLine($"# contrast: {groupBy} = {bLabel} vs {aLabel} (positive log2FC is higher in {bLabel})");
         w.WriteLine($"# method: {options.Describe()}, {CorrectionName(options.Correction)}");
         w.WriteLine($"# n: {result.NA} vs {result.NB}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
+        // EVERY tested feature is in this file, not just the hits - so the rule is recorded as the
+        // one the run reported against, not as a filter that was applied to the rows below.
+        w.WriteLine($"# hit rule (rows are NOT filtered by it): {rule.Describe()}");
         w.WriteLine("feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
             + "p_value,adj_p_value,mean_a,mean_b");
         foreach (var r in result.Rows)
@@ -893,7 +911,12 @@ public static class Program
                                    replicates instead of on the contrast groups
             --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
             --correction METHOD    bh (default), by, holm, bonferroni, none
-            --alpha A              Adjusted-p threshold for the printed count (default 0.05)
+            --alpha A              p-value threshold for the printed hit count (default 0.05)
+            --raw-p                Apply --alpha to the RAW p rather than the adjusted one. For
+                                   judging a pilot too small for anything to survive correction;
+                                   the printed rule always says which p was used
+            --min-log2fc X         Minimum |log2 fold change| for a hit (default 1, i.e. two-fold).
+                                   0 turns the effect-size filter off and lets p alone decide
             --min-per-group N      Minimum samples per arm (default 2)
             -o, --output FILE      Results CSV (default <output-dir>/differential.csv)
 

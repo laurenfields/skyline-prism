@@ -46,6 +46,16 @@ as the GitHub Release description and fails if it is missing.
   is offered separately as limma-trend: the two share a name in the literature but are different
   estimators and disagree by a median 3-7% on p-values, so the status line and the tooltip both name
   which one produced a result.
+- **The hit rule is adjustable, and it is always stated.** The Volcano's cut-offs used to be fixed
+  at `adj.P < 0.05` and `|log2FC| >= 1`. Both are now controls - **Hits: [Adjusted p | Raw p] < [cut],
+  |log2FC| >= [cut]** - with the usual values one click away and any value typeable. The threshold
+  guide lines, the red points, the hit count and the gene list sent to enrichment are all read from
+  the same rule, so the plot cannot disagree with its own lines. Setting the effect cut to **0**
+  turns the fold-change filter off and lets the p-value alone decide. **Raw p** is offered because a
+  pilot cohort can have nothing surviving correction at all and the uncorrected ranking is still
+  worth reading - the y-axis label and the status line both say which p is in force, so a screenshot
+  cannot be mistaken for a corrected result. `prism differential` takes the same rule as `--alpha`,
+  `--raw-p` and `--min-log2fc`, and prints it beside the count.
 - **`prism differential`: the whole statistical menu, headless.** The contrasts the Differential pane
   runs are now a CLI command, so they no longer need Skyline or Windows:
   `prism differential -d output/ --group-by condition -a Control -b Disease`. It takes `--level`,

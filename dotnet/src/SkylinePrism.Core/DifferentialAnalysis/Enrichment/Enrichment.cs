@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -87,11 +87,22 @@ public static class Enrichment
     public static (List<string> Significant, List<string> Background) SigAndBackgroundGenes(
         DifferentialResult res, Func<string, string?> geneForFeature, double qCut, double lfcCut,
         EnrichmentDirection direction = EnrichmentDirection.Both)
+        => SigAndBackgroundGenes(res, geneForFeature,
+            new SignificanceRule { PThreshold = qCut, Log2FcThreshold = lfcCut }, direction);
+
+    /// <summary>
+    /// <see cref="SigAndBackgroundGenes(DifferentialResult, Func{string, string}, double, double, EnrichmentDirection)"/>
+    /// under an explicit <see cref="SignificanceRule"/>, so the genes submitted are exactly the
+    /// points the volcano drew red.
+    /// </summary>
+    public static (List<string> Significant, List<string> Background) SigAndBackgroundGenes(
+        DifferentialResult res, Func<string, string?> geneForFeature, SignificanceRule rule,
+        EnrichmentDirection direction = EnrichmentDirection.Both)
     {
         var background = CleanSymbols(res.Rows.Select(r => geneForFeature(r.FeatureId)));
         bool Passes(DifferentialRow r)
         {
-            if (!(r.AdjPValue < qCut && Math.Abs(r.LogFc) >= lfcCut))
+            if (!rule.IsSignificant(r))
                 return false;
             return direction switch
             {

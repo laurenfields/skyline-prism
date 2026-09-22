@@ -626,6 +626,41 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
+                                <!-- The hit rule, as a sentence: "Hits: [adjusted p] < [0.05],
+                                     |log2FC| >= [1]". Editable combos rather than plain text boxes
+                                     so the usual cuts are one click while any value can still be
+                                     typed; they re-run on DropDownClosed and on Enter/focus-loss,
+                                     never per keystroke, which would fire a contrast per digit.
+                                     DiffEffectLabel is named because a TREND design renames it -
+                                     the effect is then a change across the trend column's range,
+                                     not a fold change between two arms. -->
+                                <TextBlock Text="Hits:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffPKindCombo" Width="110" SelectionChanged="OnDiffThresholdSelected"
+                                          ToolTip="Which p-value the cut-off applies to. 'Adjusted p' is the honest default. 'Raw p' is offered because a small pilot cohort can have nothing at all surviving correction, and the uncorrected ranking is a legitimate way to judge whether a full study is worth running - the plot's y-axis and the status line both say which one is in force, so a screenshot cannot be mistaken for a corrected result.">
+                                    <ComboBoxItem Tag="Adjusted">Adjusted p</ComboBoxItem>
+                                    <ComboBoxItem Tag="Raw">Raw p</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="&lt;" VerticalAlignment="Center" Margin="6,0,4,0" />
+                                <ComboBox x:Name="DiffPCutCombo" Width="80" IsEditable="True"
+                                          DropDownClosed="OnDiffThresholdChanged" LostFocus="OnDiffThresholdLostFocus"
+                                          KeyDown="OnDiffThresholdKeyDown"
+                                          ToolTip="The p-value cut-off. Pick a usual value or type your own.">
+                                    <ComboBoxItem>0.05</ComboBoxItem>
+                                    <ComboBoxItem>0.01</ComboBoxItem>
+                                    <ComboBoxItem>0.001</ComboBoxItem>
+                                    <ComboBoxItem>0.1</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffEffectLabel" Text="|log2FC| &gt;=" VerticalAlignment="Center"
+                                           Margin="12,0,4,0" />
+                                <ComboBox x:Name="DiffEffectCutCombo" Width="70" IsEditable="True"
+                                          DropDownClosed="OnDiffThresholdChanged" LostFocus="OnDiffThresholdLostFocus"
+                                          KeyDown="OnDiffThresholdKeyDown"
+                                          ToolTip="Minimum absolute log2 effect for a hit. 1 is a two-fold change. Set 0 to switch the effect-size filter off and let the p-value alone decide, which is what you want when the effect is a slope you have no prior expectation for.">
+                                    <ComboBoxItem>1</ComboBoxItem>
+                                    <ComboBoxItem>0.585</ComboBoxItem>
+                                    <ComboBoxItem>2</ComboBoxItem>
+                                    <ComboBoxItem>0</ComboBoxItem>
+                                </ComboBox>
                                 <TextBlock x:Name="DiffCovariatesLabel" Text="Adjust for:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffCovariatesCombo" DropDownClosed="OnDiffTickListClosed" Width="170" IsEditable="True" IsReadOnly="True"
