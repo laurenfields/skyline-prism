@@ -662,6 +662,93 @@ prism config-template -o config.yaml
 prism config-template --minimal -o config.yaml
 ```
 
+## Contributing a Pull Request
+
+This applies to everyone, including the maintainer, and including changes written with an agent.
+Most of it is checkable before you open the PR; do that rather than discovering it in review.
+
+### Before you open it
+
+1. **`dotnet test` is green**, run from `dotnet/`. On Linux or macOS that is
+   `dotnet test SkylinePrism.CrossPlatform.slnf`; say so in the PR, because the Windows-only tests
+   (`SkylinePrism.Tests.Windows`, covering `SkylinePrism.Skyline` and `SkylinePrism.App`) did not
+   run and CI is the first thing that will execute them.
+2. **`dotnet build` is warning-free.** Do not silence a warning you can fix. If you touched
+   anything under `dotnet/src/SkylinePrism.Pwiz/`, build it **explicitly** - the ordinary solution
+   build skips it, so a warning there can reach a packaged zip unnoticed (see the caution under
+   "Code Style").
+3. **New behavior has a test; a bug fix starts with a failing one.** Coverage on the code you added
+   should be in the same range as the area around it - roughly 85-90% of lines for `Core`. A
+   reviewer will measure it, so measure it first:
+   ```bash
+   dotnet test tests/SkylinePrism.Tests/SkylinePrism.Tests.csproj \
+     /p:CollectCoverage=true /p:Include="[SkylinePrism.Core]SkylinePrism.Core.YourArea*"
+   ```
+4. **Every config surface moved together.** Adding, renaming or removing a key means all six places
+   in "CRITICAL: Configuration is a contract" - and `StageDependencies.ByStage` is a **correctness**
+   surface, not documentation: a key missing from it makes a re-run silently reuse output computed
+   with the old value.
+5. **A release-note entry is in `release-notes/RELEASE_NOTES_dotnet-next.md`**, under the right
+   heading, in past tense, leading with user impact. That file is published verbatim as the GitHub
+   Release body.
+6. **`docs/` and `README.md` match the code.** A stale doc comment is a defect here, not a nit -
+   most of this repository's hard-won knowledge lives in prose, and prose that contradicts the code
+   beneath it is worse than none.
+7. **No leftovers.** No absolute paths, no machine names, no personal data directories, no
+   commented-out debugging, no `TEMP:` commit surviving into the branch tip. Search your own diff
+   for your username before pushing.
+8. **No emojis**, anywhere - code, comments, output, docs, commit messages. Plain ASCII status
+   words (`[WORKING]`, `PASSED`, `WARNING`). Unicode arrows in flow diagrams are fine.
+
+### If your change computes a number
+
+This is the part most often skipped, and the part that matters most in a measurement tool.
+
+- **If the method has a published reference implementation, pin it to that reference**, not to your
+  own output and not to a sibling implementation of the same idea. Agreement between two things you
+  wrote is not evidence. Use committed goldens and a checked-in generator, as
+  `dotnet/tests/fixtures/differential/generate.py` does against scipy, statsmodels and inmoose - it
+  is the pattern to copy for anything new.
+- **State the tolerance and why it is what it is.** Closed-form arithmetic should agree to ~1e-13;
+  something behind an iterative solve agrees to that solver's tolerance and no better. A uniform
+  `1e-6` everywhere tells a reader nothing and hides the one quantity that should have been exact.
+- **Say which scale you are on.** Every matrix-taking public method states LOG2 or LINEAR in its
+  XML doc. CVs are always computed on LINEAR values; output parquet is always LINEAR.
+- **Do not add a second implementation of something the repository already computes.** If the
+  existing one cannot do what you need, extend it - the PCA used by the QC report and by the
+  differential pane is one `Core/Numerics/Pca.cs` with options for exactly this reason, after
+  briefly being two.
+- **If the lab's `proteomics-toolkit` also implements it, check against that too** and write down
+  where the two agree and where they do not. Two lab tools quietly disagreeing under the same
+  method name is worse than either being wrong on its own. See `docs/differential-analysis.md`.
+
+### Scope and shape
+
+- **One change per PR.** A new feature and a refactor of the code around it are two PRs; the
+  refactor hides the feature and the feature makes the refactor unreviewable.
+- **Do not reopen a "Design Decisions to Preserve" item in passing.** Those are decided, with the
+  measurement that decided them recorded. Propose it as its own PR with new evidence.
+- **A performance claim needs a measurement, and the measurement needs a method.** Prefer ratios to
+  absolute rates, compare against the previous release's binary built from its tag, and assert the
+  two arms did the same work. `dotnet/bench/Stage2Bench` does all of that; read
+  `dotnet/STAGE2_THROUGHPUT.md` before proposing anything that touches Stage 2 concurrency.
+
+### Review and merge
+
+- Run `/code-review` on your own branch before asking anyone else to look.
+- CI (`dotnet-ci.yml`) must be green.
+- **Squash-merge, always** (`gh pr merge --squash --delete-branch`), and write the squash message
+  deliberately - it is the permanent record, and the default concatenation of branch commits is not
+  a description of the change.
+
+### What a reviewer will check that a machine cannot
+
+- Does the code read like the code around it - same naming, same comment density, same idiom?
+- Is each comment saying *why*, especially where the obvious approach was tried and rejected?
+- Does anything user-facing fail in a way that tells the user what to do next?
+- Is a GUI change reachable from the CLI? Anything a headless or Linux user needs must be; the
+  GUI's "Show Command Line" exists to keep that honest.
+
 ## Common Tasks
 
 ### Adding a New Feature

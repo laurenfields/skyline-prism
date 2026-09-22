@@ -10,6 +10,7 @@ using System.Windows.Data;
 using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.DifferentialAnalysis.Detection;
 using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
+using SkylinePrism.Core.Numerics;
 using SkylinePrism.Core.Visualization;
 
 namespace SkylinePrism.App;
@@ -518,7 +519,20 @@ public partial class MainWindow
         PcaResult pca;
         try
         {
-            pca = await Task.Run(() => DifferentialPca.Compute(dataset.ExprLog2, dataset.SampleIds, all));
+            // The same Pca the QC pane draws, asked for the differential pane's settings: centered
+            // but not standardized (on log2 abundances the scale is information, and scaling would
+            // amplify the flat features), complete-case, six components with their variance
+            // ratios, and throwing rather than returning zeros so the status line below can say
+            // what was wrong.
+            pca = await Task.Run(() => Pca.Fit(dataset.ExprLog2, new PcaOptions
+            {
+                Components = 6,
+                Scaling = PcaScaling.CenterOnly,
+                Missing = PcaMissingPolicy.CompleteCase,
+                SampleColumns = all,
+                SampleIds = dataset.SampleIds,
+                RequireSufficientData = true,
+            }));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {

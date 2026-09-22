@@ -1,0 +1,92 @@
+# Differential-analysis goldens
+
+Reference values for `SkylinePrism.Core.DifferentialAnalysis`, produced by scipy, statsmodels and
+inmoose. `DifferentialGoldenTests` reads them.
+
+> [!NOTE]
+> **These are NOT frozen, unlike every other fixture directory here.** The `refanchored/` and
+> `sva/` goldens came from engines that no longer exist in this repository, so they can only be
+> re-read, never re-made. Every reference behind *these* files is a maintained package on PyPI, so
+> the generator is runnable and the fixture is a live claim rather than an archived one. Add a case
+> by editing the generator and re-running it; do not hand-edit a `.json`.
+
+```bash
+# from the repository root
+uv run dotnet/tests/fixtures/differential/generate.py
+```
+
+The dependency versions are pinned in the script's PEP 723 header, so `uv run` needs nothing
+installed. Without `uv`, install those exact versions and run it with `python`.
+
+## What is the reference for what
+
+| Fixture | PRISM type | Reference |
+|---|---|---|
+| `fdr.json` | `Fdr.BenjaminiHochberg` | `statsmodels` `multipletests(method="fdr_bh")` |
+| `polygamma.json` | `EmpiricalBayes.Trigamma` / `.Tetragamma` / `.TrigammaInverse` | `scipy.special.polygamma`; the inverse via `scipy.optimize.brentq` |
+| `squeezevar.json` | `EmpiricalBayes.SqueezeVarGlobal` / `.SqueezeVarTrend` | `inmoose.limma.squeezeVar` |
+| `spline.json` | `NaturalSplineBasis.Build` | `inmoose.utils.splines.ns` |
+| `lmfit.json` | `LinearModel.Fit` | `numpy.linalg.lstsq` + the textbook OLS formulas |
+| `moderated_t.json` | `Differential.Run` | the four above, composed the way limma composes them |
+| `fisher.json` | `Detection.FisherExact` | `scipy.stats.fisher_exact(alternative="two-sided")` |
+| `firth.json` | `Detection.FirthLogit` | `scipy.optimize` on the penalized log-likelihood |
+| `detection_lrt.json` | `Detection.DetectionGlm` | the above, twice, + `scipy.stats.chi2.sf(., 1)` |
+| `pca.json` | `DifferentialPca.Compute` | `numpy.linalg.svd(full_matrices=False)` |
+
+The generator imports nothing from PRISM. A golden that was produced by consulting the code under
+test cannot catch a mistake the two share, which is the only kind of mistake a golden is for.
+
+## Three things that are deliberately not what they first appear
+
+**Floats are JSON strings, not JSON numbers.** Each is Python's shortest round-trip `repr`. Bare
+`NaN`/`Infinity` are not valid JSON and `System.Text.Json` rejects them outright; and a float
+carried through both ends' number paths is only approximately preserved, which is no basis for an
+assertion at 1e-15. Through a string the 64 bits survive intact. Python spells the non-finite ones
+`inf`, `-inf` and `nan`, and the C# reader maps those three - the fixture reads the way the tool
+that wrote it writes.
+
+**The spline is pinned by its column span, not its entries.** R's `ns` fixes the basis only up to
+the orthogonal rotation its constraint QR happens to produce, so two correct implementations can
+return different matrices. `hat` is the projector onto the column span, `B (B'B)^-1 B'`, which is
+invariant to that rotation and is all the trend fit depends on. Asserting the basis entries would
+be asserting an arbitrary choice.
+
+**The Firth reference is an optimizer, not a formula.** No library implements Firth logistic
+regression, and pinning it to the sibling Python implementation it was ported from would only prove
+the two agree. The reference instead maximizes `l(b) + 0.5*log det(X' W X)` with Nelder-Mead and
+Powell - different objective formulation, different algorithm, same fixed point. A direct-search
+optimum determines the *log-likelihood* far more tightly than the *coefficients*: on a flat
+penalized likelihood (`all_one_class`) the coefficients are genuinely not determined beyond about
+1e-4, while the log-likelihood agrees to 1e-9. The test asserts each at what it can actually
+support, which is why those two tolerances differ by five orders of magnitude.
+
+## A divergence from inmoose, recorded rather than papered over
+
+`squeezevar.json` has no case with a spline df of 2, and `spline.json` has no `df=2` case, because
+**inmoose 0.9.1's `ns()` raises on a zero-interior-knot basis**:
+
+```
+ValueError: all the input arrays must have same number of dimensions,
+but the array at index 0 has 1 dimension(s) and the array at index 1 has 0 dimension(s)
+```
+
+R's `splines::ns` builds that basis without complaint, and so does PRISM. The case is reachable:
+`splinedf = 1 + (n >= 3) + (n >= 6) + (n >= 30)` is exactly 2 whenever 3 to 5 features reach the
+trend prior. There is therefore no inmoose value to pin it against, and
+`DifferentialGoldenTests.SqueezeVarTrend_SplineDfTwo_IsSupportedWhereInmooseRaises` asserts the
+part that needs no reference: PRISM returns a finite per-feature prior rather than throwing, and
+does not silently fall back to the global prior - which would be a different estimator producing
+different numbers under the same setting.
+
+## What these goldens do not cover
+
+- **`SignificanceScan`, `MarkerPanel`, `Enrichment`, `DetectionMatrix`, `DifferentialDataset`.**
+  These are PRISM's own procedures, not ports of a published method, so there is nothing external
+  to hold them to. They are covered by behavioral tests in the same directory.
+- **`Fdr.BenjaminiHochberg`'s NaN handling.** statsmodels returns all-NaN if any input is NaN and
+  counts NaN toward `m`; PRISM passes NaN through and excludes it. That divergence is deliberate
+  and is pinned by `FdrTests`, not here - every case in `fdr.json` is NaN-free, where the two agree
+  exactly.
+- **The lab's `proteomics-toolkit`.** Its `moderated_linear_model` is a third implementation of the
+  same idea and is *not* pinned to these. See `docs/differential-analysis.md` for where the two
+  agree and where they do not.

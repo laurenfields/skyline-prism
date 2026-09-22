@@ -2664,13 +2664,12 @@ public partial class MainWindow : Window
         Plot plt, double[,] featuresBySamples, List<string> types, List<string> names,
         string level, string view, string group)
     {
-        var nF = featuresBySamples.GetLength(0);
         var nS = featuresBySamples.GetLength(1);
-        var samplesByFeatures = new double[nS, nF];
-        for (var f = 0; f < nF; f++)
-            for (var s = 0; s < nS; s++)
-                samplesByFeatures[s, f] = featuresBySamples[f, s];
-        var scores = Pca.Fit2D(samplesByFeatures);
+        // Fit2DOfFeaturesBySamples, not a transpose into Fit2D. The transpose was a full second
+        // copy of the largest object in the pipeline - 5.7 GB on a 100-document peptide matrix,
+        // on the large object heap - built only to be read one feature at a time, which is the
+        // layout it started in. Avoiding exactly that is why the overload exists.
+        var scores = Pca.Fit2DOfFeaturesBySamples(featuresBySamples);
         var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
         var points = new List<(Coordinates Loc, string Name)>(nS);
         for (var i = 0; i < nS; i++)

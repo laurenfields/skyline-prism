@@ -26,8 +26,29 @@ as the GitHub Release description and fails if it is missing.
   N/total members / not detected" report. Panels are the same protein lists the Dynamic Range plot uses
   (your own plus the shipped panels), and several can be ticked to union into one heatmap.
 
+- **One PCA, not two.** The QC scatter and the Differential pane's sample plot were separate
+  implementations; they are now one `Core/Numerics/Pca.cs` with options for what actually differed
+  - standardize vs center-only, impute-to-feature-mean vs complete-case, two components vs k with
+  their variance ratios, and all samples vs a chosen subset. Every number both plots drew is
+  unchanged. The merged engine keeps the QC path's blocked Gram accumulation, so the differential
+  PCA no longer runs an unblocked O(samples^2) loop per feature.
+- **Committed goldens for the differential statistics.** `dotnet/tests/fixtures/differential/`
+  holds reference values generated from scipy, statsmodels and inmoose by a checked-in script, and
+  `DifferentialGoldenTests` holds PRISM to them: BH, the polygamma functions, `lmFit`, `squeezeVar`
+  (global and intensity-trend), the natural-spline basis, the end-to-end moderated t, Fisher exact,
+  Firth, the penalized detection LRT and the sample PCA. Unlike the other fixture directories these
+  are regenerable - `uv run dotnet/tests/fixtures/differential/generate.py`.
+- **`docs/differential-analysis.md`** records what each quantity is held to, and where PRISM and the
+  lab's `proteomics-toolkit` agree (`moderation="limma"`, to ~1e-13) and do not
+  (`moderation="intensity_trend"`, a different estimator: median 3-7% on p-values, and hit lists
+  that differ).
+
 ## Bug Fixes
 
+- The QC PCA no longer materializes a transposed copy of the abundance matrix before fitting - a
+  full second copy of the largest object in the pipeline (5.7 GB on a 100-document peptide matrix,
+  on the large object heap), built only to be read one feature at a time, which is the layout it
+  started in. It now calls the `Fit2DOfFeaturesBySamples` overload that exists to avoid exactly that.
 - The differential loader now aligns a run's sample columns to `sample_metadata.csv` by the bare replicate
   name (the part before `__@__`) when no column matches by the full `sample_id`, so a run whose corrected
   matrix and metadata were written with different document/batch stems still loads.

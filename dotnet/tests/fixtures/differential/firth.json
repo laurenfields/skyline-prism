@@ -1,0 +1,252 @@
+{
+  "reference": "scipy.optimize (Nelder-Mead then Powell) maximizing l(b) + 0.5*log det(X' diag(p(1-p)) X)",
+  "note": "A direct-search optimum is accurate in the OBJECTIVE to roughly the tolerance asked for, but the coefficients themselves are only as well determined as the curvature allows - a flat penalized likelihood (all_one_class) pins beta far more loosely than it pins the log-likelihood. Assert the log-likelihood tightly and the coefficients loosely; that is what the fixture is able to support.",
+  "cases": [
+    {
+      "name": "separable",
+      "note": "perfect separation: the unpenalized MLE diverges, Firth stays finite",
+      "x": [
+        [
+          "1.0",
+          "-2.0"
+        ],
+        [
+          "1.0",
+          "-1.0"
+        ],
+        [
+          "1.0",
+          "-0.5"
+        ],
+        [
+          "1.0",
+          "0.5"
+        ],
+        [
+          "1.0",
+          "1.0"
+        ],
+        [
+          "1.0",
+          "2.0"
+        ]
+      ],
+      "y": [
+        "0.0",
+        "0.0",
+        "0.0",
+        "1.0",
+        "1.0",
+        "1.0"
+      ],
+      "beta": [
+        "-1.7094495085492654e-09",
+        "1.5830084152269908"
+      ],
+      "penalized_loglik": "-1.4997056964260511"
+    },
+    {
+      "name": "mixed",
+      "note": "overlapping classes: an ordinary well-posed fit",
+      "x": [
+        [
+          "1.0",
+          "-2.0"
+        ],
+        [
+          "1.0",
+          "-1.0"
+        ],
+        [
+          "1.0",
+          "0.0"
+        ],
+        [
+          "1.0",
+          "1.0"
+        ],
+        [
+          "1.0",
+          "2.0"
+        ],
+        [
+          "1.0",
+          "3.0"
+        ],
+        [
+          "1.0",
+          "4.0"
+        ],
+        [
+          "1.0",
+          "5.0"
+        ]
+      ],
+      "y": [
+        "0.0",
+        "1.0",
+        "0.0",
+        "0.0",
+        "1.0",
+        "1.0",
+        "0.0",
+        "1.0"
+      ],
+      "beta": [
+        "-0.33329680338826223",
+        "0.22219786998199767"
+      ],
+      "penalized_loglik": "-3.697167698481527"
+    },
+    {
+      "name": "two_predictors",
+      "note": "a group indicator plus a continuous covariate, the adjusted-detection design",
+      "x": [
+        [
+          "1.0",
+          "0.0",
+          "1.2"
+        ],
+        [
+          "1.0",
+          "1.0",
+          "-0.4"
+        ],
+        [
+          "1.0",
+          "0.0",
+          "0.7"
+        ],
+        [
+          "1.0",
+          "1.0",
+          "2.1"
+        ],
+        [
+          "1.0",
+          "0.0",
+          "-1.1"
+        ],
+        [
+          "1.0",
+          "1.0",
+          "0.3"
+        ],
+        [
+          "1.0",
+          "0.0",
+          "1.9"
+        ],
+        [
+          "1.0",
+          "1.0",
+          "-0.8"
+        ],
+        [
+          "1.0",
+          "0.0",
+          "0.1"
+        ],
+        [
+          "1.0",
+          "1.0",
+          "1.4"
+        ]
+      ],
+      "y": [
+        "0.0",
+        "1.0",
+        "0.0",
+        "1.0",
+        "0.0",
+        "0.0",
+        "1.0",
+        "0.0",
+        "1.0",
+        "1.0"
+      ],
+      "beta": [
+        "-0.7761737215229668",
+        "0.7597781522292115",
+        "0.7338030551080053"
+      ],
+      "penalized_loglik": "-5.217857295323906"
+    },
+    {
+      "name": "quasi_separation",
+      "note": "one point on the wrong side of an otherwise clean split",
+      "x": [
+        [
+          "1.0",
+          "1.0"
+        ],
+        [
+          "1.0",
+          "2.0"
+        ],
+        [
+          "1.0",
+          "3.0"
+        ],
+        [
+          "1.0",
+          "4.0"
+        ],
+        [
+          "1.0",
+          "5.0"
+        ],
+        [
+          "1.0",
+          "5.0"
+        ]
+      ],
+      "y": [
+        "0.0",
+        "0.0",
+        "0.0",
+        "1.0",
+        "1.0",
+        "0.0"
+      ],
+      "beta": [
+        "-2.6592611527610206",
+        "0.6112406201184536"
+      ],
+      "penalized_loglik": "-2.462937381991698"
+    },
+    {
+      "name": "all_one_class",
+      "note": "no contrast at all: the intercept runs away and only the penalty holds it",
+      "x": [
+        [
+          "1.0",
+          "-1.0"
+        ],
+        [
+          "1.0",
+          "0.0"
+        ],
+        [
+          "1.0",
+          "1.0"
+        ],
+        [
+          "1.0",
+          "2.0"
+        ]
+      ],
+      "y": [
+        "1.0",
+        "1.0",
+        "1.0",
+        "1.0"
+      ],
+      "beta": [
+        "1.6094378955217308",
+        "1.3957396274364364e-08"
+      ],
+      "penalized_loglik": "-1.2055011164208322"
+    }
+  ]
+}
