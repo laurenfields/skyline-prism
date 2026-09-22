@@ -158,7 +158,10 @@ as the GitHub Release description and fails if it is missing.
   offered nothing but Sample Type - and a batch-correction tool could not color its PCA by batch.
   It now also reads the run's `sample_metadata.csv` (which supplies `batch`) and any clinical CSV
   attached in the Differential pane. The QC PCA also gained a component-pair selector up to PC6,
-  with each component's variance-explained on its axis.
+  with each component's variance-explained on its axis - more than the removed plot had, which was
+  fixed at PC1 vs PC2 and listed the rest only in a side table. Its legend is docked outside the
+  data area, as the removed one's was: a grouping column can have many levels (12 in a real CSF
+  cohort) and an in-plot legend covers the sample cluster the plot exists to show.
 - **The Differential pane's PCA sub-view is gone**, now that the QC pane's PCA can group by the same
   columns. It existed largely to work around the gap above. Note the surviving plot uses the QC
   pane's long-standing settings - features standardized, a missing cell imputed to its feature mean
@@ -176,6 +179,11 @@ as the GitHub Release description and fails if it is missing.
   that differ).
 
 ## Bug Fixes
+
+- **The QC Plots pane now loads when you open it, not only after a run.** Pointing the tool at an
+  existing output directory and clicking QC Plots left the Group-by list empty and no plot drawn;
+  the pane only ever filled at the end of a `prism run`. Every other pane loads itself on
+  navigation. This matters more than it used to, because the sample PCA now lives here.
 
 - The QC PCA no longer materializes a transposed copy of the abundance matrix before fitting - a
   full second copy of the largest object in the pipeline (5.7 GB on a 100-document peptide matrix,

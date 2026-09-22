@@ -189,7 +189,7 @@ warning.
 | `prism run` | Run the full pipeline (rollup → normalize → batch-correct → QC) |
 | `prism merge` | Merge Skyline transition reports into one peptide-partitioned parquet dataset |
 | `prism qc` | (Re)generate `qc_report.html` from an existing output directory |
-| `prism differential` | Two-group differential abundance on a finished output directory |
+| `prism differential` | Differential abundance on a finished output directory - two arms, or a slope against a numeric column |
 | `prism ion-accounting` | Count acquired ions from the instrument files and the fraction assigned to a peptide |
 | `prism isolation-scheme` | Read the acquisition's DIA isolation windows from a data file and record them |
 | `prism compare` | Compare control-sample CVs between two runs |
