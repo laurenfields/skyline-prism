@@ -123,6 +123,14 @@ public partial class MainWindow
 
     private sealed record DetRow(string Peptide, double RateA, double RateB, double P, double Q);
 
+    /// <summary>
+    /// A paired detection row. OnlyA and OnlyB are the DISCORDANT pair counts - the only observations
+    /// McNemar's test uses - so a result resting on three pairs cannot look like one resting on
+    /// thirty.
+    /// </summary>
+    private sealed record DetPairedRow(
+        string Peptide, double RateA, double RateB, int OnlyA, int OnlyB, double P, double Q);
+
     private sealed record DetGlmRow(string Peptide, double RateA, double RateB, double LogOR, double P, double Q);
 
     private sealed record EnrichRow(string Source, string Term, double PValue, double Fold);
@@ -870,20 +878,23 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Detection ignores the paired design, and says so.
+    /// Said when the paired design is selected but this run could not honour it.
     /// </summary>
     /// <remarks>
-    /// The paired analogue of a detection-rate test is McNemar's, over the discordant pairs - a
-    /// different test, not this one with different inputs, and it is not implemented. Running Fisher
-    /// or the Firth GLM over the arms is a perfectly good UNPAIRED question, so the view still
-    /// answers it; what it must not do is answer it silently while the Design box says Paired.
+    /// The paired form of a detection-rate test is McNemar's, which PRISM does run - but only
+    /// unadjusted. Adjusting a paired binary outcome for covariates needs conditional logistic
+    /// regression, a different estimator that is not implemented, so a ticked covariate falls back
+    /// to the unpaired Firth GLM. That is a reasonable answer to a different question, and the one
+    /// thing it must not do is arrive silently under a Design box that says Paired.
     /// </remarks>
-    private string DetectionPairingNote() =>
-        DiffSelectedDesign() == DifferentialDesign.Paired
-            ? " Note: detection is tested UNPAIRED - the paired form is McNemar's test, which is not "
-              + "implemented - so this uses every sample in the arms, including subjects the paired "
-              + "contrast left out."
-            : string.Empty;
+    private static string DetectionUnpairedNote(bool becauseCovariates) =>
+        becauseCovariates
+            ? " Note: adjusted detection is UNPAIRED - the paired form needs conditional logistic "
+              + "regression, which is not implemented - so this uses every sample in the arms, "
+              + "including subjects the paired contrast left out. Untick the covariates for "
+              + "McNemar's paired test."
+            : " Note: detection is tested UNPAIRED - no subject could be matched across the arms - "
+              + "so this uses every sample in them.";
 
     private async Task RunDetectionAsync(int request)
     {
@@ -944,8 +955,75 @@ public partial class MainWindow
         var dropped = a.Count - aCols.Count + (b.Count - bCols.Count);
         var droppedNote = dropped > 0 ? $" ({dropped} samples not in merged_data)" : string.Empty;
 
-        // A ticked covariate switches to the Firth-penalized GLM (adjusted detection); otherwise Fisher.
         var covariates = SelectedCovariatesFor(det.SampleIds);
+
+        // Paired and unadjusted: McNemar over the matched pairs. Only the discordant pairs carry
+        // information - a subject that agreed with itself is its own control - so the counts that
+        // drove the test are reported beside the rates rather than left implied.
+        if (covariates is null && DiffSelectedDesign() == DifferentialDesign.Paired
+            && DiffSubjectLabels() is { } subjects)
+        {
+            var (pairs, pairMessages) = PairedSamples.Resolve(subjects, a, b);
+
+            // The detection matrix has its own column order, so each pair has to be re-expressed in
+            // it; a pair with either half missing from merged_data cannot be tested at all.
+            var detPairs = pairs
+                .Select(pair => (
+                    A: detIndex.TryGetValue(dataset.SampleIds[pair.AColumn], out var ia) ? ia : -1,
+                    B: detIndex.TryGetValue(dataset.SampleIds[pair.BColumn], out var ib) ? ib : -1,
+                    pair.Subject))
+                .Where(x => x.A >= 0 && x.B >= 0)
+                .Select(x => new SamplePair(x.Subject, x.A, x.B))
+                .ToList();
+
+            if (detPairs.Count > 0)
+            {
+                // Read on the UI thread, never inside the Task.Run: touching a WPF control from a
+                // worker throws "The calling thread cannot access this object". The same rule is
+                // documented on the Dynamic Range pane's selection poll.
+                var detCorrection = DiffSelectedCorrection();
+
+                IReadOnlyList<DetectionPairedRow> pairedRows;
+                try
+                {
+                    pairedRows = await Task.Run(() => DetectionPairedTest.Run(
+                        det.Matrix, det.PeptideIds, detPairs, detCorrection));
+                    if (!StillCurrent(request))
+                        return;
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                {
+                    DiffStatusText.Text = "Paired detection failed: " + ex.Message;
+                    return;
+                }
+
+                // The plot wants the same shape the unpaired test produces; the pair count stands in
+                // for each arm's n, which is what a paired rate is out of.
+                RenderDetection(pairedRows
+                    .Select(r => new DetectionRow(r.PeptideId, r.DetA, r.Pairs, r.DetB, r.Pairs,
+                        r.RateA, r.RateB, r.P, r.Q))
+                    .ToList());
+                DiffGrid.ItemsSource = pairedRows.Take(1000)
+                    .Select(r => new DetPairedRow(r.PeptideId, r.RateA, r.RateB, r.OnlyA, r.OnlyB, r.P, r.Q))
+                    .ToList();
+
+                var lost = pairMessages.Count > 0 ? " " + string.Join(" ", pairMessages) : string.Empty;
+                var notInMerged = pairs.Count - detPairs.Count;
+                var missing = notInMerged > 0
+                    ? $" {notInMerged} matched pair(s) are not in merged_data."
+                    : string.Empty;
+                DiffStatusText.Text =
+                    $"Paired detection (McNemar exact): {aVal} vs {bVal} over {detPairs.Count} matched "
+                    + $"subject(s), {pairedRows.Count} peptides.{lost}{missing} Only discordant pairs "
+                    + "carry information - the two counts are in the table.";
+                return;
+            }
+
+            DiffStatusText.Text = "Paired detection needs matched subjects; none could be matched. "
+                + "Falling back to the unpaired test.";
+        }
+
+        // A ticked covariate switches to the Firth-penalized GLM (adjusted detection); otherwise Fisher.
         if (covariates is not null)
         {
             DetectionGlmResult glm;
@@ -979,7 +1057,9 @@ public partial class MainWindow
             DiffStatusText.Text =
                 $"Adjusted detection (Firth GLM): {aVal} (n={aCols.Count}) vs {bVal} (n={bCols.Count}), "
                 + $"adjusted for {string.Join(", ", glm.CovariatesUsed)}, {glm.Rows.Count} peptides{droppedNote}."
-                + DetectionPairingNote();
+                + (DiffSelectedDesign() == DifferentialDesign.Paired
+                    ? DetectionUnpairedNote(becauseCovariates: true)
+                    : string.Empty);
             return;
         }
 
@@ -1001,7 +1081,10 @@ public partial class MainWindow
             .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
         DiffStatusText.Text =
             $"Detection (peptide-level, DetectionQValue < 0.01): {aVal} (n={aCols.Count}) vs " +
-            $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}." + DetectionPairingNote();
+            $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}."
+            + (DiffSelectedDesign() == DifferentialDesign.Paired
+                ? DetectionUnpairedNote(becauseCovariates: false)
+                : string.Empty);
     }
 
     private async Task RunEnrichmentAsync(int request)

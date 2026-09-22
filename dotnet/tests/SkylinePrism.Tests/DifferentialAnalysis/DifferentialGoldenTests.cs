@@ -777,4 +777,25 @@ public class DifferentialGoldenTests
 
     public static IEnumerable<object[]> PeptideCountPriorCases()
         => Golden.CaseNames("peptide_count_prior.json");
+
+    /// <summary>
+    /// McNemar's exact test, against statsmodels. Only the discordant pairs enter it: a subject that
+    /// agreed with itself is its own control and says nothing about a difference between conditions.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(McNemarCases))]
+    public void McNemar_MatchesStatsmodels(string name)
+    {
+        var c = Golden.Case("mcnemar.json", name);
+        var b = c.GetProperty("b").GetInt32();
+        var cc = c.GetProperty("c").GetInt32();
+
+        var actual = McNemar.TwoSidedP(b, cc);
+
+        Golden.Close(Golden.Num(c, "expected_p"), actual, 1e-12, $"{name} p");
+        // Symmetric in its two arguments by construction - the test has no preferred direction.
+        Golden.Close(actual, McNemar.TwoSidedP(cc, b), 1e-15, $"{name} symmetry");
+    }
+
+    public static IEnumerable<object[]> McNemarCases() => Golden.CaseNames("mcnemar.json");
 }

@@ -554,9 +554,15 @@ contrast:
   Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
   split by the two groups.
 - **Detection** — a per-peptide test of whether a peptide is *detected* (from the transition-level
-  `merged_data` `DetectionQValue`, not the dense abundance) at a different rate between the two groups:
-  Fisher exact by default, or a Firth-penalized logistic regression when covariates are set. This is the
-  genuine on/off signal the dense corrected matrix cannot give.
+  `merged_data` `DetectionQValue`, not the dense abundance) at a different rate between the two groups.
+  This is the genuine on/off signal the dense corrected matrix cannot give. Which test runs follows the
+  design: Fisher exact when unpaired, **McNemar's exact test** over the matched pairs when the design is
+  paired, and a Firth-penalized logistic regression when covariates are set. Under McNemar only the
+  *discordant* pairs carry information — a subject detected in both conditions, or in neither, is its own
+  control and says nothing — so the two discordant counts are in the table beside the rates; a result
+  resting on three pairs should not look like one resting on thirty. Ticking a covariate under a paired
+  design falls back to the unpaired GLM, because adjusting a paired binary outcome needs conditional
+  logistic regression, which is not implemented; the status line says so rather than letting it pass.
 - **Enrichment** — g:Profiler functional enrichment of the significant hits against the tested
   background (needs network access).
 

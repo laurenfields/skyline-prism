@@ -64,6 +64,12 @@ as the GitHub Release description and fails if it is missing.
   level out of the residual so a shift is tested against within-subject noise rather than against the
   spread between people. Subjects present in only one arm, or with several samples in an arm, are
   left out and counted rather than silently paired.
+- **The Detection view honours a paired design.** With a pairing column and no covariates it runs
+  **McNemar's exact test** over the matched subjects instead of treating the arms as independent.
+  Only the discordant pairs carry information, so both counts are reported beside the rates rather
+  than left implied. A ticked covariate still falls back to the unpaired Firth GLM - adjusting a
+  paired binary outcome needs conditional logistic regression, which is not implemented - and the
+  status line says which of the three ran, every time.
 - **Two more variance priors.** **Peptide count** is DEqMS (Zhu 2020), a LOWESS against
   log(peptide count) - a protein rolled up from many peptides is better determined than one rolled up
   from few at the same intensity, which abundance alone does not say. And the prior can now be fitted

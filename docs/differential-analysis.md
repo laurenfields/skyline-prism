@@ -35,6 +35,11 @@ prior** - which is how `proteomics-toolkit` models it too.
 | paired | paired t | `scipy.stats.ttest_rel` |
 | paired | Wilcoxon signed-rank | `scipy.stats.wilcoxon(method="asymptotic")` |
 
+Detection (the peptide on/off view) follows the design too: Fisher exact unpaired, McNemar's exact
+test paired (`statsmodels.stats.contingency_tables.mcnemar(exact=True)`), and the Firth-penalized LRT
+when covariates are set — the last being unpaired whatever the design, since a paired adjusted binary
+outcome needs conditional logistic regression, which is not implemented.
+
 Variance priors: **global** (Smyth 2004), **intensity trend** (the default - see below), **limma-trend**
 (`trend=TRUE`), and **peptide count** (DEqMS, protein level only, pinned to the toolkit's
 `_fit_count_dependent_prior`). Any prior that fits a per-feature scale leaves the prior *degrees of

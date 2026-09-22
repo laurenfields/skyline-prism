@@ -37,6 +37,7 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `simple_tests.json` | `SimpleTests` Welch / Student / Mann-Whitney | `scipy.stats.ttest_ind`, `scipy.stats.mannwhitneyu(method="asymptotic")` |
 | `paired.json` | `SimpleTests` paired t / Wilcoxon, and the paired moderated design | `scipy.stats.ttest_rel`, `scipy.stats.wilcoxon(method="asymptotic")`, lstsq + `squeezeVar` |
 | `corrections.json` | `Fdr.Adjust` (BY, Holm, Bonferroni) | `statsmodels` `multipletests` |
+| `mcnemar.json` | `Detection.McNemar` | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
 
 **One reference is a sibling lab tool, deliberately.** `intensity_trend.json` is pinned to
 `proteomics-toolkit`, not to a third-party library, because the estimator is not a published formula

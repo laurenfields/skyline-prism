@@ -39,6 +39,7 @@ Which library is the reference for which quantity:
 | `SimpleTests` (Wilcoxon)          | `scipy.stats.wilcoxon(method='asymptotic')`             |
 | paired moderated design           | lstsq on `[1, grp, subject dummies]` + squeezeVar        |
 | `Fdr.{BenjaminiYekutieli,Bonferroni,Holm}` | `statsmodels multipletests`                    |
+| `Detection.McNemar`               | `statsmodels.stats.contingency_tables.mcnemar(exact=True)` |
 
 Nothing here imports PRISM. The point of a golden is that it was produced without reference to the
 code under test, so a shared mistake cannot cancel out.
@@ -1271,6 +1272,48 @@ def gen_peptide_count_prior() -> None:
     )
 
 
+def gen_mcnemar() -> None:
+    """McNemar's exact test, the paired counterpart of Fisher on detection.
+
+    statsmodels' `mcnemar` defaults to `exact=True`, which is a genuine exact binomial on the
+    discordant pairs at any size - so unlike the rank tests there is no asymptotic branch to choose
+    between, and nothing to caveat.
+    """
+    from statsmodels.stats.contingency_tables import mcnemar
+
+    cases = []
+
+    def add(name: str, b: int, c: int, note: str) -> None:
+        # The off-diagonal is all the test uses; the diagonal is filled in only because the API
+        # takes a full 2x2.
+        table = [[10, b], [c, 10]]
+        res = mcnemar(table, exact=True)
+        cases.append(
+            {"name": name, "note": note, "b": b, "c": c, "expected_p": num(float(res.pvalue))}
+        )
+
+    add("no_discordance", 0, 0, "every subject agreed with itself: no evidence either way, p = 1")
+    add("all_one_way", 8, 0, "8 discordant pairs, all the same direction - the strongest this can be")
+    add("balanced", 6, 6, "equal discordance both ways: p = 1")
+    add("mild", 9, 3, "a lean, not a separation")
+    add("single_pair", 1, 0, "one discordant pair proves nothing")
+    add("large", 40, 18, "58 discordant pairs, where a chi-square approximation would also do")
+    add("very_large", 300, 250, "big enough that the binomial sum must be done in log space")
+    add("lopsided_large", 25, 2, "strong and large")
+
+    write(
+        "mcnemar.json",
+        {
+            "reference": "statsmodels.stats.contingency_tables.mcnemar(exact=True)",
+            "note": (
+                "b and c are the two discordant counts; concordant pairs carry no information and "
+                "are not part of the test. The p is two-sided."
+            ),
+            "cases": cases,
+        },
+    )
+
+
 def main() -> None:
     if not OUT.is_dir():
         raise SystemExit(f"run from the repository root: {OUT} not found")
@@ -1289,6 +1332,7 @@ def main() -> None:
     gen_corrections()
     gen_paired()
     gen_peptide_count_prior()
+    gen_mcnemar()
 
 
 if __name__ == "__main__":
