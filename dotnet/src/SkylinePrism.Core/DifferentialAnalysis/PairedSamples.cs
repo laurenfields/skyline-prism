@@ -123,11 +123,5 @@ public static class PairedSamples
     }
 
     /// <summary>A few names rather than all of them - a status line with 200 subject ids in it is unreadable.</summary>
-    private static string Preview(IReadOnlyList<string> names)
-    {
-        const int show = 3;
-        return names.Count <= show
-            ? string.Join(", ", names)
-            : string.Join(", ", names.Take(show)) + $", +{names.Count - show} more";
-    }
+    private static string Preview(IReadOnlyList<string> names) => NamePreview.Of(names, show: 3);
 }

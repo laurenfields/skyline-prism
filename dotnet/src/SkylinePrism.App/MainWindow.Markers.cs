@@ -302,7 +302,7 @@ public partial class MainWindow
                 $"None of {combined.Name}'s {result.Total} members matched a {_markersLevel.ToString().ToLowerInvariant()} feature.";
             MarkersNoteText.Text = result.NotDetected.Count == 0
                 ? "No members detected in this run."
-                : "Not detected: " + string.Join(", ", result.NotDetected);
+                : "Not detected: " + NamePreview.Of(result.NotDetected, NotDetectedShown);
             return;
         }
 
@@ -321,8 +321,20 @@ public partial class MainWindow
             + $"{result.GroupNames.Length} groups.";
         MarkersNoteText.Text = result.NotDetected.Count == 0
             ? "All panel members detected. Boxplot below is each sample's mean marker z-score per group."
-            : $"Not detected ({result.NotDetected.Count}): " + string.Join(", ", result.NotDetected);
+            : $"Not detected ({result.NotDetected.Count}): "
+              + NamePreview.Of(result.NotDetected, NotDetectedShown);
     }
+
+    /// <summary>
+    /// How many not-detected members the note names before falling back to a count.
+    /// </summary>
+    /// <remarks>
+    /// Enough to scan - the point of the list is to spot a member you expected - but bounded,
+    /// because this note sits above the plots in a wrapping block. Ticking all 65 shipped panels
+    /// gives 1,273 not-detected members, which filled the pane and pushed the heatmap out of view.
+    /// The full count is always stated, so nothing is hidden, only unlisted.
+    /// </remarks>
+    private const int NotDetectedShown = 12;
 
     /// <summary>Union several panels' members (dedup by match token) into one list for a combined heatmap.</summary>
     private static ProteinList CombinePanels(IReadOnlyList<ProteinList> panels)
