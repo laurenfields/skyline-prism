@@ -31,7 +31,11 @@ as the GitHub Release description and fails if it is missing.
   matrix: a row z-scored log2 heatmap of the panel's members across a chosen grouping column (group means,
   toggle to per-sample) plus a per-group boxplot of each sample's mean marker z-score, and a "found
   N/total members / not detected" report. Panels are the same protein lists the Dynamic Range plot uses
-  (your own plus the shipped panels), and several can be ticked to union into one heatmap.
+  (your own plus the shipped panels), and several can be ticked to union into one heatmap - and they
+  match by the same rules, on every identifier a feature carries: a panel written in accessions, in
+  gene symbols or in protein names finds its members at either feature level, and a peptide matches
+  through the protein columns beside it rather than through its own modified sequence. A shared
+  peptide counts for any group it belongs to, not only its first.
 
 - **A choice of variance prior for the Volcano, defaulting to the lab's own.** The **Prior** picker
   offers **Intensity trend** (the default), **Global** and **limma-trend**. Intensity trend is the

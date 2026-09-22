@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using SkylinePrism.Core.Qc;
@@ -32,7 +32,16 @@ public static class MarkerPanel
     /// <paramref name="perSample"/> is false the heatmap columns are group means, otherwise individual
     /// samples ordered by group. The boxplot data is, per group, each sample's mean marker z-score.
     /// </summary>
-    public static MarkerPanelResult Evaluate(double[,] exprLog2, string[] featureIds, string[] featureLabels,
+    /// <remarks>
+    /// <paramref name="identities"/> rather than a pair of id/label arrays because a panel is written
+    /// in accessions, genes or protein names and a feature must be findable under every one of them.
+    /// Matching on (id, label) alone meant a protein row was offered only its group id and gene - so
+    /// an accession- or name-based list matched nothing - and a peptide row was offered its modified
+    /// sequence as BOTH fields, which is neither. Valid panels reported their members as not
+    /// detected. <see cref="FeatureIdentity"/> carries what the matcher needs at both levels.
+    /// </remarks>
+    public static MarkerPanelResult Evaluate(double[,] exprLog2,
+        IReadOnlyList<FeatureIdentity> identities,
         string?[] sampleGroups, string[] sampleIds, ProteinList panel, bool perSample)
     {
         var nFeatures = exprLog2.GetLength(0);
@@ -48,11 +57,11 @@ public static class MarkerPanel
         var matcher = ProteinListSet.MatcherFor(panel);
         var matched = new List<int>();
         for (var f = 0; f < nFeatures; f++)
-            if (matcher.Match(featureIds[f], featureLabels[f], null) is not null)
+            if (Claims(matcher, identities[f]))
                 matched.Add(f);
 
         var markerLabels = matched
-            .Select(f => string.IsNullOrEmpty(featureLabels[f]) ? featureIds[f] : featureLabels[f])
+            .Select(f => string.IsNullOrEmpty(identities[f].Label) ? identities[f].FeatureId : identities[f].Label)
             .ToArray();
 
         // Per-member detection, for the "found N/total" report.
@@ -67,7 +76,7 @@ public static class MarkerPanel
             var memberMatcher = ProteinListSet.MatcherFor(new ProteinList { Members = { member } });
             var hit = false;
             for (var f = 0; f < nFeatures && !hit; f++)
-                if (memberMatcher.Match(featureIds[f], featureLabels[f], null) is not null)
+                if (Claims(memberMatcher, identities[f]))
                     hit = true;
             if (!hit)
                 notDetected.Add(ProteinList.DisplayName(member));
@@ -180,4 +189,12 @@ public static class MarkerPanel
         return new MarkerPanelResult(markerLabels, columnLabels, heat, symMax, groupNames,
             panelScoreByGroup, notDetected, found, total);
     }
+    /// <summary>
+    /// Whether the list claims this feature, under any accession, gene or protein name it carries -
+    /// plus its own id and display label, which is how a panel written in protein-group ids or in
+    /// peptide sequences still matches.
+    /// </summary>
+    private static bool Claims(ProteinListMatcher matcher, FeatureIdentity identity)
+        => matcher.MatchAny(identity.Accessions, identity.Genes, identity.ProteinNames) is not null
+           || matcher.Match(identity.FeatureId, identity.Label, null) is not null;
 }

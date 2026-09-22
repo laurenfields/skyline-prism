@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -507,14 +507,24 @@ public sealed class ProteinListMatcher
     /// care about totals should treat the lists as overlapping sets, not a partition.</para>
     /// </summary>
     public ProteinList? MatchPeptide(string? leadingProteins, string? genes, string? proteinNames)
+        => MatchAny(SplitGroups(leadingProteins), SplitGroups(genes), SplitGroups(proteinNames));
+
+    /// <summary>
+    /// <see cref="MatchPeptide"/> over identifiers that are already split - what
+    /// <c>DifferentialAnalysis.FeatureIdentity</c> carries. Same rule at both feature levels: a
+    /// protein group names one accession, gene and name, a shared peptide names several, and being
+    /// in the list under ANY of them is enough.
+    /// </summary>
+    public ProteinList? MatchAny(
+        IEnumerable<string> accessions, IEnumerable<string> genes, IEnumerable<string> proteinNames)
     {
-        foreach (var accession in SplitGroups(leadingProteins))
+        foreach (var accession in accessions)
             if (Match(accession, null, null) is { } byAccession)
                 return byAccession;
-        foreach (var gene in SplitGroups(genes))
+        foreach (var gene in genes)
             if (Match(null, gene, null) is { } byGene)
                 return byGene;
-        foreach (var name in SplitGroups(proteinNames))
+        foreach (var name in proteinNames)
             if (Match(null, null, name) is { } byName)
                 return byName;
         return null;

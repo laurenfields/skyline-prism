@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -288,7 +288,8 @@ public partial class MainWindow
         }
 
         var perSample = (MarkersViewCombo.SelectedItem as ComboBoxItem)?.Content as string == "Per sample";
-        var result = MarkerPanel.Evaluate(ds.ExprLog2, ds.FeatureIds, ds.FeatureLabels, groups,
+        var identities = Enumerable.Range(0, ds.FeatureIds.Length).Select(ds.IdentityOf).ToList();
+        var result = MarkerPanel.Evaluate(ds.ExprLog2, identities, groups,
             ds.SampleIds, combined, perSample);
 
         if (result.MarkerLabels.Length == 0)
