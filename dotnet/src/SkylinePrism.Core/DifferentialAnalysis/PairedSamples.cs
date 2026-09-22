@@ -48,7 +48,7 @@ public static class PairedSamples
         IReadOnlyList<int> groupBColumns)
     {
         var messages = new List<string>();
-        var unlabelled = 0;
+        var unlabeled = 0;
 
         Dictionary<string, List<int>> BySubject(IReadOnlyList<int> cols)
         {
@@ -58,7 +58,7 @@ public static class PairedSamples
                 var subject = c < subjectLabels.Count ? subjectLabels[c] : null;
                 if (string.IsNullOrEmpty(subject))
                 {
-                    unlabelled++;
+                    unlabeled++;
                     continue;
                 }
 
@@ -110,8 +110,8 @@ public static class PairedSamples
             if (!inA.ContainsKey(subject))
                 unmatched.Add(subject);
 
-        if (unlabelled > 0)
-            messages.Add($"{unlabelled} sample(s) have no value in the pairing column and were left out.");
+        if (unlabeled > 0)
+            messages.Add($"{unlabeled} sample(s) have no value in the pairing column and were left out.");
         if (unmatched.Count > 0)
             messages.Add($"{unmatched.Count} subject(s) appear in only one arm and were left out "
                 + $"({Preview(unmatched)}).");

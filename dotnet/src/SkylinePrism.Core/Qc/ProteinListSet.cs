@@ -542,6 +542,27 @@ public sealed class ProteinListMatcher
                 .Select(s => s.Trim())
                 .Where(s => s.Length > 0);
 
+    /// <summary>
+    /// Every identifier these fields could be claimed under - the FEATURE side of a match.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so a caller with many members and many features can invert the loop: collect this
+    /// over the features once, then test each member's own tokens against the set. Matching stays
+    /// defined in exactly one place - <see cref="Candidates"/> and <see cref="Tokenize"/> below -
+    /// so an inverted caller cannot drift from <see cref="Match(AbundanceEntry)"/>.
+    /// </remarks>
+    public static IEnumerable<string> CandidatesFor(string? accession, string? gene, string? proteinName)
+        => Candidates(new AbundanceEntry(
+            Key: accession ?? gene ?? proteinName ?? "", Label: "", Accession: accession, Gene: gene,
+            ProteinName: proteinName, MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0));
+
+    /// <summary>The tokens one list MEMBER is matched under - the other side of the same test.</summary>
+    public static IEnumerable<string> MemberTokens(string member)
+        => Tokenize(ProteinList.MatchToken(member)).Where(t => t.Length > 0);
+
+    /// <summary>The comparer both sides are compared with.</summary>
+    public static StringComparer TokenComparer => StringComparer.OrdinalIgnoreCase;
+
     /// <summary>The first visible list claiming this entry, or null.</summary>
     public ProteinList? Match(AbundanceEntry entry)
     {

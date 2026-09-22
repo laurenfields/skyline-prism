@@ -1,4 +1,4 @@
-# Differential analysis
+﻿# Differential analysis
 
 The Skyline tool's **Differential** pane runs a limma empirical-Bayes moderated-t contrast on a
 PRISM output directory: protein or peptide level, two groups from any metadata or clinical column,
@@ -68,7 +68,7 @@ shifts every p-value in that test by 10-20%, which is how this was found.
 The slope coefficient is in log2 **per unit of x**, so a threshold on it would mean something
 different for a column measured in days than for the same column in hours. PRISM therefore reports
 `slope x (x_max - x_min)` - the modeled change across the range actually measured - and the volcano's
-x-axis is that quantity, labelled with the span. The raw slope is `log2fc / span`, and the span is in
+x-axis is that quantity, labeled with the span. The raw slope is `log2fc / span`, and the span is in
 `DifferentialResult.TrendRange` and in the CLI's CSV header.
 
 This is a strict generalization, not a separate convention: code a two-level grouping as `x = 0` and
@@ -136,7 +136,7 @@ same prior source, which is why the source is named everywhere the prior is.
 
 Controls are found by looking up `sample_type` against a fixed vocabulary - Skyline's **Standard**
 and **Quality Control**, plus PRISM's own `reference` and `qc`. A run whose replicates are all
-Unknown therefore has no control set: the pane **greys** the option rather than hiding it, and its
+Unknown therefore has no control set: the pane **grays** the option rather than hiding it, and its
 tooltip says to set those sample types in the Skyline document, so the analysis that would have been
 available is discoverable rather than invisible. `proteomics-toolkit` can name any metadata column
 here; PRISM deliberately does not, because the prior source changes every p-value and a free-text

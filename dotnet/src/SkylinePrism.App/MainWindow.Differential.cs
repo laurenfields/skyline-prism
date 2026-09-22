@@ -219,17 +219,12 @@ public partial class MainWindow
             return;
 
         var keep = DiffTrendOverCombo.SelectedItem as string;
-        _diffSuppress = true;
-        try
+        using (SuppressDiff())
         {
             DiffTrendOverCombo.ItemsSource = numeric;
             DiffTrendOverCombo.SelectedItem = keep is not null && numeric.Contains(keep, StringComparer.Ordinal)
                 ? keep
                 : numeric.FirstOrDefault();
-        }
-        finally
-        {
-            _diffSuppress = false;
         }
     }
 
@@ -264,8 +259,38 @@ public partial class MainWindow
         + "replicates, so their spread is the measurement variance the prior is meant to describe. "
         + "Only the per-feature scale comes from them - the prior degrees of freedom stay global, "
         + "estimated from the study samples, so the amount of shrinkage still matches the data "
-        + "being analyzed. The controls take no part in the contrast itself. Untick to fit on the "
+        + "being analyzed. Usually the controls take no part in the contrast itself - they carry no "
+        + "study condition and no timepoint - and the status line says so when they do. Untick to fit on the "
         + "contrast groups instead, which is only worth doing to reproduce an older result.";
+
+    /// <summary>
+    /// Suppress the pane's selector handlers until the returned scope is disposed.
+    /// </summary>
+    /// <remarks>
+    /// Saves and RESTORES the previous value rather than setting false on the way out, because these
+    /// nest: assigning a combo's SelectedIndex raises SelectionChanged synchronously, whose handler
+    /// calls UpdateDiffControls, which suppresses around its own assignments. A plain
+    /// <c>= false</c> at the end of the inner one ended the OUTER window too, so the remaining
+    /// assignments in a load ran their handlers unsuppressed - each re-running a contrast against a
+    /// half-initialized pane. Disposal also makes it exception-safe: a throw inside used to leave
+    /// the whole pane suppressed for the rest of the session, with every selector silently inert.
+    /// </remarks>
+    private SuppressScope SuppressDiff() => new(this);
+
+    private readonly struct SuppressScope : IDisposable
+    {
+        private readonly MainWindow _owner;
+        private readonly bool _previous;
+
+        public SuppressScope(MainWindow owner)
+        {
+            _owner = owner;
+            _previous = owner._diffSuppress;
+            owner._diffSuppress = true;
+        }
+
+        public void Dispose() => _owner._diffSuppress = _previous;
+    }
 
     /// <summary>Whether the current design fits a slope rather than contrasting two arms.</summary>
     private bool DiffIsTrend() => DiffSelectedDesign()
@@ -367,7 +392,11 @@ public partial class MainWindow
     private SignificanceRule DiffRule() => new()
     {
         UseAdjusted = (DiffPKindCombo.SelectedItem as ComboBoxItem)?.Tag as string != "Raw",
-        PThreshold = ComboNumber(DiffPCutCombo, fallback: 0.05, min: 0.0, max: 1.0),
+        // The floor is not 0: -log10(0) is +infinity, and the volcano draws its guide line at
+        // exactly that, which leaves the plot with a non-finite axis limit and nothing on it. A cut
+        // of zero admits no feature either, so nothing is lost by refusing to go below the
+        // smallest p a double can carry.
+        PThreshold = ComboNumber(DiffPCutCombo, fallback: 0.05, min: 1e-300, max: 1.0),
         Log2FcThreshold = ComboNumber(DiffEffectCutCombo, fallback: 1.0, min: 0.0, max: double.MaxValue),
     };
 
@@ -494,7 +523,7 @@ public partial class MainWindow
     /// The same two rules the QC pane's <c>UpdateQcControls</c> documents, for the same reasons.
     /// The variance prior is <b>hidden</b> outside the moderated t, because it means nothing there
     /// and this row is already crowded - a disabled control still invites a click. "Adjust for" is
-    /// <b>greyed</b> rather than hidden, because it is a real and common setting that simply cannot
+    /// <b>grayed</b> rather than hidden, because it is a real and common setting that simply cannot
     /// be honored by a test with no design matrix; hiding it would make a ticked covariate vanish
     /// with the control, and leaving it live would imply the contrast had been adjusted when it had
     /// not.
@@ -516,9 +545,10 @@ public partial class MainWindow
         ShowTest(DiffDesignTrendSubjectItem, numeric.Count > 0);
         if (DiffDesignCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
         {
-            _diffSuppress = true;
-            DiffDesignCombo.SelectedIndex = 0; // Unpaired
-            _diffSuppress = false;
+            using (SuppressDiff())
+            {
+                DiffDesignCombo.SelectedIndex = 0; // Unpaired
+            }
             UpdateDiffControls();
             return;
         }
@@ -559,20 +589,26 @@ public partial class MainWindow
         // Its trend equivalent is a logistic regression of detection on x, which is not
         // implemented - so the view goes rather than running the wrong test under its name.
         ShowTest(DiffViewDetectionItem, !trend);
+        // Enrichment takes its hit list from a two-arm contrast; under a trend it would run
+        // TryGetGroups against the hidden arm pickers and surface Core's "call RunTrend instead"
+        // message, which is written for a caller and not for a reader.
+        ShowTest(DiffViewEnrichmentItem, !trend);
         if (DiffViewCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
         {
-            _diffSuppress = true;
-            DiffViewCombo.SelectedIndex = 0; // Volcano
-            _diffSuppress = false;
+            using (SuppressDiff())
+            {
+                DiffViewCombo.SelectedIndex = 0; // Volcano
+            }
         }
 
         // Changing the design can strand the selection on a test that no longer applies. Fall back
         // to the moderated t, which is valid under both, rather than leaving an invisible selection.
         if (DiffTestCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
         {
-            _diffSuppress = true;
-            DiffTestCombo.SelectedIndex = 0;
-            _diffSuppress = false;
+            using (SuppressDiff())
+            {
+                DiffTestCombo.SelectedIndex = 0;
+            }
         }
 
         var moderated = DiffSelectedTest() == DifferentialTest.ModeratedT;
@@ -585,9 +621,10 @@ public partial class MainWindow
         ShowTest(DiffPriorPeptideCountItem, hasCounts);
         if (DiffPriorCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
         {
-            _diffSuppress = true;
-            DiffPriorCombo.SelectedIndex = 0; // Intensity trend, valid at either level
-            _diffSuppress = false;
+            using (SuppressDiff())
+            {
+                DiffPriorCombo.SelectedIndex = 0; // Intensity trend, valid at either level
+            }
         }
 
         // Fitting the prior on controls only means something for a prior that HAS a per-feature
@@ -619,7 +656,7 @@ public partial class MainWindow
         // reference injections are nominal replicates, so their spread is the measurement variance
         // the prior is supposed to describe. Only the per-feature scale comes from them; the prior
         // degrees of freedom stay global, estimated from the study samples, so the AMOUNT of
-        // shrinkage is still calibrated to the data being analysed - which is what makes this
+        // shrinkage is still calibrated to the data being analyzed - which is what makes this
         // defensible rather than simply looser. Matches proteomics-toolkit's
         // variance_prior_group_column, which passes fit["d0"] through the same way.
         //
@@ -661,8 +698,7 @@ public partial class MainWindow
             return;
         }
 
-        _diffSuppress = true;
-        try
+        using (SuppressDiff())
         {
             if (DiffViewCombo.SelectedItem is null)
                 DiffViewCombo.SelectedIndex = 0;
@@ -687,10 +723,6 @@ public partial class MainWindow
                 DiffEffectCutCombo.SelectedIndex = 0;
             if (DiffCorrectionCombo.SelectedItem is null)
                 DiffCorrectionCombo.SelectedIndex = 0; // Benjamini-Hochberg
-        }
-        finally
-        {
-            _diffSuppress = false;
         }
 
         var level = DiffSelectedLevel();
@@ -750,15 +782,10 @@ public partial class MainWindow
             }
         }
 
-        _diffSuppress = true;
-        try
+        using (SuppressDiff())
         {
             DiffGroupByCombo.ItemsSource = ds.MetadataColumns;
             DiffGroupByCombo.SelectedItem = DefaultContrastColumn(ds);
-        }
-        finally
-        {
-            _diffSuppress = false;
         }
 
         PopulateDiffGroupValues();
@@ -820,17 +847,12 @@ public partial class MainWindow
             .Where(m => !string.Equals(m, col, StringComparison.Ordinal))
             .ToList();
         var keepPair = DiffPairByCombo.SelectedItem as string;
-        _diffSuppress = true;
-        try
+        using (SuppressDiff())
         {
             DiffPairByCombo.ItemsSource = pairCandidates;
             DiffPairByCombo.SelectedItem = keepPair is not null && pairCandidates.Contains(keepPair)
                 ? keepPair
                 : null;
-        }
-        finally
-        {
-            _diffSuppress = false;
         }
 
         PopulateDiffCovariates(col);
@@ -877,6 +899,26 @@ public partial class MainWindow
     }
 
     /// <summary>Ticked covariates, with values aligned to <paramref name="targetSampleIds"/>, or null if none.</summary>
+    /// <summary>
+    /// Drop the term being tested from a covariate list, whichever term that is.
+    /// </summary>
+    /// <remarks>
+    /// The covariate picker excludes the Group-by column, but a trend is tested on the Trend-over
+    /// column instead - and adjusting a slope for the very column it is a slope in gives the design
+    /// [1, x, x], which is exactly singular. Dropped here rather than filtered out of the picker so
+    /// that switching design back to a two-arm contrast does not silently lose a tick the user made.
+    /// </remarks>
+    private IReadOnlyList<Covariate>? WithoutTestedTerm(IReadOnlyList<Covariate>? covariates)
+    {
+        if (covariates is null || !DiffIsTrend() || DiffTrendColumn() is not { } trendColumn)
+            return covariates;
+
+        var kept = covariates
+            .Where(c => !string.Equals(c.Name, trendColumn, StringComparison.Ordinal))
+            .ToList();
+        return kept.Count == covariates.Count ? covariates : kept;
+    }
+
     private IReadOnlyList<Covariate>? SelectedCovariatesFor(IReadOnlyList<string> targetSampleIds)
     {
         if (_diffDataset is null)
@@ -916,11 +958,32 @@ public partial class MainWindow
         }
     }
 
-    private void OnDiffGroupByChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>
+    /// A new grouping column: rebuild the arm pickers for it, then run, like every other selector.
+    /// </summary>
+    /// <remarks>
+    /// PopulateDiffGroupValues reseeds both arms with the new column's first two levels and rewrites
+    /// the closed-state text of both pickers. Without the run, the toolbar then reads "Control vs
+    /// Disease" over a volcano and a status line still describing the PREVIOUS column's contrast -
+    /// the one state this pane promises cannot happen, since the load line says "it runs as you
+    /// choose" and the Run button is only a manual refresh.
+    /// </remarks>
+    private async void OnDiffGroupByChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_diffSuppress)
-            return;
-        PopulateDiffGroupValues();
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            PopulateDiffGroupValues();
+            // A trend ignores the arms entirely, so changing the grouping column cannot move it.
+            if (DiffIsTrend())
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffGroupByChanged), ex);
+        }
     }
 
     /// <summary>
@@ -955,7 +1018,7 @@ public partial class MainWindow
     /// <remarks>
     /// Values are taken from the dataset rather than re-read from the CSV on purpose: the join
     /// picked a key column by best match rate, and re-deriving it here could pick a different one
-    /// and colour the plot by a slightly different assignment than the one the user is reading the
+    /// and color the plot by a slightly different assignment than the one the user is reading the
     /// Volcano against.
     /// </remarks>
     private void PublishClinicalToQcPane(IReadOnlyList<string> addedColumns)
@@ -1012,16 +1075,11 @@ public partial class MainWindow
             InvalidateMarkers();
 
             // Refresh the group-by choices so the new clinical columns appear; select the first one.
-            _diffSuppress = true;
-            try
+            using (SuppressDiff())
             {
                 DiffGroupByCombo.ItemsSource = null;
                 DiffGroupByCombo.ItemsSource = _diffDataset.MetadataColumns;
                 DiffGroupByCombo.SelectedItem = result.AddedColumns[0];
-            }
-            finally
-            {
-                _diffSuppress = false;
             }
 
             PopulateDiffGroupValues();
@@ -1156,7 +1214,7 @@ public partial class MainWindow
         }
 
         var dataset = _diffDataset;
-        var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        var covariates = WithoutTestedTerm(SelectedCovariatesFor(dataset.SampleIds));
         var options = DiffOptions(covariates);
         var rule = DiffRule();
         var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
@@ -1241,7 +1299,7 @@ public partial class MainWindow
         }
 
         var dataset = _diffDataset!;
-        var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        var covariates = WithoutTestedTerm(SelectedCovariatesFor(dataset.SampleIds));
         var options = DiffOptions(covariates);
         // Read BEFORE the worker starts. Reading it after the await would also work today, but the
         // pane has already shipped one cross-thread control read from inside a Task.Run lambda, and
@@ -1293,7 +1351,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Said when the paired design is selected but this run could not honour it.
+    /// Said when the paired design is selected but this run could not honor it.
     /// </summary>
     /// <remarks>
     /// The paired form of a detection-rate test is McNemar's, which PRISM does run - but only
@@ -1530,7 +1588,7 @@ public partial class MainWindow
             return;
         }
 
-        var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        var covariates = WithoutTestedTerm(SelectedCovariatesFor(dataset.SampleIds));
         var options = DiffOptions(covariates);
         // Same reason as the volcano path: read on the UI thread, before the worker exists.
         var rule = DiffRule();
@@ -2025,7 +2083,7 @@ public partial class MainWindow
 
     /// <summary>
     /// Draw the volcano. <paramref name="rule"/> is passed in rather than read here, so the points'
-    /// colouring, the guide lines and the caller's hit count are one decision made once - and so
+    /// coloring, the guide lines and the caller's hit count are one decision made once - and so
     /// this method never touches a WPF control that a worker thread might own.
     /// </summary>
     private void RenderVolcano(DifferentialResult res, SignificanceRule rule)
@@ -2041,8 +2099,8 @@ public partial class MainWindow
         _volcanoRowById = new Dictionary<string, DifferentialRow>(StringComparer.Ordinal);
         foreach (var r in res.Rows)
         {
-            // The value the rule judges by, which is also what the axis is labelled with - so
-            // the cut-off line always sits where the colouring changes. Plotting one p while
+            // The value the rule judges by, which is also what the axis is labeled with - so
+            // the cut-off line always sits where the coloring changes. Plotting one p while
             // deciding on the other used to put the line at whatever raw p the weakest surviving
             // hit happened to have: a number that moved with the data and matched nothing the
             // reader could see.
@@ -2064,7 +2122,7 @@ public partial class MainWindow
 
         AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
         AddMarkers(plt, sigX, sigY, "#d62728", DiffSigPointSize, "significant");
-        // The guides ARE the rule, read from the same object that coloured the points, so the red
+        // The guides ARE the rule, read from the same object that colored the points, so the red
         // region and the lines cannot disagree. A zero effect cut draws no vertical guides, because
         // a line at zero would read as a threshold rather than as its absence.
         if (rule.Log2FcThreshold > 0)
@@ -2086,7 +2144,7 @@ public partial class MainWindow
         // the raw p explicitly. Ties in an adjusted value show up as horizontal bands, which is a
         // property of the step-up transform and not a rendering fault. With Correct = None the
         // adjusted column simply holds the raw p, and calling it adjusted either way would be the
-        // plainest kind of mislabelling.
+        // plainest kind of mislabeling.
         plt.YLabel(rule.YAxisLabel(corrected));
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();

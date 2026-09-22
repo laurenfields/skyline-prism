@@ -1,4 +1,4 @@
-# The Skyline external tool
+﻿# The Skyline external tool
 
 PRISM ships as a Skyline external tool: a Windows window that runs the pipeline on one or more Skyline
 documents and then shows interactive plots of the result. Installation is in the
@@ -192,13 +192,13 @@ their membership:
 
 | Category | Panels | What it is for |
 |---|---|---|
-| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial content`, `White matter`, `Grey matter` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion, dissected tissue |
+| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial content`, `White matter`, `Gray matter` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion, dissected tissue |
 | **Plasma and blood** | `Classic plasma proteins`, `Free soluble acidic plasma proteins`, `Immunoglobulin and complement`, `Lipoproteins (LDL/VLDL/HDL)`, `Platelet microparticles`, `EV markers (extended)` | What is in the sample matrix. Good for highlighting; usable as a denominator only where the biology under study does not move them |
 | **Endothelial** | Arterial, venous, capillary, pan-endothelial, brain/BBB, liver sinusoidal, kidney glomerular | Vascular bed identity — which endothelium a signal comes from |
 | **Epithelial** | Pan-epithelial, kidney tubule, intestine, lung | Epithelial identity, kept separate from endothelial: different tissues that happen to alliterate |
 | **Readouts and contamination** | `Hemolysis`, `Fibrinogen`, `Keratin contamination`, `Tubular contamination`, `Common contaminants (cRAP)`, `Housekeeping proteins` | Their abundance **is** the problem being looked for, so dividing by it removes the evidence |
 | **Pathways and processes** | Oxidative phosphorylation, glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin cytoskeleton, antigen presentation, acute phase response, chaperones, redox, DNA damage repair, autophagy, unfolded protein response, innate immune signaling, apoptosis, fatty acid oxidation, cell cycle, epithelial-mesenchymal transition, hypoxia response, glucose and lipid metabolism, insulin signaling | For seeing where a process sits on a plot. Normalizing to one would remove the biology under study |
-| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin` (identity); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result. `White matter`/`Grey matter` sit under Normalizers, with the caution below |
+| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin` (identity); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result. `White matter`/`Gray matter` sit under Normalizers, with the caution below |
 
 **Readouts and pathways are refused by `marker_normalization`** rather than merely discouraged — naming
 one gives an error explaining why. Both fail for the same reason: their abundance is the signal, not the
@@ -492,7 +492,7 @@ change the answer.
 **Adjust for** ticks any metadata column as a covariate — numeric columns are mean-centered,
 categorical ones dummy-coded — which is how a disease-vs-control contrast is run with batch (or sex,
 PMI, ...) held. Only the moderated t can honor a covariate; it is the only test with a design matrix
-to put one in, so the control greys out for the others rather than letting a ticked covariate look
+to put one in, so the control grays out for the others rather than letting a ticked covariate look
 like it was applied.
 
 **Design** says how the samples are related:

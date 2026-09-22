@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -185,7 +185,9 @@ public partial class MainWindow
         // decides if the entry exists at all.
         UpdateIonNavVisibility();
 
-        if (pane == VizPane.IonAccounting)
+        if (pane == VizPane.Qc)
+            await EnsureQcLoadedAsync();
+        else if (pane == VizPane.IonAccounting)
             await LoadIonAccountingAsync();
         else if (pane == VizPane.Density && !_densityLoaded)
             await LoadDensitySamplesAsync();
@@ -201,6 +203,38 @@ public partial class MainWindow
             await LoadDifferentialAsync();
         else if (pane == VizPane.Markers)
             await LoadMarkersAsync();
+    }
+
+    /// <summary>
+    /// Read the QC pane's matrices and grouping columns for the output directory currently in the
+    /// box, if they are not already the ones loaded.
+    /// </summary>
+    /// <remarks>
+    /// Every other pane loads itself on navigation; the QC pane only ever filled at the END OF A
+    /// RUN, so opening the tool on an existing output directory and clicking QC gave empty combos
+    /// and no plot. That is the standalone workflow - the mode this window is explicitly required to
+    /// support - and it was the only pane that did not work in it.
+    ///
+    /// <para>It became worth fixing when the two PCA plots were merged into this one: before that,
+    /// the Differential pane's own PCA loaded on navigation and covered the gap, so the only sample
+    /// PCA in the tool is now behind this load.</para>
+    ///
+    /// <para>Keyed on the directory rather than a bool, like the density and dynamic-range panes:
+    /// pointing the box at another directory has to reload, and returning to this pane must not.</para>
+    /// </remarks>
+    private async Task EnsureQcLoadedAsync()
+    {
+        var outputDir = OutputDirBox.Text?.Trim();
+        if (string.IsNullOrEmpty(outputDir) || !Directory.Exists(outputDir))
+            return;
+        if (string.Equals(_qcOutputDir, outputDir, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Off the UI thread: the same reads the run path already backgrounds, for the same reason -
+        // an output directory on OneDrive or scanned by Defender can block for a long time.
+        await Task.Run(() => LoadQcMatrices(outputDir));
+        PopulateGroupCombos();
+        RenderQc();
     }
 
     private async void OnDensityReload(object sender, RoutedEventArgs e)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -68,9 +68,9 @@ public static class TrendSamples
             .GroupBy(c => subjectLabels[c]!, StringComparer.Ordinal)
             .ToList();
 
-        var unlabelled = usable.Count - bySubject.Sum(g => g.Count());
-        if (unlabelled > 0)
-            messages.Add($"{unlabelled} sample(s) have no subject and were left out.");
+        var unlabeled = usable.Count - bySubject.Sum(g => g.Count());
+        if (unlabeled > 0)
+            messages.Add($"{unlabeled} sample(s) have no subject and were left out.");
 
         var keptColumns = new List<int>();
         var keptX = new List<double>();

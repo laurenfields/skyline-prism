@@ -345,13 +345,24 @@ public class CliIntegrationTests
         }
     }
 
-    /// <summary>The "n = A vs B" the status line reports.</summary>
+    /// <summary>
+    /// The arm sizes the status line reports, as (A, B).
+    /// </summary>
+    /// <remarks>
+    /// The line is "n = &lt;B label&gt; &lt;nB&gt; vs &lt;A label&gt; &lt;nA&gt;" - B first, matching
+    /// the contrast line above it, with each count next to the arm it belongs to. It used to be a
+    /// bare "n = nA vs nB" under a line reading "B vs A", which invited reading the first number as
+    /// the arm named first.
+    /// </remarks>
     private static (int A, int B) ArmCounts(string output)
     {
-        var m = Regex.Match(output, @"n = (\d+) vs (\d+)");
-        Assert.True(m.Success, "the status line should report both arm sizes");
-        return (int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture),
-                int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture));
+        // The labels can contain spaces ("qc + reference"), so they are matched lazily and the
+        // pattern is anchored on the semicolon that ends the counts.
+        var m = Regex.Match(output, @"n = .+? (\d+) vs .+? (\d+);");
+        Assert.True(m.Success, $"the status line should report both arm sizes; got: {output}");
+        // Group 1 is B (printed first), group 2 is A.
+        return (int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture),
+                int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture));
     }
 
     /// <summary>
@@ -384,8 +395,17 @@ public class CliIntegrationTests
     [InlineData("--adjust-for needs --test moderated", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--test", "welch", "--adjust-for", "batch")]
     // Adjusting for the contrast itself leaves nothing to test.
-    [InlineData("is the contrast itself", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+    [InlineData("is the term being tested", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--adjust-for", "sample_type")]
+    // The same rule on a trend, where the tested term is the trend column rather than the group-by.
+    // Unguarded this built [1, x, x] and died on a rank check naming neither flag.
+    [InlineData("is the term being tested", "--design", "trend", "--trend-over", "batch",
+        "--adjust-for", "batch")]
+    // A test the design cannot run is refused rather than silently swapped for the moderated t.
+    [InlineData("does not apply to --design trend", "--design", "trend", "--trend-over", "batch",
+        "--test", "mann-whitney")]
+    [InlineData("does not apply to --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--design", "paired", "--subject", "batch", "--test", "welch")]
     [InlineData("Unknown --test", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--test", "ttest")]
     [InlineData("Unknown --correction", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--correction", "fdr")]

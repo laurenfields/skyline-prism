@@ -65,6 +65,26 @@ public static class MarkerPanel
             .ToArray();
 
         // Per-member detection, for the "found N/total" report.
+        //
+        // Inverted: collect every identifier the FEATURES carry once, then test each member against
+        // that set. The straightforward loop is members x features with a matcher built per member,
+        // which is 1,273 members (all 65 shipped panels) against a peptide matrix of tens of
+        // thousands - tens of millions of comparisons on the UI thread. The test itself is
+        // unchanged, because both sides still come from ProteinListMatcher.
+        var present = new HashSet<string>(ProteinListMatcher.TokenComparer);
+        for (var f = 0; f < nFeatures; f++)
+        {
+            var id = identities[f];
+            foreach (var a in id.Accessions)
+                present.UnionWith(ProteinListMatcher.CandidatesFor(a, null, null));
+            foreach (var g in id.Genes)
+                present.UnionWith(ProteinListMatcher.CandidatesFor(null, g, null));
+            foreach (var n in id.ProteinNames)
+                present.UnionWith(ProteinListMatcher.CandidatesFor(null, null, n));
+            // The id/label fallback, matching what Claims tests second.
+            present.UnionWith(ProteinListMatcher.CandidatesFor(id.FeatureId, id.Label, null));
+        }
+
         var total = 0;
         var notDetected = new List<string>();
         foreach (var member in panel.Members)
@@ -73,12 +93,7 @@ public static class MarkerPanel
             if (string.IsNullOrEmpty(token))
                 continue;
             total++;
-            var memberMatcher = ProteinListSet.MatcherFor(new ProteinList { Members = { member } });
-            var hit = false;
-            for (var f = 0; f < nFeatures && !hit; f++)
-                if (Claims(memberMatcher, identities[f]))
-                    hit = true;
-            if (!hit)
+            if (!ProteinListMatcher.MemberTokens(member).Any(present.Contains))
                 notDetected.Add(ProteinList.DisplayName(member));
         }
 
@@ -189,6 +204,7 @@ public static class MarkerPanel
         return new MarkerPanelResult(markerLabels, columnLabels, heat, symMax, groupNames,
             panelScoreByGroup, notDetected, found, total);
     }
+
     /// <summary>
     /// Whether the list claims this feature, under any accession, gene or protein name it carries -
     /// plus its own id and display label, which is how a panel written in protein-group ids or in

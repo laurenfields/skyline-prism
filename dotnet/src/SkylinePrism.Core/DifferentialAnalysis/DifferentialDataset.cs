@@ -165,8 +165,24 @@ public sealed class DifferentialDataset
     /// </summary>
     public FeatureIdentity? IdentityOf(string featureId)
     {
-        var i = Array.IndexOf(FeatureIds, featureId);
-        return i < 0 ? null : IdentityOf(i);
+        // Indexed, not scanned. A linear Array.IndexOf here is invisible for one hover and
+        // quadratic for a caller that walks a whole result: the CLI's CSV writer calls this once
+        // per row, so a 75,000-peptide cohort was 75,000 scans of a 75,000-element array - billions
+        // of string comparisons, and a command that looks hung after printing its hit count.
+        _indexById ??= BuildIndex(FeatureIds);
+        return _indexById.TryGetValue(featureId, out var i) ? IdentityOf(i) : null;
+    }
+
+    /// <summary>Built on first use: most callers never look a feature up by id at all.</summary>
+    private Dictionary<string, int>? _indexById;
+
+    private static Dictionary<string, int> BuildIndex(string[] ids)
+    {
+        var map = new Dictionary<string, int>(ids.Length, StringComparer.Ordinal);
+        for (var i = 0; i < ids.Length; i++)
+            // First wins, matching Array.IndexOf, in the pathological case of a duplicated id.
+            map.TryAdd(ids[i], i);
+        return map;
     }
 
 

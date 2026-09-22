@@ -444,7 +444,7 @@ public static class Differential
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
 
         var (squeezed, variancePrior) = FitPrior(
-            options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages);
+            options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages, cols);
 
         var dfTotal = fit.DfResidual + squeezed.DfPrior;
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
@@ -493,12 +493,27 @@ public static class Differential
         for (var i = 0; i < nTested; i++)
             rows[i] = rows[i] with { AdjPValue = adj[i] };
 
-        var ordered = rows.OrderBy(r => r.PValue).ToArray();
+        var ordered = OrderByPValue(rows);
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
             trendRange, nSubjects);
     }
+
+    /// <summary>
+    /// Order rows by p-value with NaN LAST.
+    /// </summary>
+    /// <remarks>
+    /// A plain <c>OrderBy(r =&gt; r.PValue)</c> puts them FIRST: .NET's double comparer ranks NaN
+    /// below every number, so the features a test could not evaluate at all - a constant row, an
+    /// empty arm - lead the hit table, the CSV and anything that takes the top n. The tests return
+    /// NaN specifically to avoid an infinity sorting to the top; sorting has to agree with that
+    /// intent rather than quietly undo it.
+    /// </remarks>
+    internal static DifferentialRow[] OrderByPValue(IEnumerable<DifferentialRow> rows) =>
+        rows.OrderBy(r => double.IsNaN(r.PValue) ? 1 : 0)
+            .ThenBy(r => r.PValue)
+            .ToArray();
 
     /// <summary>
     /// Build the design matrix [intercept, groupB, covariate columns...]. Numeric covariates are
@@ -903,7 +918,8 @@ public static class Differential
     /// </summary>
     private static (SqueezeVarResult Squeezed, string Name) FitPrior(
         DifferentialOptions options, double[,] expr, IReadOnlyList<IReadOnlyList<int>> priorGroups,
-        double[] variances, LinearModelFit fit, List<int> tested, List<string> messages)
+        double[] variances, LinearModelFit fit, List<int> tested, List<string> messages,
+        IReadOnlyCollection<int> fitColumns)
     {
         // Peptide counts arrive per FEATURE of the input matrix; the fit is over the tested subset,
         // so they have to be gathered in the same order or the trend would pair each variance with
@@ -948,6 +964,18 @@ public static class Differential
 
             case VariancePrior.IntensityTrend:
             {
+                // The prior is cleanest when its samples take no part in the fit - the usual case,
+                // since control injections carry no timepoint and no study condition. They CAN
+                // overlap: a contrast whose own arm is the QC samples, or a trend over something
+                // every sample has, like injection order. That is not an error and not corrected
+                // here - the prior is a smoothed curve over thousands of features, so one sample's
+                // influence on it is slight - but it is said out loud, because "fitted on the
+                // controls" then means something weaker than it usually does.
+                var shared = priorGroups.SelectMany(g => g).Distinct().Intersect(fitColumns).Count();
+                if (shared > 0)
+                    messages.Add($"{shared} sample(s) are both in the fit and in the variance "
+                        + "prior's groups, so the prior is not independent of the data it moderates.");
+
                 var prior = VariancePriors.IntensityTrend(expr, tested, priorGroups);
                 if (prior is not null)
                     // The SOURCE is part of the answer, not a detail: a prior fitted on control

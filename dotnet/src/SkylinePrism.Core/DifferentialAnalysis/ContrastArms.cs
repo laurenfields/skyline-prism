@@ -114,7 +114,12 @@ public static class ControlSampleTypes
     {
         var groups = Enumerable.Range(0, sampleTypes.Length)
             .Where(i => IsControl(sampleTypes[i]))
-            .GroupBy(i => sampleTypes[i], StringComparer.Ordinal)
+            // Grouped by the SAME comparer that selected them. Ordinal here while IsControl is
+            // case-insensitive splits one control type across its spellings: a cohort merged from
+            // two documents writing "QC" and "qc" - both in Values - yields two groups of one,
+            // the two-replicate floor drops both, and the prior silently falls back to the design
+            // groups. That is the most consequential default in the pane, reverting without a word.
+            .GroupBy(i => sampleTypes[i], Comparer)
             .Select(g => (IReadOnlyList<int>)g.ToList())
             .Where(g => g.Count >= 2)
             .ToList();

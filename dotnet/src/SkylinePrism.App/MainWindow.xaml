@@ -358,7 +358,7 @@
                                 </ComboBox>
                                 <TextBlock x:Name="QcPcLabel" Text="PCs:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="QcPcXCombo" Width="52" SelectionChanged="OnQcChanged"
-                                          ToolTip="Component on the x axis. Higher components often carry the batch or run-order structure that PC1 and PC2 hide. Features are standardized and a missing cell is imputed to its feature mean; the SIGN of a component is arbitrary, so orientation can differ from another tool while distances and variance-explained do not. Colour is metadata only - the decomposition itself is unsupervised.">
+                                          ToolTip="Component on the x axis. Higher components often carry the batch or run-order structure that PC1 and PC2 hide. Features are standardized and a missing cell is imputed to its feature mean; the SIGN of a component is arbitrary, so orientation can differ from another tool while distances and variance-explained do not. Color is metadata only - the decomposition itself is unsupervised.">
                                     <ComboBoxItem IsSelected="True">1</ComboBoxItem>
                                     <ComboBoxItem>2</ComboBoxItem>
                                     <ComboBoxItem>3</ComboBoxItem>
@@ -565,7 +565,9 @@
                                     <!-- Collapsed and disabled under a trend design: Detection
                                          compares two GROUPS, and a trend has none. -->
                                     <ComboBoxItem x:Name="DiffViewDetectionItem">Detection</ComboBoxItem>
-                                    <ComboBoxItem>Enrichment</ComboBoxItem>
+                                    <!-- Also collapsed under a trend: RunEnrichmentAsync resolves
+                                         A/B arms, which a trend does not have. -->
+                                    <ComboBoxItem x:Name="DiffViewEnrichmentItem">Enrichment</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffLevelCombo" Width="90" SelectionChanged="OnDiffLevelChanged"

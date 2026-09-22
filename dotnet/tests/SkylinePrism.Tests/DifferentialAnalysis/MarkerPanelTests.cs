@@ -135,7 +135,7 @@ public class MarkerPanelTests
     }
 
     /// <summary>
-    /// A PEPTIDE row is labelled with its modified sequence, which is neither an accession nor a
+    /// A PEPTIDE row is labeled with its modified sequence, which is neither an accession nor a
     /// gene. It has to match on the protein columns the peptide matrix carries beside it.
     /// </summary>
     [Fact]

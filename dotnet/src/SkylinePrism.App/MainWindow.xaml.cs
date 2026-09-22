@@ -2089,7 +2089,7 @@ public partial class MainWindow : Window
     /// <para>This is what let the QC PCA be used at all on a CLI-produced run. The Replicates
     /// report is written only when PRISM exported it from a Skyline document, so without it the
     /// Group-by dropdown offered nothing but Sample Type - and a batch-correction tool that cannot
-    /// colour its PCA by batch is the wrong way round. A second PCA was built elsewhere in the
+    /// color its PCA by batch is the wrong way round. A second PCA was built elsewhere in the
     /// window partly to work around exactly this.</para>
     /// </summary>
     private SampleAnnotationTable _qcExtraAnnotations = SampleAnnotationTable.Empty;
@@ -2404,7 +2404,7 @@ public partial class MainWindow : Window
         var beforeAfter = kind == "RT-binned CV";
 
         // The component pair means nothing to a CV or intensity plot, so it is hidden rather than
-        // greyed: a disabled control still invites a click, and this row is already crowded.
+        // grayed: a disabled control still invites a click, and this row is already crowded.
         var isPca = kind == "PCA";
         var pcVisibility = isPca ? Visibility.Visible : Visibility.Collapsed;
         QcPcLabel.Visibility = pcVisibility;

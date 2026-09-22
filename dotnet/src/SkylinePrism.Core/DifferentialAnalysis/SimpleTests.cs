@@ -101,7 +101,7 @@ internal static class SimpleTests
             rows[i] = rows[i] with { AdjPValue = adjusted[i] };
 
         return new DifferentialResult(
-            rows.OrderBy(r => r.PValue).ToList(), nA, nB, nFeatures, tested.Count,
+            Differential.OrderByPValue(rows), nA, nB, nFeatures, tested.Count,
             // No linear model, so no residual df shared across features (Welch's differs per
             // feature) and no prior at all. NaN rather than a number that would be read as one.
             double.NaN, double.NaN, "none", Array.Empty<string>(), messages, Array.Empty<string>());
@@ -181,7 +181,7 @@ internal static class SimpleTests
             rows[i] = rows[i] with { AdjPValue = adjusted[i] };
 
         return new DifferentialResult(
-            rows.OrderBy(r => r.PValue).ToList(), pairs.Count, pairs.Count, nFeatures, tested.Count,
+            Differential.OrderByPValue(rows), pairs.Count, pairs.Count, nFeatures, tested.Count,
             double.NaN, double.NaN, "none", Array.Empty<string>(), messages, Array.Empty<string>());
     }
 

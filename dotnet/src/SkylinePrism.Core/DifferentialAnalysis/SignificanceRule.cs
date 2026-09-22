@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 
 namespace SkylinePrism.Core.DifferentialAnalysis;
@@ -9,14 +9,14 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// </summary>
 /// <remarks>
 /// <para>One rule object rather than a pair of loose doubles, because the same decision is read in
-/// four places - the status line's count, the volcano's colouring AND its guide lines, the hit list
+/// four places - the status line's count, the volcano's coloring AND its guide lines, the hit list
 /// handed to enrichment, and <see cref="SignificanceScan"/> - and a volcano whose red points
 /// disagree with its own threshold lines is worse than either convention on its own.</para>
 ///
 /// <para><b>Raw versus adjusted is a real choice, not a display one.</b> Adjusted is the honest
 /// default and stays the default. Raw is offered because a small pilot cohort can have nothing
 /// surviving correction at all, and seeing the uncorrected ranking is a legitimate way to decide
-/// whether a full study is worth running - as long as it is labelled. <see cref="Describe"/> and
+/// whether a full study is worth running - as long as it is labeled. <see cref="Describe"/> and
 /// <see cref="YAxisLabel"/> exist so it always is.</para>
 /// </remarks>
 public sealed record SignificanceRule
@@ -60,7 +60,7 @@ public sealed record SignificanceRule
     /// <param name="corrected">
     /// Whether a multiple-testing correction ran at all. With <c>Correct = None</c> the adjusted
     /// column simply holds the raw p, so calling it adjusted would be the plainest kind of
-    /// mislabelling.
+    /// mislabeling.
     /// </param>
     public string YAxisLabel(bool corrected) =>
         UseAdjusted && corrected ? "-log10(adjusted p-value)" : "-log10(p-value)";

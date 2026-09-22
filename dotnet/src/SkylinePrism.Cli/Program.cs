@@ -253,8 +253,11 @@ public static class Program
         var aLabel = ContrastArms.Describe(aLevels);
         var bLabel = ContrastArms.Describe(bLevels);
         Console.WriteLine($"{options.Describe(result.VariancePrior)}: {groupBy} = {bLabel} vs {aLabel}");
+        // Named, not positional. The line above reads "B vs A" while NA/NB are A then B, so a bare
+        // "n = 16 vs 160" under it invites reading the first number as the arm named first.
         Console.WriteLine(
-            $"  n = {result.NA} vs {result.NB}; {result.NFeaturesTested} of {result.NFeaturesTotal} "
+            $"  n = {bLabel} {result.NB} vs {aLabel} {result.NA}; "
+            + $"{result.NFeaturesTested} of {result.NFeaturesTotal} "
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
@@ -303,10 +306,13 @@ public static class Program
         var rule = SignificanceRuleFrom(opts);
 
         var used = x.Where(double.IsFinite).ToList();
-        var span = used.Count > 0
-            ? $"{used.Min().ToString("0.###", CultureInfo.InvariantCulture)} to "
-              + used.Max().ToString("0.###", CultureInfo.InvariantCulture)
-            : "(none)";
+        // Kept as numbers. Formatting them and then splitting the formatted string back apart lost
+        // precision, and turned the no-usable-values case into two copies of the literal "(none)".
+        var xMin = used.Count > 0 ? used.Min() : double.NaN;
+        var xMax = used.Count > 0 ? used.Max() : double.NaN;
+        string Endpoint(double v) =>
+            double.IsNaN(v) ? "(none)" : v.ToString("0.###", CultureInfo.InvariantCulture);
+        var span = $"{Endpoint(xMin)} to {Endpoint(xMax)}";
         var n = result.NSubjects > 0
             ? $"{result.NA} samples in {result.NSubjects} subjects"
             : $"{result.NA} samples";
@@ -325,7 +331,7 @@ public static class Program
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
         WriteDifferentialCsv(outPath, result, dataset, options, rule, trendOver,
-            aLabel: span.Split(" to ")[0], bLabel: span.Split(" to ")[^1], effectName: effectName);
+            aLabel: Endpoint(xMin), bLabel: Endpoint(xMax), effectName: effectName);
         Console.WriteLine($"Results written to: {outPath}");
         return 0;
     }
@@ -338,6 +344,16 @@ public static class Program
     private static double ParseDouble(string? text, double fallback) =>
         text is not null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
             ? v : fallback;
+
+    private static string TestName(DifferentialTest test) => test switch
+    {
+        DifferentialTest.WelchT => "welch",
+        DifferentialTest.StudentT => "student",
+        DifferentialTest.MannWhitney => "mann-whitney",
+        DifferentialTest.PairedT => "paired-t",
+        DifferentialTest.Wilcoxon => "wilcoxon",
+        _ => "moderated",
+    };
 
     private static string DesignName(DifferentialDesign design) => design switch
     {
@@ -435,21 +451,6 @@ public static class Program
                 "--subject needs --design paired or --design trend-within-subject.");
         }
 
-        var covariates = new List<Covariate>();
-        foreach (var name in SplitLevels(opts.GetList("--adjust-for")))
-        {
-            if (!dataset.MetadataColumns.Contains(name))
-                throw new ArgumentException($"No metadata column '{name}' to adjust for.");
-            if (string.Equals(name, groupBy, StringComparison.Ordinal))
-                throw new ArgumentException(
-                    $"'{name}' is the contrast itself; adjusting for it would leave nothing to test.");
-            covariates.Add(Covariate.FromMetadata(name, dataset.MetadataValues(name)));
-        }
-        if (covariates.Count > 0 && test != DifferentialTest.ModeratedT)
-            throw new ArgumentException(
-                "--adjust-for needs --test moderated; the other tests have no design matrix to put a "
-                + "covariate in.");
-
         var isTrend = design is DifferentialDesign.LinearTrend
             or DifferentialDesign.LinearTrendWithinSubject;
         var trendOver = opts.GetSingleOrNull("--trend-over");
@@ -465,6 +466,48 @@ public static class Program
         {
             throw new ArgumentException("--trend-over needs --design trend or --design trend-within-subject.");
         }
+
+        var covariates = new List<Covariate>();
+        foreach (var name in SplitLevels(opts.GetList("--adjust-for")))
+        {
+            if (!dataset.MetadataColumns.Contains(name))
+                throw new ArgumentException($"No metadata column '{name}' to adjust for.");
+            // The tested term, whichever it is. On a trend the guard used to compare against an
+            // EMPTY groupBy, so --trend-over week --adjust-for week built [1, week, week] - exactly
+            // singular - and died on a rank check naming neither flag.
+            var tested = trendOver ?? groupBy;
+            if (!string.IsNullOrEmpty(tested) && string.Equals(name, tested, StringComparison.Ordinal))
+                throw new ArgumentException(
+                    $"'{name}' is the term being tested; adjusting for it would leave nothing to test.");
+            covariates.Add(Covariate.FromMetadata(name, dataset.MetadataValues(name)));
+        }
+        if (covariates.Count > 0 && test != DifferentialTest.ModeratedT)
+            throw new ArgumentException(
+                "--adjust-for needs --test moderated; the other tests have no design matrix to put a "
+                + "covariate in.");
+
+        // A test that the chosen design cannot run is REFUSED, never quietly swapped. The pane hides
+        // the inapplicable entries so the question cannot arise there; the CLI has no such filter,
+        // and without this it accepted --design trend --test mann-whitney, ran the moderated t, and
+        // then printed "Mann-Whitney U" over the result because Describe() reads what was ASKED for.
+        var allowed = design switch
+        {
+            DifferentialDesign.Unpaired => new[]
+            {
+                DifferentialTest.ModeratedT, DifferentialTest.WelchT, DifferentialTest.StudentT,
+                DifferentialTest.MannWhitney,
+            },
+            DifferentialDesign.Paired => new[]
+            {
+                DifferentialTest.ModeratedT, DifferentialTest.PairedT, DifferentialTest.Wilcoxon,
+            },
+            // A trend has no two samples to compare, only a slope.
+            _ => new[] { DifferentialTest.ModeratedT },
+        };
+        if (Array.IndexOf(allowed, test) < 0)
+            throw new ArgumentException(
+                $"--test {TestName(test)} does not apply to --design {DesignName(design)}. "
+                + $"That design runs: {string.Join(", ", allowed.Select(TestName))}.");
 
         // The prior's per-feature SCALE comes from the run's QC and reference replicates whenever
         // it has any. That is the default, not an option, because the design groups of a real study
