@@ -297,7 +297,8 @@ public static class Differential
         for (var i = 0; i < nTested; i++)
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
 
-        var (squeezed, variancePrior) = FitPrior(options, mk, nA, nB, variances, fit, messages);
+        var (squeezed, variancePrior) = FitPrior(
+            options, exprLog2FeaturesBySamples, cols, nA, nB, variances, fit, tested, messages);
 
         var dfTotal = fit.DfResidual + squeezed.DfPrior;
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
@@ -552,9 +553,28 @@ public static class Differential
     /// fitted, because a silently substituted prior is a silently different p-value.
     /// </summary>
     private static (SqueezeVarResult Squeezed, string Name) FitPrior(
-        DifferentialOptions options, double[,] mk, int nA, int nB, double[] variances,
-        LinearModelFit fit, List<string> messages)
+        DifferentialOptions options, double[,] expr, int[] cols, int nA, int nB, double[] variances,
+        LinearModelFit fit, List<int> tested, List<string> messages)
     {
+        // Peptide counts arrive per FEATURE of the input matrix; the fit is over the tested subset,
+        // so they have to be gathered in the same order or the trend would pair each variance with
+        // another feature's count.
+        double[]? counts = null;
+        if (options.PeptideCounts is { } supplied)
+        {
+            counts = new double[tested.Count];
+            for (var i = 0; i < tested.Count; i++)
+                counts[i] = tested[i] < supplied.Count ? supplied[tested[i]] : double.NaN;
+        }
+
+        var needsCounts = options.Prior is VariancePrior.PeptideCount;
+        if (needsCounts && counts is null)
+        {
+            messages.Add("This prior needs a peptide count per feature, which only the protein-level "
+                + "matrix carries - the global prior was used instead.");
+            return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global");
+        }
+
         switch (options.Prior)
         {
             case VariancePrior.LimmaTrend when fit.Amean.All(double.IsFinite):
@@ -568,35 +588,65 @@ public static class Differential
 
             case VariancePrior.IntensityTrend:
             {
-                // Prior groups default to the two contrast arms. mk's columns are [A..., B...] by
-                // construction, so the arms are the two leading runs of indices.
-                var groups = options.PriorGroupColumns is null
-                    ? new IReadOnlyList<int>[]
-                    {
-                        Enumerable.Range(0, nA).ToArray(),
-                        Enumerable.Range(nA, nB).ToArray(),
-                    }
-                    : new IReadOnlyList<int>[] { options.PriorGroupColumns };
-
-                var prior = VariancePriors.IntensityTrend(mk, groups);
+                var prior = VariancePriors.IntensityTrend(
+                    expr, tested, PriorGroups(options, cols, nA, nB));
                 if (prior is not null)
-                {
-                    // The prior DEGREES OF FREEDOM stay global and only the scale is replaced - that
-                    // is what makes this the toolkit's estimator rather than limma's, which
-                    // re-estimates both.
-                    var global = EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual);
-                    return (EmpiricalBayes.SqueezeVarWithScale(
-                        variances, fit.DfResidual, prior, global.DfPrior, global.Warnings),
-                        "intensity-trend");
-                }
+                    return (WithGlobalDf(variances, fit.DfResidual, prior), "intensity-trend");
 
                 messages.Add("Too few usable (feature, group) points to fit the intensity trend - "
                     + "the global prior was used instead.");
                 break;
             }
+
+            case VariancePrior.PeptideCount:
+            {
+                var prior = VariancePriors.PeptideCountTrend(variances, counts!);
+                if (prior is not null)
+                    return (WithGlobalDf(variances, fit.DfResidual, prior), "peptide-count");
+                messages.Add("Too few features carry a usable peptide count to fit the trend - the "
+                    + "global prior was used instead.");
+                break;
+            }
         }
 
         return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global");
+    }
+
+    /// <summary>
+    /// The groups the variance prior is fitted over: the two contrast arms by default, or whichever
+    /// replicates the caller nominated.
+    /// </summary>
+    /// <remarks>
+    /// The override exists because a design group's within-group spread contains inter-subject
+    /// BIOLOGY, which inflates the prior and over-shrinks real signal. Pointing it at dedicated QC or
+    /// reference injections measures instrument-and-workflow variance instead, which is what the
+    /// prior is supposed to describe - and those replicates take no part in the contrast, so their
+    /// columns exist only in the FULL matrix, which is why these indices are absolute.
+    /// </remarks>
+    private static IReadOnlyList<IReadOnlyList<int>> PriorGroups(
+        DifferentialOptions options, int[] cols, int nA, int nB) =>
+        options.PriorGroupColumns is null
+            ? new IReadOnlyList<int>[]
+            {
+                cols.Take(nA).ToArray(),
+                cols.Skip(nA).Take(nB).ToArray(),
+            }
+            : options.PriorGroupColumns;
+
+    /// <summary>
+    /// A per-feature prior scale paired with the GLOBAL prior degrees of freedom.
+    /// </summary>
+    /// <remarks>
+    /// Every toolkit-style prior works this way - it fits a scale and leaves the degrees of freedom
+    /// alone - and that is exactly what separates them from limma's trend, which re-estimates both.
+    /// Kept in one place so a new prior cannot accidentally re-estimate the df and still call itself
+    /// one of these.
+    /// </remarks>
+    private static SqueezeVarResult WithGlobalDf(double[] variances, double dfResidual, double[] prior)
+    {
+        var global = EmpiricalBayes.SqueezeVarGlobal(variances, dfResidual);
+        return EmpiricalBayes.SqueezeVarWithScale(
+            variances, dfResidual, prior, global.DfPrior, global.Warnings);
     }
 
     private static double ModeratedPValue(double t, double dfTotal)

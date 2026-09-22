@@ -32,6 +32,7 @@ Which library is the reference for which quantity:
 | `Pca.Fit` (center-only, complete-case) | `numpy.linalg.svd(full_matrices=False)`            |
 | `Detection.DetectionGlm`          | penalized LRT: `scipy.optimize` twice + `scipy.stats.chi2` |
 | `VariancePriors.IntensityTrend`   | `proteomics_toolkit._fit_intensity_trend_prior`          |
+| `VariancePriors.PeptideCountTrend` | `proteomics_toolkit._fit_count_dependent_prior`         |
 | `SimpleTests` (Welch/Student)     | `scipy.stats.ttest_ind(equal_var=...)`                  |
 | `SimpleTests` (Mann-Whitney)      | `scipy.stats.mannwhitneyu(method='asymptotic')`         |
 | `SimpleTests` (paired t)          | `scipy.stats.ttest_rel`                                 |
@@ -1212,6 +1213,64 @@ def gen_paired() -> None:
     )
 
 
+def gen_peptide_count_prior() -> None:
+    """The DEqMS-style prior: a LOWESS of log(residual variance) on log(peptide count).
+
+    Referenced to the toolkit's ``_fit_count_dependent_prior`` for the same reason the intensity
+    trend is referenced to its neighbour: it is that tool's estimator PRISM has to reproduce, not a
+    published closed form with an independent implementation to check against.
+    """
+    from proteomics_toolkit.statistical_analysis import _fit_count_dependent_prior
+
+    rng = Rng(101)
+    cases = []
+
+    def add(name: str, variances, counts, note: str) -> None:
+        variances = np.asarray(variances, dtype=float)
+        counts = np.asarray(counts, dtype=float)
+        fit = {"features": [f"f{i}" for i in range(len(variances))], "s2": variances}
+        expected = _fit_count_dependent_prior(fit, counts)
+        # The toolkit returns either the array or (array, extras) depending on version; take the array.
+        if isinstance(expected, tuple):
+            expected = expected[0]
+        cases.append(
+            {
+                "name": name,
+                "note": note,
+                "variances": vec(variances),
+                "counts": vec(counts),
+                "expected": vec(np.asarray(expected, dtype=float)),
+            }
+        )
+
+    n = 24
+    counts = [float(1 + (i * 7) % 19) for i in range(n)]
+    # Variance falling with peptide count is the relationship DEqMS exists to capture: a protein
+    # rolled up from many peptides is better determined than one rolled up from few.
+    variances = [0.6 / c + 0.02 + 0.01 * abs(rng.normal()) for c in counts]
+    add("falling_with_count", variances, counts,
+        "24 proteins, variance falling with peptide count - the DEqMS relationship")
+
+    flat = [0.2 + 0.02 * abs(rng.normal()) for _ in range(n)]
+    add("flat", flat, counts, "no count dependence: the trend should be nearly a flat line")
+
+    write(
+        "peptide_count_prior.json",
+        {
+            "reference": (
+                "proteomics_toolkit.statistical_analysis._fit_count_dependent_prior "
+                "(moderation='deqms'), v26.7.1"
+            ),
+            "note": (
+                "Per-feature prior SCALE, in the same log2 space the residual variances are already "
+                "in - unlike the intensity trend there is no delta-method conversion, because "
+                "nothing is fitted on the raw scale. The prior degrees of freedom stay global."
+            ),
+            "cases": cases,
+        },
+    )
+
+
 def main() -> None:
     if not OUT.is_dir():
         raise SystemExit(f"run from the repository root: {OUT} not found")
@@ -1229,6 +1288,7 @@ def main() -> None:
     gen_simple_tests()
     gen_corrections()
     gen_paired()
+    gen_peptide_count_prior()
 
 
 if __name__ == "__main__":

@@ -38,19 +38,24 @@ internal static class VariancePriors
     /// when there are too few usable points to fit a trend (the caller then falls back to the global
     /// prior and says so).
     /// </summary>
-    /// <param name="exprLog2Tested">
-    /// The LOG2 matrix actually fitted, <c>[feature, sample]</c>, already reduced to the tested
-    /// features and the selected sample columns - so its column order matches
-    /// <paramref name="groups"/>.
+    /// <param name="exprLog2">
+    /// The FULL LOG2 matrix, <c>[feature, sample]</c> - not the fitted submatrix. The prior may be
+    /// fitted on replicates that take no part in the contrast (dedicated QC or reference
+    /// injections), and those columns exist only here.
+    /// </param>
+    /// <param name="testedRows">
+    /// The features the fit covers, in the order their variances were given. The returned array is
+    /// parallel to this, not to <paramref name="exprLog2"/>'s rows.
     /// </param>
     /// <param name="groups">
-    /// Column indices INTO <paramref name="exprLog2Tested"/>, one list per prior group. Normally the
-    /// two contrast arms; with the QC/reference override, whichever replicates were nominated.
+    /// ABSOLUTE sample-column indices, one list per prior group. Normally the two contrast arms;
+    /// with the QC/reference override, whichever replicates were nominated.
     /// </param>
-    public static double[]? IntensityTrend(double[,] exprLog2Tested, IReadOnlyList<IReadOnlyList<int>> groups)
+    public static double[]? IntensityTrend(
+        double[,] exprLog2, IReadOnlyList<int> testedRows, IReadOnlyList<IReadOnlyList<int>> groups)
     {
-        var nFeatures = exprLog2Tested.GetLength(0);
-        var stats = CollectGroupStats(exprLog2Tested, groups);
+        var nFeatures = testedRows.Count;
+        var stats = CollectGroupStats(exprLog2, testedRows, groups);
 
         // The trend is fitted only on points that can carry one; every point is then PREDICTED from
         // it, including the ones excluded from the fit, which is what the reference does.
@@ -102,6 +107,69 @@ internal static class VariancePriors
         return prior;
     }
 
+
+    /// <summary>
+    /// DEqMS (Zhu 2020): a LOWESS of log(residual variance) on log(peptide count), giving a
+    /// per-feature prior scale. Null when too few features carry a usable count.
+    /// </summary>
+    /// <remarks>
+    /// <para>The insight DEqMS adds over an intensity trend is that a protein rolled up from many
+    /// peptides is better determined than one rolled up from few, at the SAME intensity. That is
+    /// information the abundance alone does not carry, and it is why the two priors are worth having
+    /// separately rather than one standing in for the other.</para>
+    /// <para>Protein level only: a peptide has no peptide count. The caller reports that rather than
+    /// offering the option where it cannot mean anything.</para>
+    /// <para>Unlike <see cref="IntensityTrend"/> this fits in the SAME space the model was fitted in
+    /// - the residual variances are already log2-scale - so there is no delta-method conversion.</para>
+    /// </remarks>
+    public static double[]? PeptideCountTrend(
+        ReadOnlySpan<double> variances, IReadOnlyList<double> peptideCounts)
+    {
+        var n = variances.Length;
+        if (peptideCounts.Count != n)
+            return null;
+
+        // counts >= 1, not > 0: the reference requires a whole peptide, and a fractional count
+        // would otherwise be fitted as though it were real.
+        var usable = new List<int>(n);
+        for (var i = 0; i < n; i++)
+            if (double.IsFinite(variances[i]) && variances[i] > 0
+                && double.IsFinite(peptideCounts[i]) && peptideCounts[i] >= 1)
+                usable.Add(i);
+
+        if (usable.Count < MinTrendPoints)
+            return null;
+
+        var ordered = usable.OrderBy(i => Math.Log(peptideCounts[i])).ToList();
+        var x = ordered.Select(i => Math.Log(peptideCounts[i])).ToArray();
+        var y = new double[ordered.Count];
+        for (var k = 0; k < ordered.Count; k++)
+            y[k] = Math.Log(variances[ordered[k]]);
+
+        var yhat = Lowess.Fit(x, y, frac: 0.5, iterations: 3);
+
+        // The fallback is the mean of the valid LOG VARIANCES, not the mean of the fitted curve -
+        // the reference's `global_log_s0`. The two are close but not equal, and a feature with no
+        // count takes this one.
+        var fallback = Math.Exp(y.Average());
+
+        var prior = new double[n];
+        for (var i = 0; i < n; i++)
+        {
+            if (!double.IsFinite(peptideCounts[i]) || !(peptideCounts[i] >= 1))
+            {
+                prior[i] = fallback;
+                continue;
+            }
+
+            prior[i] = Math.Exp(Stats.Interp(Math.Log(peptideCounts[i]), x, yhat));
+            if (!double.IsFinite(prior[i]) || !(prior[i] > 0))
+                prior[i] = fallback;
+        }
+
+        return prior;
+    }
+
     private const double Ln2 = 0.6931471805599453;
 
     /// <summary>
@@ -109,9 +177,9 @@ internal static class VariancePriors
     /// fewer than two samples contribute nothing - an sd needs two.
     /// </summary>
     private static List<GroupStat> CollectGroupStats(
-        double[,] exprLog2Tested, IReadOnlyList<IReadOnlyList<int>> groups)
+        double[,] exprLog2, IReadOnlyList<int> testedRows, IReadOnlyList<IReadOnlyList<int>> groups)
     {
-        var nFeatures = exprLog2Tested.GetLength(0);
+        var nFeatures = testedRows.Count;
         var stats = new List<GroupStat>(nFeatures * Math.Max(groups.Count, 1));
         var buffer = new List<double>();
 
@@ -124,7 +192,7 @@ internal static class VariancePriors
                 buffer.Clear();
                 foreach (var c in cols)
                 {
-                    var v = exprLog2Tested[f, c];
+                    var v = exprLog2[testedRows[f], c];
                     if (double.IsFinite(v))
                         buffer.Add(Math.Pow(2.0, v)); // back to the linear scale the parquet held
                 }

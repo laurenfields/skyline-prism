@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace SkylinePrism.Core.DifferentialAnalysis;
 
@@ -76,12 +76,6 @@ public enum VariancePrior
     /// count per feature, so it is protein-level only.
     /// </summary>
     PeptideCount,
-
-    /// <summary>
-    /// Additive two-stage: <c>log(var) = f1(log mean intensity) + f2(log peptide count)</c>, the second
-    /// LOWESS fitted on the first stage's residual. Protein-level only.
-    /// </summary>
-    IntensityAndPeptideCount,
 }
 
 /// <summary>How the raw p-values are corrected for multiple testing.</summary>
@@ -150,12 +144,23 @@ public sealed record DifferentialOptions
     public IReadOnlyList<double>? PeptideCounts { get; init; }
 
     /// <summary>
-    /// Sample columns to fit the variance prior on, instead of the contrast arms - the toolkit's
-    /// <c>variance_prior_group_column</c>. Pointing this at dedicated QC or reference replicates keeps
-    /// inter-subject biology out of the prior, which otherwise inflates it and over-shrinks real
-    /// signal. Null uses the contrast arms.
+    /// Sample-column GROUPS to fit the variance prior on, instead of the contrast arms - the
+    /// toolkit's <c>variance_prior_group_column</c>. Null uses the contrast arms.
     /// </summary>
-    public IReadOnlyList<int>? PriorGroupColumns { get; init; }
+    /// <remarks>
+    /// <para>Pointing this at dedicated QC or reference replicates keeps inter-subject biology out of
+    /// the prior. A design group's within-group spread is part biology and part measurement, and only
+    /// the second is what a variance prior is meant to describe; including the first inflates the
+    /// prior and over-shrinks genuine signal.</para>
+    /// <para>A LIST OF GROUPS, not one pooled set, and the distinction matters: the variance is
+    /// computed WITHIN each group, so pooling QC and reference replicates into one would count the
+    /// systematic difference between two different materials as measurement noise. Grouping by the
+    /// nominated column's distinct values is what the toolkit does, and it also yields more points
+    /// for the trend to be fitted from.</para>
+    /// <para>These are ABSOLUTE sample-column indices into the full matrix, because the replicates
+    /// nominated here usually take no part in the contrast and so appear nowhere else.</para>
+    /// </remarks>
+    public IReadOnlyList<IReadOnlyList<int>>? PriorGroupColumns { get; init; }
 
     /// <summary>Minimum samples per arm before the contrast is refused.</summary>
     public int MinPerGroup { get; init; } = 2;
@@ -174,7 +179,7 @@ public sealed record DifferentialOptions
                 VariancePrior.IntensityTrend => "intensity-trend prior",
                 VariancePrior.LimmaTrend => "limma-trend prior",
                 VariancePrior.PeptideCount => "peptide-count prior",
-                _ => "intensity + peptide-count prior",
+                _ => "intensity-trend prior",
             } + ")",
             DifferentialTest.WelchT => "Welch t",
             DifferentialTest.StudentT => "Student t",

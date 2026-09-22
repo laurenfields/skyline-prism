@@ -141,6 +141,7 @@ public partial class MainWindow
         {
             "Global" => VariancePrior.Global,
             "LimmaTrend" => VariancePrior.LimmaTrend,
+            "PeptideCount" => VariancePrior.PeptideCount,
             _ => VariancePrior.IntensityTrend,
         };
 
@@ -184,6 +185,34 @@ public partial class MainWindow
             _ => MultipleTesting.BenjaminiHochberg,
         };
 
+    /// <summary>
+    /// The run's QC and reference sample columns, for fitting the variance prior on controls rather
+    /// than on the contrast groups. Null when there are too few to fit anything.
+    /// </summary>
+    /// <remarks>
+    /// Two is the minimum a variance can be computed from at all, so fewer than that is not a thin
+    /// prior but no prior - the caller turns the option off rather than falling back silently.
+    /// </remarks>
+    private IReadOnlyList<IReadOnlyList<int>>? DiffControlColumns()
+    {
+        if (_diffDataset is null || !_diffDataset.MetadataColumns.Contains("sample_type"))
+            return null;
+
+        var types = _diffDataset.MetadataValues("sample_type");
+
+        // One group per control TYPE, not one pooled set: the variance is computed within a group,
+        // so pooling QC and reference - different materials, injected at different amounts - would
+        // count the systematic gap between them as measurement noise.
+        var groups = Enumerable.Range(0, types.Length)
+            .Where(i => QcGroupFilter.IsControlValue(types[i]))
+            .GroupBy(i => types[i], StringComparer.Ordinal)
+            .Select(g => (IReadOnlyList<int>)g.ToList())
+            .Where(g => g.Count >= 2) // a group of one has no variance to contribute
+            .ToList();
+
+        return groups.Count > 0 ? groups : null;
+    }
+
     /// <summary>What the contrast views should run: the current selections, as Core sees them.</summary>
     private DifferentialOptions DiffOptions(IReadOnlyList<Covariate>? covariates) =>
         new()
@@ -194,6 +223,10 @@ public partial class MainWindow
             Prior = DiffSelectedPrior(),
             Correction = DiffSelectedCorrection(),
             SubjectLabels = DiffSubjectLabels(),
+            PeptideCounts = _diffDataset?.PeptideCounts,
+            PriorGroupColumns = DiffPriorFromControlsCheck.IsChecked == true
+                ? DiffControlColumns()
+                : null,
             MinPerGroup = 2,
         };
 
@@ -240,6 +273,27 @@ public partial class MainWindow
         var priorVisibility = moderated ? Visibility.Visible : Visibility.Collapsed;
         DiffPriorLabel.Visibility = priorVisibility;
         DiffPriorCombo.Visibility = priorVisibility;
+
+        // The count-based priors need n_peptides, which only the protein matrix carries.
+        var hasCounts = _diffDataset?.PeptideCounts is not null;
+        ShowTest(DiffPriorPeptideCountItem, hasCounts);
+        if (DiffPriorCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
+        {
+            _diffSuppress = true;
+            DiffPriorCombo.SelectedIndex = 0; // Intensity trend, valid at either level
+            _diffSuppress = false;
+        }
+
+        // Fitting the prior on controls only means something for a prior that HAS a per-feature
+        // scale, and only where the run actually has control replicates to fit it on.
+        var controls = DiffControlColumns();
+        var scaled = DiffSelectedPrior() != VariancePrior.Global;
+        DiffPriorFromControlsCheck.Visibility = moderated && scaled
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        DiffPriorFromControlsCheck.IsEnabled = controls is not null;
+        if (controls is null && DiffPriorFromControlsCheck.IsChecked == true)
+            DiffPriorFromControlsCheck.IsChecked = false;
 
         DiffCovariatesLabel.IsEnabled = moderated;
         DiffCovariatesCombo.IsEnabled = moderated;
@@ -1143,6 +1197,24 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Fitting the prior on controls rather than on the contrast groups changes every moderated
+    /// p-value, so it re-runs.
+    /// </summary>
+    private async void OnDiffPriorSourceChanged(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffPriorSourceChanged), ex);
+        }
+    }
+
     /// <summary>Changing the correction re-runs: it changes every adjusted p in the table.</summary>
     private async void OnDiffCorrectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1169,7 +1241,10 @@ public partial class MainWindow
             // IsInitialized as well as the suppress flag: this combo has a SelectionChanged handler,
             // and if it ever gains a XAML-side default it would fire part way through
             // InitializeComponent. See XamlInitializationOrderTests.
-            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+            if (!IsInitialized)
+                return;
+            UpdateDiffControls(); // the control-prior checkbox does not apply to the global prior
+            if (_diffSuppress || _diffDataset is null)
                 return;
             await RunCurrentViewAsync();
         }

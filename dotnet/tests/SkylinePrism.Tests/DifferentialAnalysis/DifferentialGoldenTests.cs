@@ -561,7 +561,10 @@ public class DifferentialGoldenTests
             Enumerable.Range(nA, nB).ToArray(),
         };
 
-        var actual = VariancePriors.IntensityTrend(exprLog2, groups);
+        // All rows are 'tested' here, and the columns are absolute - which for a matrix holding only
+        // the contrast samples is the same thing the old relative indexing meant.
+        var allRows = Enumerable.Range(0, exprLog2.GetLength(0)).ToArray();
+        var actual = VariancePriors.IntensityTrend(exprLog2, allRows, groups);
 
         Assert.NotNull(actual);
         // 1e-9: the chain is a LOWESS fit, an interpolation and a delta-method division, all in
@@ -749,4 +752,29 @@ public class DifferentialGoldenTests
             Golden.Close(p[i], row.PValue, 1e-9, $"f{i} p");
         }
     }
+
+    /// <summary>
+    /// The DEqMS-style peptide-count prior, against the toolkit that defines it.
+    /// </summary>
+    /// <remarks>
+    /// What DEqMS adds over an intensity trend is that a protein rolled up from many peptides is
+    /// better determined than one rolled up from few AT THE SAME INTENSITY - information abundance
+    /// alone does not carry, which is why the two priors are worth having separately.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(PeptideCountPriorCases))]
+    public void PeptideCountPrior_MatchesTheToolkit(string name)
+    {
+        var c = Golden.Case("peptide_count_prior.json", name);
+        var variances = Golden.Vec(c, "variances");
+        var counts = Golden.Vec(c, "counts");
+
+        var actual = VariancePriors.PeptideCountTrend(variances, counts);
+
+        Assert.NotNull(actual);
+        Golden.CloseAll(Golden.Vec(c, "expected"), actual!, 1e-9, $"{name} prior scale");
+    }
+
+    public static IEnumerable<object[]> PeptideCountPriorCases()
+        => Golden.CaseNames("peptide_count_prior.json");
 }

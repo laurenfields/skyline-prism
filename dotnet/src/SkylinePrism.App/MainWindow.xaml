@@ -652,7 +652,15 @@
                                     <ComboBoxItem Tag="IntensityTrend">Intensity trend</ComboBoxItem>
                                     <ComboBoxItem Tag="Global">Global</ComboBoxItem>
                                     <ComboBoxItem Tag="LimmaTrend">limma-trend</ComboBoxItem>
+                                    <!-- Both need n_peptides, which only the protein matrix has, so
+                                         UpdateDiffControls collapses and disables them at peptide
+                                         level rather than offering a prior that cannot be fitted. -->
+                                    <ComboBoxItem x:Name="DiffPriorPeptideCountItem" Tag="PeptideCount">Peptide count</ComboBoxItem>
                                 </ComboBox>
+                                <CheckBox x:Name="DiffPriorFromControlsCheck" Content="from controls"
+                                          VerticalAlignment="Center" Margin="8,0,0,0"
+                                          Checked="OnDiffPriorSourceChanged" Unchecked="OnDiffPriorSourceChanged"
+                                          ToolTip="Fit the variance prior on the run's QC and reference replicates instead of on the contrast groups. A design group's within-group spread contains inter-subject biology, which inflates the prior and over-shrinks real signal; dedicated control injections measure the instrument-and-workflow variance the prior is meant to describe. The controls take no part in the contrast itself. Unavailable when the run has fewer than two control replicates." />
                                 <TextBlock x:Name="DiffCorrectionLabel" Text="Correct:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffCorrectionCombo" Width="150"

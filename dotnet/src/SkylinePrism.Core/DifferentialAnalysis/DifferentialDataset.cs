@@ -85,10 +85,11 @@ public sealed class DifferentialDataset
 
     private DifferentialDataset(FeatureLevel level, double[,] exprLog2, string[] featureIds,
         string[] featureLabels, string[] featureGenes, string[] featureGroups,
-        string[] featureAccessions, string[] featureProteinNames,
+        string[] featureAccessions, string[] featureProteinNames, double[]? peptideCounts,
         string[] sampleIds, string idColumn, string labelColumn,
         IReadOnlyList<string> metadataColumns, Dictionary<string, string?[]> metaByColumn)
     {
+        PeptideCounts = peptideCounts;
         _featureGroups = featureGroups;
         _featureAccessions = featureAccessions;
         _featureProteinNames = featureProteinNames;
@@ -133,6 +134,17 @@ public sealed class DifferentialDataset
     /// those columns existed, which callers must treat as "no genes", never as a symbol.
     /// </remarks>
     public string[] FeatureGenes { get; }
+
+    /// <summary>
+    /// Peptides behind each feature (<c>n_peptides</c>), parallel to <see cref="FeatureIds"/>, or
+    /// null where the matrix does not carry it.
+    /// </summary>
+    /// <remarks>
+    /// Null is the ordinary PEPTIDE-level case, not an error: a peptide has no peptide count. The
+    /// count-based variance priors are unavailable there and the caller must say so rather than
+    /// substitute a count of one, which would make the trend a flat line and look like it worked.
+    /// </remarks>
+    public double[]? PeptideCounts { get; }
 
     /// <summary>
     /// Everything feature <paramref name="index"/> is known by - what to show a reader, and what to
@@ -387,6 +399,12 @@ public sealed class DifferentialDataset
         // matrices carry these - PrismPipeline stamps the protein-group columns onto the peptide
         // output too - and a shared peptide names every group it belongs to, ";"-separated and
         // index-aligned across the four.
+        // n_peptides, for the DEqMS-style priors. Null at peptide level, where a feature IS a
+        // peptide and the count means nothing - the caller must then not offer those priors rather
+        // than invent a count of one.
+        var peptideCounts = table.HasColumn("n_peptides")
+            ? table.GetDouble("n_peptides").Select(v => v ?? double.NaN).ToArray()
+            : null;
         var featureGroups = IdentityColumn(table, "protein_group", nFeatures);
         var featureAccessions = IdentityColumn(table, "leading_protein", nFeatures);
         var featureProteinNames = IdentityColumn(table, "leading_name", nFeatures);
@@ -413,7 +431,7 @@ public sealed class DifferentialDataset
         }
 
         return new DifferentialDataset(level, exprLog2, featureIds, featureLabels, featureGenes,
-            featureGroups, featureAccessions, featureProteinNames,
+            featureGroups, featureAccessions, featureProteinNames, peptideCounts,
             sampleCols, idColumn, labelColumn, metaColumns, metaByColumn);
     }
 
