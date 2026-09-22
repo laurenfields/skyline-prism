@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using MathNet.Numerics;
 using MathNet.Numerics.LinearAlgebra.Double;
@@ -170,14 +170,6 @@ public static class EmpiricalBayes
     }
 
     /// <summary>
-    /// Squeeze residual variances toward an intensity-dependent prior (limma-trend, Sartor 2006): the
-    /// prior scale follows a natural-spline trend in <paramref name="covariate"/> (mean log-intensity)
-    /// rather than a single global value. Ported from inmoose fitFDist's covariate path. The prior df is
-    /// still a single value; the prior scale is per feature. Assumes finite variances and covariate
-    /// (the caller falls back to the global prior otherwise), and falls back to global when the spline
-    /// degrees of freedom collapse below 2.
-    /// </summary>
-    /// <summary>
     /// The empirical-Bayes posterior for a prior whose SCALE is already known per feature and whose
     /// degrees of freedom are not re-estimated: <c>(d0*s0_i^2 + d*s_i^2) / (d0 + d)</c>, collapsing to
     /// <c>s0_i^2</c> as <c>d0 -> inf</c>.
@@ -207,6 +199,14 @@ public static class EmpiricalBayes
         return new SqueezeVarResult(varPost, varPrior, dfPrior, warnings ?? Array.Empty<string>());
     }
 
+    /// <summary>
+    /// Squeeze residual variances toward an intensity-dependent prior (limma-trend, Sartor 2006): the
+    /// prior scale follows a natural-spline trend in <paramref name="covariate"/> (mean log-intensity)
+    /// rather than a single global value. Ported from inmoose fitFDist's covariate path. The prior df is
+    /// still a single value; the prior scale is per feature. Assumes finite variances and covariate
+    /// (the caller falls back to the global prior otherwise), and falls back to global when the spline
+    /// degrees of freedom collapse below 2.
+    /// </summary>
     public static SqueezeVarResult SqueezeVarTrend(ReadOnlySpan<double> variances, double dfResidual,
         double[] covariate)
     {

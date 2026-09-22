@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -21,7 +21,10 @@ public readonly record struct SamplePair(string Subject, int AColumn, int BColum
 /// silently took part in one of them and not another would make two numbers on the same screen
 /// describe different sample sets.
 /// </remarks>
-internal static class PairedSamples
+// Public, not internal: the GUI resolves the same pairs to decide which samples the per-feature
+// boxplot should draw. Its doc promises every consumer agrees on which subjects took part, and that
+// promise is only keepable if they can all call it.
+public static class PairedSamples
 {
     /// <summary>
     /// The subjects measured exactly once in each arm, in the order they first appear in arm A.
@@ -74,10 +77,16 @@ internal static class PairedSamples
         var ambiguous = new List<string>();
         var unmatched = new List<string>();
 
+        // Seen, not "already paired": the loop is over COLUMNS, so a subject with two samples in an
+        // arm comes round twice. Probing `pairs` only skips the ones that succeeded, so a rejected
+        // subject was counted - and previewed - once per column it occupied, reporting one ambiguous
+        // subject as two.
+        var handled = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var c in groupAColumns)
         {
             var subject = c < subjectLabels.Count ? subjectLabels[c] : null;
-            if (string.IsNullOrEmpty(subject) || pairs.Any(p => p.Subject == subject))
+            if (string.IsNullOrEmpty(subject) || !handled.Add(subject))
                 continue;
 
             var a = inA[subject];

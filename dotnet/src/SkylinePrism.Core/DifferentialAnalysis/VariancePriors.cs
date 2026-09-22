@@ -30,6 +30,35 @@ internal static class VariancePriors
     /// <summary>The toolkit's minimum: fewer points than this and the trend is not a fit, it is noise.</summary>
     private const int MinTrendPoints = 5;
 
+    /// <summary>
+    /// The LOWESS both priors use: statsmodels' parameters, plus the interpolation distance
+    /// statsmodels itself recommends for large inputs.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>delta is not optional here.</b> With delta = 0 - statsmodels' default, and what the
+    /// reference implementation passes - every point gets its own weighted regression, which is
+    /// O(n * frac*n * iters). Measured on this repo: 43 ms at n = 2,000, 256 ms at 6,000, 2.9 s at
+    /// 20,000. The intensity trend contributes one point per (feature, group), so a peptide-level
+    /// contrast on a 75,000-peptide cohort is n = 150,000, which extrapolates to roughly three
+    /// MINUTES - on a pane that re-runs whenever a selector changes, and with this prior as the
+    /// default. With delta at 1% of the x range the same 20,000 points take 23 ms.</para>
+    /// <para>The cost is a small approximation: points closer together than delta are linearly
+    /// interpolated rather than individually fitted, which moved the fitted values by at most ~3e-5
+    /// relative in the same measurement, far below anything that changes a conclusion. On inputs the
+    /// size of the goldens it makes NO difference at all - 1% of the x range there is narrower than
+    /// the spacing between points, so nothing is interpolated and the fit is identical, which is why
+    /// those still assert against the reference at 1e-9. The approximation only ever engages where
+    /// the exact fit would not return.</para>
+    /// <para>Every other LOWESS call in PRISM already passes this same 1% delta
+    /// (<c>Normalizer</c>, <c>NormalizationFactors</c>, <c>PlotRenderer</c>); these two were the
+    /// exception.</para>
+    /// </remarks>
+    private static double[] SmoothTrend(double[] x, double[] y)
+    {
+        var span = x[^1] - x[0]; // x is sorted ascending by every caller
+        return Lowess.Fit(x, y, frac: 0.5, iterations: 3, delta: span > 0 ? span * 0.01 : 0.0);
+    }
+
     /// <summary>One (feature, group) observation: the raw-scale mean, sd and sample count.</summary>
     private readonly record struct GroupStat(int Feature, double Mean, double Sd, int N);
 
@@ -69,7 +98,7 @@ internal static class VariancePriors
         var ordered = fitPoints.OrderBy(s => Math.Log(s.Mean)).ToList();
         var x = ordered.Select(s => Math.Log(s.Mean)).ToArray();
         var y = ordered.Select(s => 2.0 * Math.Log(s.Sd)).ToArray(); // log(variance) = 2*log(sd)
-        var yhat = Lowess.Fit(x, y, frac: 0.5, iterations: 3);
+        var yhat = SmoothTrend(x, y);
 
         // Sample-size-weighted mean of the per-group predicted log-space variance, per feature.
         var sum = new double[nFeatures];
@@ -146,7 +175,7 @@ internal static class VariancePriors
         for (var k = 0; k < ordered.Count; k++)
             y[k] = Math.Log(variances[ordered[k]]);
 
-        var yhat = Lowess.Fit(x, y, frac: 0.5, iterations: 3);
+        var yhat = SmoothTrend(x, y);
 
         // The fallback is the mean of the valid LOG VARIANCES, not the mean of the fitted curve -
         // the reference's `global_log_s0`. The two are close but not equal, and a feature with no

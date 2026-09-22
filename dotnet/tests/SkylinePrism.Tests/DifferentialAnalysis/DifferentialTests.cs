@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using SkylinePrism.Core.DifferentialAnalysis;
@@ -259,5 +259,103 @@ public class DifferentialTests
         Assert.Equal(7, res.NFeaturesTested);
         Assert.Equal(1, res.NFeaturesDropped);
         Assert.DoesNotContain(res.Rows, r => r.FeatureId == "f5");
+    }
+
+    /// <summary>
+    /// A covariate constant within each subject - sex, age, genotype, diagnosis: the most natural
+    /// things to tick in a paired design - is exactly collinear with the subject block, so it is
+    /// dropped and named rather than killing the run on a rank check that mentions neither it nor a
+    /// block the user never chose.
+    /// </summary>
+    [Fact]
+    public void PairedDesign_DropsASubjectConstantCovariate_AndSaysSo()
+    {
+        // 4 subjects, one sample per arm; columns 0..3 are arm A and 4..7 arm B.
+        const int nPairs = 4;
+        var expr = new double[3, 2 * nPairs];
+        var rng = new Random(11);
+        for (var f = 0; f < 3; f++)
+        for (var j = 0; j < nPairs; j++)
+        {
+            var subjectLevel = 10 + j * 1.7;
+            expr[f, j] = subjectLevel + 0.1 * rng.NextDouble();
+            expr[f, nPairs + j] = subjectLevel + 0.8 + 0.1 * rng.NextDouble();
+        }
+
+        var subjects = new string?[2 * nPairs];
+        for (var j = 0; j < nPairs; j++)
+        {
+            subjects[j] = $"s{j}";
+            subjects[nPairs + j] = $"s{j}";
+        }
+
+        // Age is a property of the SUBJECT, so it takes the same value in both arms.
+        var age = new double[2 * nPairs];
+        for (var j = 0; j < nPairs; j++)
+            age[j] = age[nPairs + j] = 40 + j * 5;
+
+        var res = Differential.Run(
+            expr, new[] { "f0", "f1", "f2" },
+            Enumerable.Range(0, nPairs).ToArray(), Enumerable.Range(nPairs, nPairs).ToArray(),
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.Paired,
+                Prior = VariancePrior.Global,
+                SubjectLabels = subjects,
+                Covariates = new Covariate[] { new NumericCovariate("age", age) },
+            });
+
+        Assert.Equal(3, res.Rows.Count);
+        Assert.Contains(res.Messages, m => m.Contains("age") && m.Contains("constant within each subject"));
+        Assert.DoesNotContain("age", res.CovariatesUsed);
+    }
+
+    /// <summary>
+    /// A covariate that VARIES within a subject is real information a paired contrast can use, so it
+    /// must survive - the drop above is about redundancy, not about paired designs refusing
+    /// covariates.
+    /// </summary>
+    [Fact]
+    public void PairedDesign_KeepsACovariateThatVariesWithinSubject()
+    {
+        const int nPairs = 4;
+        var expr = new double[3, 2 * nPairs];
+        var rng = new Random(13);
+        for (var f = 0; f < 3; f++)
+        for (var j = 0; j < nPairs; j++)
+        {
+            expr[f, j] = 10 + j * 1.3 + 0.1 * rng.NextDouble();
+            expr[f, nPairs + j] = 10 + j * 1.3 + 0.7 + 0.1 * rng.NextDouble();
+        }
+
+        var subjects = new string?[2 * nPairs];
+        for (var j = 0; j < nPairs; j++)
+        {
+            subjects[j] = $"s{j}";
+            subjects[nPairs + j] = $"s{j}";
+        }
+
+        // Something measured per SAMPLE, e.g. the injection's total signal - it differs between a
+        // subject's two runs.
+        var load = new double[2 * nPairs];
+        for (var j = 0; j < nPairs; j++)
+        {
+            load[j] = 100 + j;
+            load[nPairs + j] = 130 + 2 * j;
+        }
+
+        var res = Differential.Run(
+            expr, new[] { "f0", "f1", "f2" },
+            Enumerable.Range(0, nPairs).ToArray(), Enumerable.Range(nPairs, nPairs).ToArray(),
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.Paired,
+                Prior = VariancePrior.Global,
+                SubjectLabels = subjects,
+                Covariates = new Covariate[] { new NumericCovariate("load", load) },
+            });
+
+        Assert.Contains("load", res.CovariatesUsed);
+        Assert.DoesNotContain(res.Messages, m => m.Contains("constant within each subject"));
     }
 }

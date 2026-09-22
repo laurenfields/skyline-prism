@@ -107,19 +107,30 @@ public static class SignificanceScan
         var rows = new List<ScanRow>();
         var nDone = 0;
         var truncated = false;
+        // Budget is spent on what the enumerator OFFERED, not on what survived: it overshoots by
+        // exactly one when candidates remain, and that overshoot is the only signal truncation has.
+        //
+        // As the code stands the two counts cannot diverge - `levels` above keeps only levels with at
+        // least minN samples, and every arm is a non-empty union of those, so the per-arm minN check
+        // below can never fire. Counting offered splits anyway is not redundancy for its own sake: it
+        // keeps the budget correct if that pre-filter is ever relaxed, and it makes the rule
+        // ("maxTests bounds the work attempted") true on its own terms rather than by coincidence of
+        // a filter twenty lines away.
+        var nOffered = 0;
         foreach (var (aLevels, bLevels) in EnumerateSplits(levels, scope, maxTests))
         {
+            if (++nOffered > maxTests)
+            {
+                truncated = true;
+                break;
+            }
+
             var ga = aLevels.SelectMany(lv => idsByLevel[lv]).ToList();
             var gb = bLevels.SelectMany(lv => idsByLevel[lv]).ToList();
             if (ga.Count < minN || gb.Count < minN)
                 continue;
 
             nDone++;
-            if (nDone > maxTests)
-            {
-                truncated = true;
-                break;
-            }
 
             DifferentialResult res;
             try

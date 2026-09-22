@@ -795,6 +795,28 @@ public partial class MainWindow
         return groupA.Count > 0 && groupB.Count > 0;
     }
 
+    /// <summary>
+    /// The sample columns the contrast actually ran over, which under a paired design is the matched
+    /// subset rather than everything ticked.
+    /// </summary>
+    /// <remarks>
+    /// The per-feature boxplot reads these. Showing the picked columns there would draw subjects that
+    /// took no part in the contrast, and contradict the status line, which reports the arms the test
+    /// used. Resolving the pairs twice - here and in Core - is cheap and keeps the two honest; the
+    /// alternative is Core returning its column sets, which widens its result type for a display
+    /// concern.
+    /// </remarks>
+    private (List<int> A, List<int> B) ContrastColumns(List<int> pickedA, List<int> pickedB)
+    {
+        if (DiffSelectedDesign() != DifferentialDesign.Paired || DiffSubjectLabels() is not { } subjects)
+            return (pickedA, pickedB);
+
+        var (pairs, _) = PairedSamples.Resolve(subjects, pickedA, pickedB);
+        return pairs.Count == 0
+            ? (pickedA, pickedB)
+            : (pairs.Select(p => p.AColumn).ToList(), pairs.Select(p => p.BColumn).ToList());
+    }
+
     private async Task RunVolcanoAsync(int request)
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
@@ -823,8 +845,7 @@ public partial class MainWindow
         if (!StillCurrent(request))
             return;
 
-        _volcanoGroupA = a;
-        _volcanoGroupB = b;
+        (_volcanoGroupA, _volcanoGroupB) = ContrastColumns(a, b);
         _volcanoAName = aVal;
         _volcanoBName = bVal;
         RenderVolcano(res);
@@ -847,6 +868,22 @@ public partial class MainWindow
             + $"{res.NFeaturesTested} tested, {nSig} significant{adj}.{note} "
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
+
+    /// <summary>
+    /// Detection ignores the paired design, and says so.
+    /// </summary>
+    /// <remarks>
+    /// The paired analogue of a detection-rate test is McNemar's, over the discordant pairs - a
+    /// different test, not this one with different inputs, and it is not implemented. Running Fisher
+    /// or the Firth GLM over the arms is a perfectly good UNPAIRED question, so the view still
+    /// answers it; what it must not do is answer it silently while the Design box says Paired.
+    /// </remarks>
+    private string DetectionPairingNote() =>
+        DiffSelectedDesign() == DifferentialDesign.Paired
+            ? " Note: detection is tested UNPAIRED - the paired form is McNemar's test, which is not "
+              + "implemented - so this uses every sample in the arms, including subjects the paired "
+              + "contrast left out."
+            : string.Empty;
 
     private async Task RunDetectionAsync(int request)
     {
@@ -914,8 +951,6 @@ public partial class MainWindow
             DetectionGlmResult glm;
             try
             {
-                if (!StillCurrent(request))
-                    return;
                 glm = await Task.Run(() =>
                     DetectionGlm.Run(det.Matrix, det.PeptideIds, aCols, bCols, covariates));
             }
@@ -924,6 +959,11 @@ public partial class MainWindow
                 DiffStatusText.Text = "Adjusted detection failed: " + ex.Message;
                 return;
             }
+
+            // AFTER the await, not before it: the Firth GLM is the slowest path in the pane, so it
+            // is the one most likely to be superseded while it runs.
+            if (!StillCurrent(request))
+                return;
 
             if (!glm.Identifiable)
             {
@@ -938,7 +978,8 @@ public partial class MainWindow
                 .Select(r => new DetGlmRow(r.PeptideId, r.RateA, r.RateB, r.LogOr, r.P, r.Q)).ToList();
             DiffStatusText.Text =
                 $"Adjusted detection (Firth GLM): {aVal} (n={aCols.Count}) vs {bVal} (n={bCols.Count}), "
-                + $"adjusted for {string.Join(", ", glm.CovariatesUsed)}, {glm.Rows.Count} peptides{droppedNote}.";
+                + $"adjusted for {string.Join(", ", glm.CovariatesUsed)}, {glm.Rows.Count} peptides{droppedNote}."
+                + DetectionPairingNote();
             return;
         }
 
@@ -960,7 +1001,7 @@ public partial class MainWindow
             .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
         DiffStatusText.Text =
             $"Detection (peptide-level, DetectionQValue < 0.01): {aVal} (n={aCols.Count}) vs " +
-            $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}.";
+            $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}." + DetectionPairingNote();
     }
 
     private async Task RunEnrichmentAsync(int request)
@@ -1464,11 +1505,11 @@ public partial class MainWindow
         _volcanoRowById = new Dictionary<string, DifferentialRow>(StringComparer.Ordinal);
         foreach (var r in res.Rows)
         {
-            // The ADJUSTED p-value, because that is what decides a hit here (AdjPValue < 0.05) and
-            // what the axis says. Differential.Run always applies Benjamini-Hochberg, so AdjPValue is
-            // always a q-value - there is no raw-only mode to fall back to. Plotting raw p while
-            // coloring by q put the cut-off line at whatever raw p the weakest surviving hit
-            // happened to have, which moved with the data and matched no number the reader could see.
+            // The value the hit rule is applied to, which is also what the axis is labelled with:
+            // AdjPValue, and with Correct = None that column simply holds the raw p. Plotting raw p
+            // while deciding on q used to put the cut-off line at whatever raw p the weakest
+            // surviving hit happened to have - a number that moved with the data and matched nothing
+            // the reader could see.
             var y = -Math.Log10(Math.Max(r.AdjPValue, 1e-300));
             if (double.IsFinite(r.LogFc) && double.IsFinite(y))
                 _volcanoPoints.Add((new ScottPlot.Coordinates(r.LogFc, y), r.FeatureId));
@@ -1498,10 +1539,12 @@ public partial class MainWindow
 
         plt.ShowLegend();
         plt.XLabel("log2 fold change (B / A)");
-        // Benjamini-Hochberg is unconditional, so name what is actually on the axis. Ties in the
-        // adjusted values are expected and show up as horizontal bands - that is a property of BH,
-        // not a rendering fault.
-        plt.YLabel("-log10(adjusted p-value)");
+        var corrected = DiffSelectedCorrection() != MultipleTesting.None;
+        // Name what is actually on the axis. With a correction applied that is the adjusted value,
+        // and ties in it show up as horizontal bands - a property of the step-up transform, not a
+        // rendering fault. With Correct = None the same column holds the RAW p, and calling it
+        // adjusted would be the plainest kind of mislabelling.
+        plt.YLabel(corrected ? "-log10(adjusted p-value)" : "-log10(p-value)");
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
     }

@@ -256,7 +256,18 @@ public static class Differential
         var (design, covariatesUsed, messages) = BuildDesign(nA, nB, cols, covariates);
         messages.InsertRange(0, pairingMessages);
         if (pairs is not null)
+        {
+            // Sex, age, genotype, diagnosis - the most natural things to tick in a paired design -
+            // are all constant within a subject, and therefore exactly collinear with the subject
+            // block. Left in, the design is rank-deficient and the run dies on a check that names
+            // neither the covariate nor a block the user never asked for. Dropping them here, and
+            // saying so, matches how BuildDesign already handles a dummy collinear with the group.
+            // Note this is not a limitation of the implementation: a within-subject contrast cannot
+            // estimate a between-subject effect, because the subject block has already absorbed it.
+            (design, covariatesUsed) =
+                DropSubjectCollinear(design, covariatesUsed, pairs.Count, messages);
             design = WithSubjectBlock(design, pairs.Count);
+        }
         const int coefIdx = 1; // groupB is the second design column
         var nParams = design.GetLength(1);
         if (nSamples - nParams < 1)
@@ -340,6 +351,68 @@ public static class Differential
     /// A covariate missing in any selected sample, or constant, is skipped; a dummy level collinear
     /// with the group is dropped. Every skip/drop is recorded in the returned messages.
     /// </summary>
+    /// <summary>
+    /// Drop covariate columns that the subject block will make redundant, naming them.
+    /// </summary>
+    /// <remarks>
+    /// A covariate constant within every subject carries no information a within-subject contrast
+    /// can use - the subject block absorbs it entirely - so its column is exactly a linear
+    /// combination of the block. Detected by the definition rather than by a rank test, because the
+    /// definition is what can be explained to a reader.
+    /// </remarks>
+    private static (double[,] Design, List<string> Used) DropSubjectCollinear(
+        double[,] design, List<string> covariatesUsed, int nPairs, List<string> messages)
+    {
+        var nSamples = design.GetLength(0);
+        var nParams = design.GetLength(1);
+        const int firstCovariate = 2; // [intercept, group, covariates...]
+        if (nParams <= firstCovariate || nPairs < 1)
+            return (design, covariatesUsed);
+
+        var keep = new List<int>();
+        var dropped = new List<string>();
+        for (var c = 0; c < nParams; c++)
+        {
+            if (c < firstCovariate)
+            {
+                keep.Add(c);
+                continue;
+            }
+
+            var constantWithinSubject = true;
+            for (var j = 0; j < nPairs && constantWithinSubject; j++)
+                if (design[j, c] != design[nPairs + j, c])
+                    constantWithinSubject = false;
+
+            if (constantWithinSubject)
+            {
+                var name = c - firstCovariate < covariatesUsed.Count
+                    ? covariatesUsed[c - firstCovariate]
+                    : $"column {c}";
+                dropped.Add(name);
+            }
+            else
+            {
+                keep.Add(c);
+            }
+        }
+
+        if (dropped.Count == 0)
+            return (design, covariatesUsed);
+
+        messages.Add($"Covariate(s) {string.Join(", ", dropped)} are constant within each subject, so "
+            + "the paired design's subject block already accounts for them - they were dropped. A "
+            + "within-subject contrast cannot estimate a between-subject effect.");
+
+        var reduced = new double[nSamples, keep.Count];
+        for (var r = 0; r < nSamples; r++)
+            for (var k = 0; k < keep.Count; k++)
+                reduced[r, k] = design[r, keep[k]];
+
+        var used = covariatesUsed.Where(n => !dropped.Contains(n)).ToList();
+        return (reduced, used);
+    }
+
     /// <summary>
     /// Append a fixed-effect subject block to a paired design: one indicator per subject after the
     /// first, each marking that subject's two samples.

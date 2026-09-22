@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using SkylinePrism.Core.DifferentialAnalysis;
 using Xunit;
@@ -187,5 +187,47 @@ public class SignificanceScanTests
         var pw = SignificanceScan.EnumerateSplits(new[] { "a", "b", "c" }, ScanScope.Pairwise, 400)
             .Select(s => (string.Join(",", s.A), string.Join(",", s.B))).ToArray();
         Assert.Equal(new[] { ("a", "b"), ("a", "c"), ("b", "c") }, pw);
+    }
+
+    /// <summary>
+    /// No contrast is ever run on an arm smaller than <c>minN</c> - and, less obviously, no split is
+    /// ever SKIPPED for that reason either.
+    /// </summary>
+    /// <remarks>
+    /// The level filter keeps only levels with at least minN samples, and every arm is a non-empty
+    /// union of those, so the per-arm check in Run is unreachable as the code stands. That is worth
+    /// pinning rather than leaving as a coincidence: it is what makes the truncation budget exact,
+    /// since offered and tested splits cannot diverge. If the level filter is ever relaxed this test
+    /// is where the consequence shows up.
+    /// </remarks>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void Run_NoArmIsSmallerThanMinN(int minN)
+    {
+        var res = SignificanceScan.Run(
+            BuildMatrix(), FeatureIds, Labels, null, ScanScope.SubsetPairs, minN: minN);
+
+        Assert.NotEmpty(res.Rows);
+        Assert.All(res.Rows, r =>
+        {
+            Assert.True(r.NA >= minN, $"arm A has {r.NA} samples, below minN {minN}");
+            Assert.True(r.NB >= minN, $"arm B has {r.NB} samples, below minN {minN}");
+        });
+    }
+
+    /// <summary>
+    /// A level with fewer than <c>minN</c> samples takes no part at all, so raising minN past every
+    /// level's size leaves nothing to scan - rather than scanning arms that are too small.
+    /// </summary>
+    [Fact]
+    public void Run_MinNAboveEveryLevelSize_ScansNothing()
+    {
+        // Every level here has 4 samples.
+        var res = SignificanceScan.Run(
+            BuildMatrix(), FeatureIds, Labels, null, ScanScope.SubsetPairs, minN: 5);
+
+        Assert.Empty(res.Rows);
+        Assert.False(res.Truncated);
     }
 }
