@@ -34,11 +34,11 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 
 | Pane | What it is for |
 |------|----------------|
-| **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
+| **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation). The PCA groups by the Replicates report, `sample_metadata.csv` (`batch`) and any attached clinical CSV, and any component pair up to PC6 |
 | **Spectrum density** | How many precursors a single DIA spectrum had to resolve at once |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
 | **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
-| **Differential** | limma moderated-t contrast (volcano, PCA, peptide detection, enrichment) between two sample groups |
+| **Differential** | limma moderated-t contrast (volcano, peptide detection, enrichment) between two sample groups |
 | **Markers** | Row z-scored heatmap + per-group boxplot for a protein panel |
 
 A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
@@ -488,13 +488,11 @@ Pick the **Level** (protein or peptide), a **Group by** metadata column, and the
 column as a covariate — numeric columns are mean-centered, categorical ones dummy-coded — which is how a
 disease-vs-control contrast is run with batch (or sex, PMI, ...) held. **Trend prior** switches the
 empirical-Bayes variance prior from global to the intensity-trend spline (limma-trend). The **View**
-selector gives four things over the same contrast:
+selector gives three things over the same contrast:
 
 - **Volcano** — moderated-t log2 fold change against -log10 p, with a ranked hit table beside it.
   Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
   split by the two groups.
-- **PCA** — the samples in the first two principal components (log2, complete-case, feature-mean-centered,
-  unscaled), colored by the group-by column. The axis sign is arbitrary, as in any PCA.
 - **Detection** — a per-peptide test of whether a peptide is *detected* (from the transition-level
   `merged_data` `DetectionQValue`, not the dense abundance) at a different rate between the two groups:
   Fisher exact by default, or a Firth-penalized logistic regression when covariates are set. This is the
@@ -502,10 +500,19 @@ selector gives four things over the same contrast:
 - **Enrichment** — g:Profiler functional enrichment of the significant hits against the tested
   background (needs network access).
 
+> [!NOTE]
+> **The sample PCA is in the QC Plots pane, not here.** There were briefly two - this pane had its own
+> because the QC one could only be grouped by a Skyline Replicates report, which a run from the CLI does
+> not have. The QC pane now groups by that report *plus* the run's own `sample_metadata.csv` (so `batch`
+> is always available) *plus* any clinical CSV attached below, and lets you pick which component pair to
+> plot, so there is one PCA and it can do what both could.
+
 Each view carries an honest interpretation note under the plot (the dense matrix conflates detection with
-abundance; peptide-level q-values are anti-conservative; the PCA axis sign is arbitrary; enrichment only
-re-describes the hit list). The statistics all live in `SkylinePrism.Core.DifferentialAnalysis` and are
-covered by the cross-platform test suite.
+abundance; peptide-level q-values are anti-conservative; enrichment only re-describes the hit list). The
+statistics all live in `SkylinePrism.Core.DifferentialAnalysis`, are covered by the cross-platform test
+suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
+[differential-analysis.md](differential-analysis.md), which also records where PRISM and the lab's
+`proteomics-toolkit` agree and where they do not.
 
 ### Attaching a clinical CSV
 

@@ -31,7 +31,7 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `fisher.json` | `Detection.FisherExact` | `scipy.stats.fisher_exact(alternative="two-sided")` |
 | `firth.json` | `Detection.FirthLogit` | `scipy.optimize` on the penalized log-likelihood |
 | `detection_lrt.json` | `Detection.DetectionGlm` | the above, twice, + `scipy.stats.chi2.sf(., 1)` |
-| `pca.json` | `DifferentialPca.Compute` | `numpy.linalg.svd(full_matrices=False)` |
+| `pca.json` | `Pca.Fit` (center-only, complete-case) | `numpy.linalg.svd(full_matrices=False)` |
 
 The generator imports nothing from PRISM. A golden that was produced by consulting the code under
 test cannot catch a mistake the two share, which is the only kind of mistake a golden is for.

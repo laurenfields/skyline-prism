@@ -2077,6 +2077,19 @@ public partial class MainWindow : Window
     // window's: the Ion accounting pane holds a separate one for the directory IT is showing, so neither
     // pane can install annotations the other's cached data was not exported with.
     private ReplicateAnnotations _qcAnnotations = ReplicateAnnotations.Empty;
+
+    /// <summary>
+    /// Grouping columns that do NOT come from a Skyline Replicates report: the run's own
+    /// <c>sample_metadata.csv</c> (which contributes <c>batch</c>), plus any clinical CSV the
+    /// Differential pane has joined.
+    ///
+    /// <para>This is what let the QC PCA be used at all on a CLI-produced run. The Replicates
+    /// report is written only when PRISM exported it from a Skyline document, so without it the
+    /// Group-by dropdown offered nothing but Sample Type - and a batch-correction tool that cannot
+    /// colour its PCA by batch is the wrong way round. A second PCA was built elsewhere in the
+    /// window partly to work around exactly this.</para>
+    /// </summary>
+    private SampleAnnotationTable _qcExtraAnnotations = SampleAnnotationTable.Empty;
     private bool _suppressQcRender;
 
     // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
@@ -2091,12 +2104,17 @@ public partial class MainWindow : Window
             // Reset BEFORE the reads, beside the matrices: a failure below must not leave the previous
             // directory's annotations installed under this directory's data.
             _qcAnnotations = ReplicateAnnotations.Empty;
+            _qcExtraAnnotations = SampleAnnotationTable.Empty;
             LoadQcMatrix("raw|peptide", Path.Combine(outputDir, "peptides_rollup.parquet"), isLinear: false);
             LoadQcMatrix("corrected|peptide", Path.Combine(outputDir, "corrected_peptides.parquet"), isLinear: true);
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
             _markerReport = MarkerNormalizationReport.Read(outputDir);
             _qcAnnotations = ReplicateAnnotations.Read(Path.Combine(outputDir, "skyline-reports"), Log);
+            // sample_type is left out: the QC pane already offers it as "Sample Type" from
+            // _qcTypes, and the same grouping under two spellings is only confusing.
+            _qcExtraAnnotations = SampleAnnotationTable.Read(
+                Path.Combine(outputDir, "sample_metadata.csv"), "sample_id", "sample", "sample_type");
         }
         catch (Exception ex)
         {
@@ -2164,9 +2182,26 @@ public partial class MainWindow : Window
     /// A QC sample's value in a Group-by column, from the QC pane's own annotation snapshot; the
     /// synthetic Sample Type column falls back to sample_metadata.csv when no Replicates report is available.
     /// </summary>
+    /// <summary>
+    /// The zero-based component a PC dropdown is pointing at, or <paramref name="fallback"/> before
+    /// the combo has been populated (the first render happens during window construction).
+    /// </summary>
+    private static int SelectedPcIndex(ComboBox combo, int fallback)
+    {
+        var text = (combo?.SelectedItem as ComboBoxItem)?.Content as string;
+        return int.TryParse(text, out var n) && n >= 1 ? n - 1 : fallback;
+    }
+
+    // Source order is deliberate: the document's own Replicates report first (it is what the
+    // person analysing the data curated in Skyline), then the run's sample_metadata.csv and any
+    // joined clinical table, then the sample type. Each step only runs when the one before it had
+    // nothing, so a richer source adds columns without overriding an annotation Skyline exported.
     private string SampleAnnotation(string sampleId, string column)
     {
         var value = _qcAnnotations.ValueOf(sampleId, column);
+        if (!string.IsNullOrEmpty(value))
+            return value;
+        value = _qcExtraAnnotations.ValueOf(sampleId, column);
         if (!string.IsNullOrEmpty(value))
             return value;
         if (column.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase))
@@ -2178,9 +2213,15 @@ public partial class MainWindow : Window
     private void PopulateGroupCombos()
     {
         _suppressQcRender = true;
-        var columns = _qcAnnotations.Columns.Count > 0
-            ? _qcAnnotations.Columns.ToList()
-            : new List<string> { "Sample Type" };
+        // Every source's columns, de-duplicated, with Sample Type always available - it is the
+        // fallback the pane is documented to default to, and it must not disappear just because a
+        // directory happened to carry richer annotations.
+        var columns = new List<string>();
+        foreach (var c in _qcAnnotations.Columns.Concat(_qcExtraAnnotations.Columns))
+            if (!columns.Contains(c, StringComparer.Ordinal))
+                columns.Add(c);
+        if (!columns.Any(c => c.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase)))
+            columns.Insert(0, "Sample Type");
         QcGroupByCombo.Items.Clear();
         foreach (var c in columns)
             QcGroupByCombo.Items.Add(c);
@@ -2357,6 +2398,14 @@ public partial class MainWindow : Window
     {
         var isRt = kind is "RT-lowess" or "RT-binned CV" or "RT-bin boxplot";
         var beforeAfter = kind == "RT-binned CV";
+
+        // The component pair means nothing to a CV or intensity plot, so it is hidden rather than
+        // greyed: a disabled control still invites a click, and this row is already crowded.
+        var isPca = kind == "PCA";
+        var pcVisibility = isPca ? Visibility.Visible : Visibility.Collapsed;
+        QcPcLabel.Visibility = pcVisibility;
+        QcPcXCombo.Visibility = pcVisibility;
+        QcPcYCombo.Visibility = pcVisibility;
         if (isRt && QcLevelCombo.SelectedIndex != 0)
         {
             _suppressQcRender = true;
@@ -2473,7 +2522,10 @@ public partial class MainWindow : Window
                     break;
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
-                default: _hoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
+                default:
+                    _hoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view,
+                        groupLabel, SelectedPcIndex(QcPcXCombo, 0), SelectedPcIndex(QcPcYCombo, 1));
+                    break;
             }
         }
         catch (Exception ex)
@@ -2662,14 +2714,31 @@ public partial class MainWindow : Window
 
     private static List<(Coordinates Loc, string Name)> DrawPca(
         Plot plt, double[,] featuresBySamples, List<string> types, List<string> names,
-        string level, string view, string group)
+        string level, string view, string group, int pcX, int pcY)
     {
         var nS = featuresBySamples.GetLength(1);
-        // Fit2DOfFeaturesBySamples, not a transpose into Fit2D. The transpose was a full second
-        // copy of the largest object in the pipeline - 5.7 GB on a 100-document peptide matrix,
-        // on the large object heap - built only to be read one feature at a time, which is the
-        // layout it started in. Avoiding exactly that is why the overload exists.
-        var scores = Pca.Fit2DOfFeaturesBySamples(featuresBySamples);
+        // Pca.Fit on the features x samples matrix, NOT a transpose into Fit2D. The transpose was
+        // a full second copy of the largest object in the pipeline - 5.7 GB on a 100-document
+        // peptide matrix, on the large object heap - built only to be read one feature at a time,
+        // which is the layout it started in. Avoiding exactly that is why the overload exists.
+        //
+        // Standardize + impute-to-feature-mean stay the QC defaults: with hundreds of samples,
+        // dropping every feature with one gap would discard most of the matrix, and without
+        // scaling the few most abundant proteins would set the axes by themselves.
+        var want = Math.Max(pcX, pcY) + 1;
+        var fit = Pca.Fit(featuresBySamples, new PcaOptions { Components = want });
+        var nComp = fit.Scores.GetLength(1);
+        if (nComp == 0)
+        {
+            PlotRenderer.DrawEmptyState(plt, "Not enough data for a PCA.");
+            return new List<(Coordinates Loc, string Name)>();
+        }
+
+        // Asking for PC6 of a five-sample run is a reasonable thing to do by accident; fall back
+        // to what exists rather than throwing out of a draw.
+        var ax = Math.Min(pcX, nComp - 1);
+        var ay = Math.Min(pcY, nComp - 1);
+        var scores = fit.Scores;
         var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
         var points = new List<(Coordinates Loc, string Name)>(nS);
         for (var i = 0; i < nS; i++)
@@ -2677,9 +2746,9 @@ public partial class MainWindow : Window
             var t = types[i];
             if (!groups.TryGetValue(t, out var g))
                 groups[t] = g = (new List<double>(), new List<double>());
-            g.X.Add(scores[i, 0]);
-            g.Y.Add(scores[i, 1]);
-            points.Add((new Coordinates(scores[i, 0], scores[i, 1]), names[i]));
+            g.X.Add(scores[i, ax]);
+            g.Y.Add(scores[i, ay]);
+            points.Add((new Coordinates(scores[i, ax], scores[i, ay]), names[i]));
         }
         var colorIndex = 0;
         foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -2693,8 +2762,11 @@ public partial class MainWindow : Window
         }
         plt.ShowLegend();
         // No title in the tool - the View/Level/Group/Plot selectors above already describe the plot.
-        plt.XLabel("PC1");
-        plt.YLabel("PC2");
+        // The variance each component carries goes on its axis, which is the one number that says
+        // whether the separation on screen is worth anything.
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        plt.XLabel($"PC{ax + 1} ({(fit.VarianceRatio[ax] * 100).ToString("0.0", inv)}%)");
+        plt.YLabel($"PC{ay + 1} ({(fit.VarianceRatio[ay] * 100).ToString("0.0", inv)}%)");
         return points;
     }
 

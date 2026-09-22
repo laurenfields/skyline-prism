@@ -29,9 +29,20 @@ as the GitHub Release description and fails if it is missing.
 - **One PCA, not two.** The QC scatter and the Differential pane's sample plot were separate
   implementations; they are now one `Core/Numerics/Pca.cs` with options for what actually differed
   - standardize vs center-only, impute-to-feature-mean vs complete-case, two components vs k with
-  their variance ratios, and all samples vs a chosen subset. Every number both plots drew is
-  unchanged. The merged engine keeps the QC path's blocked Gram accumulation, so the differential
-  PCA no longer runs an unblocked O(samples^2) loop per feature.
+  their variance ratios, and all samples vs a chosen subset. The merged engine keeps the QC path's
+  blocked Gram accumulation, so the differential configuration no longer runs an unblocked
+  O(samples^2) loop per feature.
+- **The QC PCA can be grouped by the run's own metadata and by a clinical CSV.** Its "Group by"
+  list used to come only from an exported Skyline Replicates report, so a run produced by the CLI
+  offered nothing but Sample Type - and a batch-correction tool could not colour its PCA by batch.
+  It now also reads the run's `sample_metadata.csv` (which supplies `batch`) and any clinical CSV
+  attached in the Differential pane. The QC PCA also gained a component-pair selector up to PC6,
+  with each component's variance-explained on its axis.
+- **The Differential pane's PCA sub-view is gone**, now that the QC pane's PCA can group by the same
+  columns. It existed largely to work around the gap above. Note the surviving plot uses the QC
+  pane's long-standing settings - features standardized, a missing cell imputed to its feature mean
+  - where the removed one centered without scaling and dropped any feature with a gap, so the two
+  do not draw identical point positions on a matrix with missing values.
 - **Committed goldens for the differential statistics.** `dotnet/tests/fixtures/differential/`
   holds reference values generated from scipy, statsmodels and inmoose by a checked-in script, and
   `DifferentialGoldenTests` holds PRISM to them: BH, the polygamma functions, `lmFit`, `squeezeVar`

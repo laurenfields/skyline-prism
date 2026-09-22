@@ -10,7 +10,7 @@ using System.Windows.Data;
 using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.DifferentialAnalysis.Detection;
 using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
-using SkylinePrism.Core.Numerics;
+using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Visualization;
 
 namespace SkylinePrism.App;
@@ -57,14 +57,11 @@ public partial class MainWindow
     private enum DiffView
     {
         Volcano,
-        Pca,
         Detection,
         Enrichment,
     }
 
     private sealed record VolcanoRow(string Feature, double Log2FC, double P, double AdjP, string FeatureId);
-
-    private sealed record PcaVarRow(string Component, double VariancePct);
 
     private sealed record DetRow(string Peptide, double RateA, double RateB, double P, double Q);
 
@@ -92,7 +89,6 @@ public partial class MainWindow
     private DiffView DiffSelectedView() =>
         ((DiffViewCombo.SelectedItem as ComboBoxItem)?.Content as string) switch
         {
-            "PCA" => DiffView.Pca,
             "Detection" => DiffView.Detection,
             "Enrichment" => DiffView.Enrichment,
             _ => DiffView.Volcano,
@@ -318,6 +314,39 @@ public partial class MainWindow
             ApplyClinicalToLoadedDataset();
     }
 
+    /// <summary>
+    /// Fold the clinical columns just joined to the differential dataset into the QC pane's
+    /// grouping sources, so every plot in the window can be grouped by them.
+    /// </summary>
+    /// <remarks>
+    /// Values are taken from the dataset rather than re-read from the CSV on purpose: the join
+    /// picked a key column by best match rate, and re-deriving it here could pick a different one
+    /// and colour the plot by a slightly different assignment than the one the user is reading the
+    /// Volcano against.
+    /// </remarks>
+    private void PublishClinicalToQcPane(IReadOnlyList<string> addedColumns)
+    {
+        if (_diffDataset is null || addedColumns.Count == 0)
+            return;
+
+        var values = new Dictionary<string, string?[]>(StringComparer.Ordinal);
+        foreach (var c in addedColumns)
+            values[c] = _diffDataset.MetadataValues(c);
+
+        var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < _diffDataset.SampleIds.Length; i++)
+            byId[_diffDataset.SampleIds[i]] = i;
+
+        var clinical = SampleAnnotationTable.FromValues(
+            _diffDataset.SampleIds, addedColumns,
+            (id, col) => byId.TryGetValue(id, out var idx) ? values[col][idx] : null);
+
+        // MergedWith keeps what is already there on a name clash, so a clinical column sharing a
+        // name with one Skyline exported does not quietly replace it.
+        _qcExtraAnnotations = _qcExtraAnnotations.MergedWith(clinical);
+        PopulateGroupCombos();
+    }
+
     /// <summary>Join the remembered clinical CSV to the loaded dataset and refresh the selectors.</summary>
     private void ApplyClinicalToLoadedDataset()
     {
@@ -334,6 +363,12 @@ public partial class MainWindow
                     "Nothing was added.";
                 return;
             }
+
+            // The QC pane draws the only sample PCA now, so its Group-by list has to learn about
+            // these columns too - otherwise attaching a clinical CSV would enrich the Volcano's
+            // covariates and leave the PCA unable to colour by any of them, which is the split
+            // that put a second PCA in this pane in the first place.
+            PublishClinicalToQcPane(result.AddedColumns);
 
             // Refresh the group-by choices so the new clinical columns appear; select the first one.
             _diffSuppress = true;
@@ -396,9 +431,6 @@ public partial class MainWindow
         UpdateDiffCaveat();
         switch (DiffSelectedView())
         {
-            case DiffView.Pca:
-                await RunPcaAsync();
-                break;
             case DiffView.Detection:
                 await RunDetectionAsync();
                 break;
@@ -420,11 +452,6 @@ public partial class MainWindow
     {
         DiffCaveatText.Text = DiffSelectedView() switch
         {
-            DiffView.Pca =>
-                "PCA is on the log2 matrix, complete-case (only features present in every sample), "
-                + "feature-mean-centered and unscaled. The axis SIGN is arbitrary - a component and its "
-                + "negative are equivalent, so orientation can differ from other tools while distances and "
-                + "variance-explained do not. Colour is metadata only; PCA itself is unsupervised.",
             DiffView.Detection =>
                 "Detection recovers genuine on/off from transition-level merged_data (a cell counts as "
                 + "detected only where DetectionQValue < 0.01), which the dense abundance matrix cannot "
@@ -504,48 +531,6 @@ public partial class MainWindow
         DiffStatusText.Text =
             $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant{adj}. "
             + "Click a point for its per-sample boxplot.";
-    }
-
-    private async Task RunPcaAsync()
-    {
-        if (DiffGroupByCombo.SelectedItem is not string col)
-        {
-            DiffStatusText.Text = "Pick a group-by column to color the PCA by.";
-            return;
-        }
-
-        var dataset = _diffDataset!;
-        var all = Enumerable.Range(0, dataset.SampleIds.Length).ToList();
-        PcaResult pca;
-        try
-        {
-            // The same Pca the QC pane draws, asked for the differential pane's settings: centered
-            // but not standardized (on log2 abundances the scale is information, and scaling would
-            // amplify the flat features), complete-case, six components with their variance
-            // ratios, and throwing rather than returning zeros so the status line below can say
-            // what was wrong.
-            pca = await Task.Run(() => Pca.Fit(dataset.ExprLog2, new PcaOptions
-            {
-                Components = 6,
-                Scaling = PcaScaling.CenterOnly,
-                Missing = PcaMissingPolicy.CompleteCase,
-                SampleColumns = all,
-                SampleIds = dataset.SampleIds,
-                RequireSufficientData = true,
-            }));
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-        {
-            DiffStatusText.Text = "Cannot compute PCA: " + ex.Message;
-            return;
-        }
-
-        RenderPca(pca, col);
-        DiffGrid.ItemsSource = pca.VarianceRatio
-            .Select((v, i) => new PcaVarRow($"PC{i + 1}", v * 100.0))
-            .ToList();
-        DiffStatusText.Text =
-            $"PCA over {all.Count} samples, {pca.NFeaturesUsed} complete features, colored by {col}.";
     }
 
     private async Task RunDetectionAsync()
@@ -908,48 +893,6 @@ public partial class MainWindow
         plt.ShowLegend();
         plt.XLabel("log2 fold change (B / A)");
         plt.YLabel("-log10 P");
-        PlotRenderer.StyleQcPlot(plt);
-        DiffPlot.Refresh();
-    }
-
-    private void RenderPca(PcaResult pca, string colorColumn)
-    {
-        DiffPlot.Reset();
-        var plt = DiffPlot.Plot;
-
-        if (pca.Scores.GetLength(1) < 2)
-        {
-            DiffPlot.Refresh();
-            return;
-        }
-
-        var byId = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (var i = 0; i < _diffDataset!.SampleIds.Length; i++)
-            byId[_diffDataset.SampleIds[i]] = i;
-        var labels = _diffDataset.MetadataValues(colorColumn);
-
-        var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
-        for (var i = 0; i < pca.SampleIds.Length; i++)
-        {
-            var g = byId.TryGetValue(pca.SampleIds[i], out var idx) && !string.IsNullOrEmpty(labels[idx])
-                ? labels[idx]!
-                : "(none)";
-            if (!groups.TryGetValue(g, out var lists))
-                groups[g] = lists = (new List<double>(), new List<double>());
-            lists.X.Add(pca.Scores[i, 0]);
-            lists.Y.Add(pca.Scores[i, 1]);
-        }
-
-        var ci = 0;
-        foreach (var (g, lists) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-            AddMarkers(plt, lists.X, lists.Y, DiffPalette[ci++ % DiffPalette.Length], 11, g);
-
-        // Dock the legend OUTSIDE the data area (like the Streamlit app): a color column can have many
-        // groups, and an in-plot legend covers the main sample cluster.
-        plt.ShowLegend(ScottPlot.Edge.Right);
-        var inv = CultureInfo.InvariantCulture;
-        plt.XLabel($"PC1 ({(pca.VarianceRatio[0] * 100).ToString("0.0", inv)}%)");
-        plt.YLabel($"PC2 ({(pca.VarianceRatio[1] * 100).ToString("0.0", inv)}%)");
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
     }

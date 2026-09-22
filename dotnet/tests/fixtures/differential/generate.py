@@ -28,7 +28,7 @@ Which library is the reference for which quantity:
 | `Differential.Run`                | the four above, composed the way limma composes them    |
 | `Detection.FisherExact`           | `scipy.stats.fisher_exact(alternative="two-sided")`     |
 | `Detection.FirthLogit`            | `scipy.optimize` on the penalized log-likelihood        |
-| `DifferentialPca.Compute`         | `numpy.linalg.svd(full_matrices=False)`                 |
+| `Pca.Fit` (center-only, complete-case) | `numpy.linalg.svd(full_matrices=False)`            |
 | `Detection.DetectionGlm`          | penalized LRT: `scipy.optimize` twice + `scipy.stats.chi2` |
 
 Nothing here imports PRISM. The point of a golden is that it was produced without reference to the

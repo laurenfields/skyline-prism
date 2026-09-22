@@ -333,7 +333,7 @@
                                 </ComboBox>
                                 <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
-                                          ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
+                                          ToolTip="Column to group samples by: from the Replicates report if the run exported one, plus the run's own sample_metadata.csv (which supplies batch) and any clinical CSV attached in the Differential pane. Defaults to Sample Type." />
                                 <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
                                 <ComboBox x:Name="QcGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
                                           ToolTip="Values to include. Tick more than one to combine them - e.g. Quality Control + Standard to compare the two control types without the unknowns. Tick none to show every sample.">
@@ -355,6 +355,26 @@
                                     <ComboBoxItem>RT-lowess</ComboBoxItem>
                                     <ComboBoxItem>RT-binned CV</ComboBoxItem>
                                     <ComboBoxItem>RT-bin boxplot</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="QcPcLabel" Text="PCs:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="QcPcXCombo" Width="52" SelectionChanged="OnQcChanged"
+                                          ToolTip="Component on the x axis. Higher components often carry the batch or run-order structure that PC1 and PC2 hide. Features are standardized and a missing cell is imputed to its feature mean; the SIGN of a component is arbitrary, so orientation can differ from another tool while distances and variance-explained do not. Colour is metadata only - the decomposition itself is unsupervised.">
+                                    <ComboBoxItem IsSelected="True">1</ComboBoxItem>
+                                    <ComboBoxItem>2</ComboBoxItem>
+                                    <ComboBoxItem>3</ComboBoxItem>
+                                    <ComboBoxItem>4</ComboBoxItem>
+                                    <ComboBoxItem>5</ComboBoxItem>
+                                    <ComboBoxItem>6</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="vs" VerticalAlignment="Center" Margin="4,0,4,0" />
+                                <ComboBox x:Name="QcPcYCombo" Width="52" SelectionChanged="OnQcChanged"
+                                          ToolTip="Component on the y axis.">
+                                    <ComboBoxItem>1</ComboBoxItem>
+                                    <ComboBoxItem IsSelected="True">2</ComboBoxItem>
+                                    <ComboBoxItem>3</ComboBoxItem>
+                                    <ComboBoxItem>4</ComboBoxItem>
+                                    <ComboBoxItem>5</ComboBoxItem>
+                                    <ComboBoxItem>6</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="(toggle View for before/after; PCA/CV/Intensity are interactive)"
                                            VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
@@ -540,9 +560,8 @@
                             <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
                                 <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
                                 <ComboBox x:Name="DiffViewCombo" Width="110" SelectionChanged="OnDiffViewChanged"
-                                          ToolTip="Volcano (moderated-t), PCA of the samples, peptide detection frequency, or g:Profiler enrichment of the significant hits.">
+                                          ToolTip="Volcano (moderated-t), peptide detection frequency, or g:Profiler enrichment of the significant hits. For a sample PCA use the QC pane, which draws the same decomposition and can group by the same columns.">
                                     <ComboBoxItem>Volcano</ComboBoxItem>
-                                    <ComboBoxItem>PCA</ComboBoxItem>
                                     <ComboBoxItem>Detection</ComboBoxItem>
                                     <ComboBoxItem>Enrichment</ComboBoxItem>
                                 </ComboBox>
