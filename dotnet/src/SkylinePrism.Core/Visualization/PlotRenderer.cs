@@ -894,6 +894,10 @@ public static partial class PlotRenderer
                     if (double.IsNaN(values[i, j]))
                         continue;
                     var t = plt.Add.Text(values[i, j].ToString("0.0"), j + 0.5, nRows - 1 - i + 0.5);
+                    // Set BOTH anchors: the Text plottable positions by Alignment (default MiddleLeft,
+                    // which pushes the number right of the cell centre), while LabelAlignment styles the
+                    // label box; center both so the value sits in the middle of the cell.
+                    t.Alignment = Alignment.MiddleCenter;
                     t.LabelAlignment = Alignment.MiddleCenter;
                     StyleTextLabel(t, 12);
                     t.LabelFontColor = Math.Abs(values[i, j]) > range * 0.55 ? Colors.White : Colors.Black;
@@ -925,8 +929,15 @@ public static partial class PlotRenderer
         plt.Axes.Left.TickLabelStyle.FontSize = nRows > 60 ? 6 : nRows > 45 ? 7 : nRows > 30 ? 9 : 12;
         plt.Axes.Bottom.TickLabelStyle.FontSize = 12;
         plt.Axes.Left.TickLabelStyle.Alignment = Alignment.MiddleRight;
-        plt.Axes.Bottom.TickLabelStyle.Rotation = 45;
-        plt.Axes.Bottom.TickLabelStyle.Alignment = Alignment.MiddleRight;
+
+        // Only rotate the column labels when there are too many to sit horizontally (per-sample view).
+        // For a handful of wide group columns, horizontal labels read straight and never rotate up into
+        // the bottom cells. Reserve axis space either way so labels sit BELOW the grid, not over it.
+        var rotate = nCols > 15;
+        plt.Axes.Bottom.TickLabelStyle.Rotation = rotate ? 45 : 0;
+        plt.Axes.Bottom.TickLabelStyle.Alignment = rotate ? Alignment.MiddleRight : Alignment.UpperCenter;
+        plt.Axes.Bottom.MinimumSize = rotate ? 96 : 32;
+        plt.Axes.Left.MinimumSize = 72;
 
         // Pin the view to the cell extent so the grid fills the plot (auto-scale leaves it floating in a
         // corner when the plot is much wider than the grid, and the colorbar/annotations skew the fit).

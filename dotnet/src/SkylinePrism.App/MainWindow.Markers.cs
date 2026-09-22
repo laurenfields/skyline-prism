@@ -22,6 +22,10 @@ public partial class MainWindow
     private string? _markersDir;
     private FeatureLevel _markersLevel;
     private bool _markersSuppress;
+
+    /// <summary>The dataset the pane is currently showing - whether loaded here or reused from the
+    /// Differential pane. RenderMarkers reads this directly rather than re-deriving which cache to use.</summary>
+    private DifferentialDataset? _markersActive;
     private List<SelectablePanel> _markersPanelItems = new();
 
     /// <summary>A protein list offered in the Markers panel picker, tickable for a multi-panel union.</summary>
@@ -86,6 +90,8 @@ public partial class MainWindow
             MarkersStatusText.Text = "Load failed: " + ex.Message;
             return;
         }
+
+        _markersActive = ds;
 
         _markersSuppress = true;
         try
@@ -233,10 +239,7 @@ public partial class MainWindow
 
     private void RenderMarkers()
     {
-        var ds = (_diffDataset is not null && _diffLoadedDir == _markersDir
-                  && _diffLoadedLevel == _markersLevel)
-            ? _diffDataset
-            : _markersDataset;
+        var ds = _markersActive;
         if (ds is null)
             return;
         if (MarkersGroupByCombo.SelectedItem is not string groupCol)
@@ -287,7 +290,7 @@ public partial class MainWindow
         MarkersHeatPlot.Reset();
         var heat = MarkersHeatPlot.Plot;
         PlotRenderer.DrawValueHeatmap(heat, result.Heatmap, result.ColumnLabels, result.MarkerLabels,
-            result.SymmetricMax, "row z-score", annotate: !perSample && result.MarkerLabels.Length <= 30);
+            result.SymmetricMax, "row z-score", annotate: false);
         heat.Title($"{combined.Name} (row z-scored log2) - "
             + (perSample ? "per sample" : $"group means by {groupCol}"));
         MarkersHeatPlot.Refresh();
