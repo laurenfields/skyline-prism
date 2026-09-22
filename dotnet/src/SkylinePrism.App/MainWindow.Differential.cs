@@ -68,6 +68,18 @@ public partial class MainWindow
     private HttpJsonPoster? _diffPoster;
     private bool _diffSuppress;
     private int _diffRequest;
+
+    /// <summary>
+    /// Generation counter for the VIEW computations, separate from the loader's.
+    /// </summary>
+    /// <remarks>
+    /// The loader has always had one; the views did not, and every selector in this pane now
+    /// re-runs on change - design, test, prior, correction, level, view - so two contrasts are
+    /// routinely in flight at once. Without a token the SLOWER one wins whenever it happens to
+    /// finish last, painting a plot and a hit table that the controls no longer describe. Checked
+    /// after every await, because that is where another run can have started.
+    /// </remarks>
+    private int _diffViewRequest;
     private bool _diffLoaded;
     private string? _diffLoadedDir;
     private FeatureLevel _diffLoadedLevel;
@@ -723,19 +735,24 @@ public partial class MainWindow
             return;
         }
 
+        // Anything already in flight is now stale, whatever order it finishes in.
+        var request = ++_diffViewRequest;
         switch (DiffSelectedView())
         {
             case DiffView.Detection:
-                await RunDetectionAsync();
+                await RunDetectionAsync(request);
                 break;
             case DiffView.Enrichment:
-                await RunEnrichmentAsync();
+                await RunEnrichmentAsync(request);
                 break;
             default:
-                await RunVolcanoAsync();
+                await RunVolcanoAsync(request);
                 break;
         }
     }
+
+    /// <summary>Whether this run is still the current one. False means drop everything and paint nothing.</summary>
+    private bool StillCurrent(int request) => request == _diffViewRequest;
 
     private bool TryGetGroups(out string col, out List<int> groupA, out List<int> groupB,
         out string aVal, out string bVal)
@@ -778,7 +795,7 @@ public partial class MainWindow
         return groupA.Count > 0 && groupB.Count > 0;
     }
 
-    private async Task RunVolcanoAsync()
+    private async Task RunVolcanoAsync(int request)
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
@@ -798,9 +815,13 @@ public partial class MainWindow
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
+            if (StillCurrent(request))
+                DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
             return;
         }
+
+        if (!StillCurrent(request))
+            return;
 
         _volcanoGroupA = a;
         _volcanoGroupB = b;
@@ -827,7 +848,7 @@ public partial class MainWindow
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
 
-    private async Task RunDetectionAsync()
+    private async Task RunDetectionAsync(int request)
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
@@ -860,6 +881,8 @@ public partial class MainWindow
             try
             {
                 det = await Task.Run(() => DetectionMatrix.Load(dir!, 0.01, null));
+                if (!StillCurrent(request))
+                    return;
             }
             catch (Exception ex)
             {
@@ -891,6 +914,8 @@ public partial class MainWindow
             DetectionGlmResult glm;
             try
             {
+                if (!StillCurrent(request))
+                    return;
                 glm = await Task.Run(() =>
                     DetectionGlm.Run(det.Matrix, det.PeptideIds, aCols, bCols, covariates));
             }
@@ -921,6 +946,8 @@ public partial class MainWindow
         try
         {
             rows = await Task.Run(() => DetectionTest.Run(det.Matrix, det.PeptideIds, aCols, bCols));
+            if (!StillCurrent(request))
+                return;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -936,7 +963,7 @@ public partial class MainWindow
             $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}.";
     }
 
-    private async Task RunEnrichmentAsync()
+    private async Task RunEnrichmentAsync(int request)
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
@@ -974,9 +1001,13 @@ public partial class MainWindow
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
+            if (StillCurrent(request))
+                DiffStatusText.Text = "Cannot run this contrast: " + ex.Message;
             return;
         }
+
+        if (!StillCurrent(request))
+            return;
 
         var (sig, background) = Enrichment.SigAndBackgroundGenes(
             res, fid => _diffGeneById.GetValueOrDefault(fid), 0.05, 1.0);
@@ -993,6 +1024,8 @@ public partial class MainWindow
         try
         {
             terms = await Task.Run(() => Enrichment.GProfiler(sig, background, DiffPoster));
+            if (!StillCurrent(request))
+                return;
         }
         catch (Exception ex)
         {
