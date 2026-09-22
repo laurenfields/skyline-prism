@@ -1214,6 +1214,147 @@ def gen_paired() -> None:
     )
 
 
+def gen_trend() -> None:
+    """The linear-trend designs: a slope against a numeric column, with and without a subject block.
+
+    Composed the way limma composes any design - numpy.linalg.lstsq for the fit, inmoose's
+    squeezeVar for the moderation - so no PRISM code is involved, exactly as ``gen_paired`` and
+    ``gen_moderated_t`` do it.
+
+    Two designs are pinned:
+
+    * ``independent`` - ``[1, x]``, one sample per subject.
+    * ``within_subject`` - ``[1, x, subject dummies 1..k-1]``, the same subjects followed across x.
+
+    x is CENTERED in both, which does not move the slope but is what PRISM fits, so the intercept
+    and therefore ``amean`` line up too.
+
+    ``logfc`` is the slope times the SPAN of x, not the slope itself: that is what PRISM reports,
+    so that one effect-size threshold means the same thing on a trend as on a two-arm contrast
+    whatever units x is in. The raw slope is kept beside it so a reader can check the scaling.
+    """
+    rng = Rng(613)
+
+    def moderated(expr, design):
+        beta, _, _, _ = np.linalg.lstsq(design, expr.T, rcond=None)
+        resid = expr.T - design @ beta
+        df_resid = design.shape[0] - np.linalg.matrix_rank(design)
+        sigma2 = (resid ** 2).sum(axis=0) / df_resid
+        xtx_inv = np.linalg.inv(design.T @ design)
+        v_c = xtx_inv[1, 1]
+        sq = squeezeVar(sigma2, df_resid)
+        df_prior = float(np.atleast_1d(sq["df_prior"])[0])
+        var_post = np.atleast_1d(sq["var_post"])
+        df_total = df_resid + df_prior
+        t_mod = beta[1, :] / (np.sqrt(v_c) * np.sqrt(var_post))
+        if np.isinf(df_total):
+            p_mod = 2.0 * scipy.stats.norm.cdf(-np.abs(t_mod))
+        else:
+            p_mod = 2.0 * scipy.stats.t.cdf(-np.abs(t_mod), df=df_total)
+        amean = expr.mean(axis=1)
+        return beta[1, :], t_mod, p_mod, df_resid, df_prior, amean
+
+    # --- independent: 12 samples, each its own subject, x = dose ---------------------------------
+    n_feat = 9
+    x_ind = np.array([0.0, 0.0, 0.0, 2.5, 2.5, 2.5, 5.0, 5.0, 5.0, 10.0, 10.0, 10.0])
+    expr_ind = []
+    for f in range(n_feat):
+        level = 12 + f * 0.4
+        slope = (0.18 if f < 3 else 0.0)   # three features really move with dose
+        expr_ind.append([level + slope * xv + 0.30 * rng.normal() for xv in x_ind])
+    expr_ind = np.asarray(expr_ind, dtype=float)
+
+    xc_ind = x_ind - x_ind.mean()
+    design_ind = np.column_stack([np.ones_like(xc_ind), xc_ind])
+    slope_i, t_i, p_i, dfr_i, dfp_i, amean_i = moderated(expr_ind, design_ind)
+    span_ind = float(x_ind.max() - x_ind.min())
+
+    # --- within subject: 6 subjects x 4 timepoints, big between-subject spread ------------------
+    n_subj, n_time = 6, 4
+    times = np.array([0.0, 4.0, 8.0, 12.0])
+    subj_level = [rng.normal() * 2.0 for _ in range(n_subj)]   # what the block removes
+    x_rep, subj_of = [], []
+    for j in range(n_subj):
+        for tv in times:
+            x_rep.append(tv)
+            subj_of.append(j)
+    x_rep = np.asarray(x_rep, dtype=float)
+
+    expr_rep = []
+    for f in range(n_feat):
+        level = 11 + f * 0.5
+        slope = (0.09 if f < 3 else 0.0)
+        row = []
+        for j in range(n_subj):
+            for tv in times:
+                row.append(level + subj_level[j] + slope * tv + 0.22 * rng.normal())
+        expr_rep.append(row)
+    expr_rep = np.asarray(expr_rep, dtype=float)
+
+    xc_rep = x_rep - x_rep.mean()
+    design_rep = np.zeros((n_subj * n_time, 2 + (n_subj - 1)))
+    design_rep[:, 0] = 1.0
+    design_rep[:, 1] = xc_rep
+    for s, j in enumerate(subj_of):
+        if j > 0:
+            design_rep[s, 1 + j] = 1.0
+    slope_r, t_r, p_r, dfr_r, dfp_r, amean_r = moderated(expr_rep, design_rep)
+    span_rep = float(x_rep.max() - x_rep.min())
+
+    # The same data fitted WITHOUT the subject block, to show what the block is worth. Not a
+    # target PRISM has to match - it is the model the block exists to avoid - but pinning it keeps
+    # the two designs from silently becoming the same thing.
+    design_naive = np.column_stack([np.ones_like(xc_rep), xc_rep])
+    slope_n, t_n, p_n, _, _, _ = moderated(expr_rep, design_naive)
+
+    write(
+        "trend.json",
+        {
+            "reference": (
+                "numpy.linalg.lstsq + inmoose.limma.squeezeVar, composed as limma composes a "
+                "design - the same construction gen_moderated_t and gen_paired use"
+            ),
+            "note": (
+                "x is centered before fitting, which does not move the slope. `logfc` is the slope "
+                "times `x_span` - the modeled change across the observed range, which is what PRISM "
+                "reports so that one effect-size cut means the same thing here as on a two-arm "
+                "contrast. `slope` is the raw coefficient, in log2 per unit of x. `within_subject` "
+                "adds [subject dummies 1..k-1]; `naive_t`/`naive_p` are the SAME data fitted "
+                "without that block, which is the mistake the block exists to prevent - they are "
+                "recorded to keep the two designs from collapsing into one."
+            ),
+            "independent": {
+                "x": vec(x_ind),
+                "x_span": num(span_ind),
+                "expr_log2": mat(expr_ind),
+                "slope": vec(slope_i),
+                "logfc": vec(slope_i * span_ind),
+                "t": vec(t_i),
+                "p": vec(p_i),
+                "amean": vec(amean_i),
+                "df_residual": num(float(dfr_i)),
+                "df_prior": num(dfp_i),
+            },
+            "within_subject": {
+                "x": vec(x_rep),
+                "x_span": num(span_rep),
+                "subject_of": [str(j) for j in subj_of],
+                "n_subjects": n_subj,
+                "expr_log2": mat(expr_rep),
+                "slope": vec(slope_r),
+                "logfc": vec(slope_r * span_rep),
+                "t": vec(t_r),
+                "p": vec(p_r),
+                "amean": vec(amean_r),
+                "df_residual": num(float(dfr_r)),
+                "df_prior": num(dfp_r),
+                "naive_t": vec(t_n),
+                "naive_p": vec(p_n),
+            },
+        },
+    )
+
+
 def gen_peptide_count_prior() -> None:
     """The DEqMS-style prior: a LOWESS of log(residual variance) on log(peptide count).
 
@@ -1333,6 +1474,7 @@ def main() -> None:
     gen_paired()
     gen_peptide_count_prior()
     gen_mcnemar()
+    gen_trend()
 
 
 if __name__ == "__main__":

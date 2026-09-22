@@ -754,6 +754,145 @@ public class DifferentialGoldenTests
     }
 
     /// <summary>
+    /// The independent linear trend - <c>[1, x]</c> - against the same lstsq + squeezeVar
+    /// composition limma uses for any design.
+    /// </summary>
+    [Fact]
+    public void IndependentTrend_MatchesTheLimmaComposition()
+    {
+        var m = Golden.Load("trend.json").GetProperty("independent");
+        var expr = Golden.Mat(m, "expr_log2");
+        var x = Golden.Vec(m, "x");
+        var ids = Enumerable.Range(0, expr.GetLength(0)).Select(i => $"f{i}").ToArray();
+
+        var res = Differential.RunTrend(
+            expr, ids, Enumerable.Range(0, x.Length).ToArray(), x,
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.LinearTrend,
+                Prior = VariancePrior.Global,
+                Correction = MultipleTesting.None,
+            });
+
+        Assert.True(res.IsTrend);
+        Golden.Close(Golden.Num(m, "x_span"), res.TrendRange, 1e-12, "x span");
+        Golden.Close(Golden.Num(m, "df_residual"), res.DfResidual, 1e-12, "trend df residual");
+        Golden.Close(Golden.Num(m, "df_prior"), res.DfPrior, 1e-9, "trend df prior");
+
+        var byId = res.Rows.ToDictionary(r => r.FeatureId);
+        var logfc = Golden.Vec(m, "logfc");
+        var slope = Golden.Vec(m, "slope");
+        var t = Golden.Vec(m, "t");
+        var pv = Golden.Vec(m, "p");
+        var amean = Golden.Vec(m, "amean");
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var row = byId[ids[i]];
+            // The REPORTED effect is the change across the span, not the raw slope.
+            Golden.Close(logfc[i], row.LogFc, 1e-9, $"f{i} change across range");
+            Golden.Close(slope[i], row.LogFc / res.TrendRange, 1e-9, $"f{i} slope recovered");
+            Golden.Close(t[i], row.T, 1e-9, $"f{i} t");
+            Golden.Close(pv[i], row.PValue, 1e-9, $"f{i} p");
+            Golden.Close(amean[i], row.AveExpr, 1e-9, $"f{i} amean");
+            // The two reported "means" are the fitted ends of the line, so their difference is
+            // exactly the effect - which is what the per-feature plot draws.
+            Golden.Close(logfc[i], row.MeanB - row.MeanA, 1e-9, $"f{i} fitted ends");
+        }
+    }
+
+    /// <summary>
+    /// The within-subject trend - <c>[1, x, subject dummies]</c> - and what the subject block buys.
+    /// </summary>
+    /// <remarks>
+    /// The fixture's subjects differ by about 2 log2 units while the real slope moves 0.09 per
+    /// unit, so this is not a last-digits comparison: fitted without the block the leading feature
+    /// gives t = 0.86 and p = 0.39, and with it t = 9.51 and p = 1.8e-21. A design that lost the
+    /// block would lose the effect entirely, which is what the naive arm of the golden pins.
+    /// </remarks>
+    [Fact]
+    public void WithinSubjectTrend_MatchesTheLimmaComposition_AndBeatsTheNaiveFit()
+    {
+        var m = Golden.Load("trend.json").GetProperty("within_subject");
+        var expr = Golden.Mat(m, "expr_log2");
+        var x = Golden.Vec(m, "x");
+        var subjects = m.GetProperty("subject_of").EnumerateArray()
+            .Select(e => (string?)e.GetString()).ToArray();
+        var ids = Enumerable.Range(0, expr.GetLength(0)).Select(i => $"f{i}").ToArray();
+
+        var res = Differential.RunTrend(
+            expr, ids, Enumerable.Range(0, x.Length).ToArray(), x,
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.LinearTrendWithinSubject,
+                Prior = VariancePrior.Global,
+                Correction = MultipleTesting.None,
+                SubjectLabels = subjects,
+            });
+
+        Assert.Equal(m.GetProperty("n_subjects").GetInt32(), res.NSubjects);
+        Golden.Close(Golden.Num(m, "x_span"), res.TrendRange, 1e-12, "x span");
+        Golden.Close(Golden.Num(m, "df_residual"), res.DfResidual, 1e-12, "df residual");
+        Golden.Close(Golden.Num(m, "df_prior"), res.DfPrior, 1e-9, "df prior");
+
+        var byId = res.Rows.ToDictionary(r => r.FeatureId);
+        var logfc = Golden.Vec(m, "logfc");
+        var t = Golden.Vec(m, "t");
+        var pv = Golden.Vec(m, "p");
+        var naiveT = Golden.Vec(m, "naive_t");
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var row = byId[ids[i]];
+            Golden.Close(logfc[i], row.LogFc, 1e-9, $"f{i} change across range");
+            Golden.Close(t[i], row.T, 1e-9, $"f{i} t");
+            Golden.Close(pv[i], row.PValue, 1e-9, $"f{i} p");
+        }
+
+        // The three features that really move: the block is not a rounding difference here.
+        for (var i = 0; i < 3; i++)
+            Assert.True(Math.Abs(t[i]) > 4 * Math.Abs(naiveT[i]),
+                $"f{i}: the subject block should dominate the naive fit "
+                + $"({t[i]:F2} vs {naiveT[i]:F2})");
+    }
+
+    /// <summary>
+    /// The subject block has to be built from the LABELS, not from sample order, because a real
+    /// metadata column is not grouped.
+    /// </summary>
+    [Fact]
+    public void WithinSubjectTrend_IsIndependentOfSampleOrder()
+    {
+        var m = Golden.Load("trend.json").GetProperty("within_subject");
+        var expr = Golden.Mat(m, "expr_log2");
+        var x = Golden.Vec(m, "x");
+        var subjects = m.GetProperty("subject_of").EnumerateArray()
+            .Select(e => (string?)e.GetString()).ToArray();
+        var ids = Enumerable.Range(0, expr.GetLength(0)).Select(i => $"f{i}").ToArray();
+
+        DifferentialResult Run(int[] columns) => Differential.RunTrend(
+            expr, ids, columns, x,
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.LinearTrendWithinSubject,
+                Prior = VariancePrior.Global,
+                Correction = MultipleTesting.None,
+                SubjectLabels = subjects,
+            });
+
+        var inOrder = Run(Enumerable.Range(0, x.Length).ToArray());
+        // Interleaved: every subject's samples now arrive scattered through the column list.
+        var scrambled = Run(Enumerable.Range(0, x.Length)
+            .OrderBy(c => c % 4).ThenBy(c => c).ToArray());
+
+        var a = inOrder.Rows.ToDictionary(r => r.FeatureId);
+        var b = scrambled.Rows.ToDictionary(r => r.FeatureId);
+        foreach (var id in ids)
+        {
+            Golden.Close(a[id].LogFc, b[id].LogFc, 1e-12, $"{id} logFC under reordering");
+            Golden.Close(a[id].T, b[id].T, 1e-12, $"{id} t under reordering");
+        }
+    }
+
+    /// <summary>
     /// The DEqMS-style peptide-count prior, against the toolkit that defines it.
     /// </summary>
     /// <remarks>

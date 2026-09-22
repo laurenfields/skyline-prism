@@ -15,8 +15,30 @@ public enum DifferentialDesign
     /// </summary>
     Paired,
 
-    /// <summary>A slope against a numeric time or dose, testing whether it differs from zero.</summary>
+    /// <summary>
+    /// A slope against a numeric time or dose, testing whether it differs from zero. Assumes every
+    /// sample is INDEPENDENT - one sample per subject, as in a dose-response where each animal
+    /// receives one dose.
+    /// </summary>
     LinearTrend,
+
+    /// <summary>
+    /// The same slope where the SAME subjects are followed across the trend column, fitted as
+    /// <c>[1, x, subject one-hot]</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is <see cref="Paired"/> generalized from a two-level column to a numeric one, and it
+    /// exists because <see cref="LinearTrend"/> is wrong for a repeated-measures study: treating one
+    /// subject's several samples as independent understates the standard error, so the test reports
+    /// more hits than the data support. The subject block absorbs each subject's overall level, so
+    /// the slope is estimated purely WITHIN subject.
+    ///
+    /// <para>A fixed effect, not a random intercept - the same choice <see cref="Paired"/> makes,
+    /// for the same reason. On a balanced design the two give very similar slopes; they diverge on
+    /// unbalanced designs, on missing timepoints, and when a random SLOPE per subject is wanted. A
+    /// mixed model is a different estimator and is still not implemented.</para>
+    /// </remarks>
+    LinearTrendWithinSubject,
 }
 
 /// <summary>The estimator applied to the design.</summary>
@@ -134,6 +156,12 @@ public sealed record DifferentialOptions
     /// </summary>
     public IReadOnlyList<string?>? SubjectLabels { get; init; }
 
+    /// <summary>
+    /// The name of the trend column, for the status line and the axis. Display only - the values
+    /// come from <see cref="TimeValues"/>.
+    /// </summary>
+    public string? TrendColumn { get; init; }
+
     /// <summary>Numeric time or dose per sample column, for <see cref="DifferentialDesign.LinearTrend"/>.</summary>
     public IReadOnlyList<double>? TimeValues { get; init; }
 
@@ -187,10 +215,12 @@ public sealed record DifferentialOptions
             DifferentialTest.Wilcoxon => "Wilcoxon signed-rank",
             _ => "Mann-Whitney U",
         };
+        var over = TrendColumn is null ? string.Empty : $" over {TrendColumn}";
         var design = Design switch
         {
             DifferentialDesign.Paired => "paired",
-            DifferentialDesign.LinearTrend => "linear trend",
+            DifferentialDesign.LinearTrend => $"linear trend{over}",
+            DifferentialDesign.LinearTrendWithinSubject => $"linear trend{over}, within subject",
             _ => "unpaired",
         };
         return $"{test}, {design}";

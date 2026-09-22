@@ -88,8 +88,10 @@ public sealed class DifferentialResult
     internal DifferentialResult(IReadOnlyList<DifferentialRow> rows, int nA, int nB,
         int nFeaturesTotal, int nFeaturesTested, double dfResidual, double dfPrior,
         string variancePrior, IReadOnlyList<string> covariatesUsed, IReadOnlyList<string> messages,
-        IReadOnlyList<string> warnings)
+        IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0)
     {
+        TrendRange = trendRange;
+        NSubjects = nSubjects;
         Rows = rows;
         NA = nA;
         NB = nB;
@@ -138,6 +140,25 @@ public sealed class DifferentialResult
 
     /// <summary>Diagnostic messages from the variance-moderation step.</summary>
     public IReadOnlyList<string> Warnings { get; }
+
+    /// <summary>
+    /// The span of the trend column actually used, <c>x_max - x_min</c>; NaN for a two-arm contrast.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because <see cref="DifferentialRow.LogFc"/> on a trend is the modeled change across
+    /// THIS span, not the raw slope - so the slope is <c>LogFc / TrendRange</c>, and without the
+    /// span a reader cannot recover it. Reporting the change rather than the slope is what lets one
+    /// effect-size threshold mean the same thing on both designs, whatever units the column is in.
+    /// </remarks>
+    public double TrendRange { get; }
+
+    /// <summary>
+    /// Subjects contributing to a within-subject trend; 0 for every other design.
+    /// </summary>
+    public int NSubjects { get; }
+
+    /// <summary>Whether this result came from a trend design.</summary>
+    public bool IsTrend => !double.IsNaN(TrendRange);
 }
 
 /// <summary>
@@ -190,16 +211,14 @@ public static class Differential
         IReadOnlyList<int> groupBColumns,
         DifferentialOptions options)
     {
-        // Refused rather than fallen through. Only Paired is handled below, so a LinearTrend request
-        // would run an ordinary two-arm contrast while Describe() reported "linear trend" - a
-        // plausible answer to a question nobody asked. Neither the pane nor the CLI offers it, but
-        // DifferentialOptions is public, so the guard belongs here and not in the callers.
-        if (options.Design == DifferentialDesign.LinearTrend)
-            throw new NotImplementedException(
-                "The linear-trend design is not implemented. It fits a slope against a numeric "
-                + "covariate instead of contrasting two arms, so it is a different mean model, not a "
-                + "variant of this one. (The intensity-TREND variance prior is a separate axis and is "
-                + "available: DifferentialOptions.Prior = VariancePrior.IntensityTrend, the default.)");
+        // A trend has no arms, so it cannot come through the two-arm entry point. Refused rather
+        // than fallen through: only Paired is handled below, so a trend request would otherwise run
+        // an ordinary two-arm contrast while Describe() reported a linear trend.
+        if (options.Design is DifferentialDesign.LinearTrend
+            or DifferentialDesign.LinearTrendWithinSubject)
+            throw new ArgumentException(
+                "A linear-trend design has no A and B arms - call Differential.RunTrend with the "
+                + "sample columns and their trend values instead.");
 
         var minPerGroup = options.MinPerGroup;
         var covariates = options.Covariates;
@@ -284,7 +303,107 @@ public static class Differential
                 DropSubjectCollinear(design, covariatesUsed, pairs.Count, messages);
             design = WithSubjectBlock(design, pairs.Count);
         }
-        const int coefIdx = 1; // groupB is the second design column
+        return Moderate(exprLog2FeaturesBySamples, featureIds, cols, design, options,
+            PriorGroups(options, cols, nA, nB), covariatesUsed, messages,
+            nA, nB, trendRange: double.NaN, nSubjects: 0);
+    }
+
+    /// <summary>
+    /// Run a LINEAR TREND contrast: fit a slope against a numeric column and test whether it
+    /// differs from zero.
+    /// </summary>
+    /// <remarks>
+    /// <para><paramref name="xValues"/> is indexed by MATRIX COLUMN, like a metadata column, not by
+    /// position in <paramref name="sampleColumns"/>.</para>
+    ///
+    /// <para><b>The reported effect is the modeled change across the observed range of x</b>, not
+    /// the raw slope - see <see cref="DifferentialRow.LogFc"/> and
+    /// <see cref="DifferentialResult.TrendRange"/>. A slope is in log2 per unit of x, so a threshold
+    /// on it would mean something different for a column in days than for the same column in hours;
+    /// the change across the range is unit-free and, for a two-level x coded 0/1, is exactly the
+    /// log2 fold change. That is what lets one effect-size cut serve both designs.</para>
+    ///
+    /// <para>Under <see cref="DifferentialDesign.LinearTrendWithinSubject"/> a fixed-effect subject
+    /// block is added, so the slope is estimated within subject. Without it, repeated measures on
+    /// one subject are treated as independent and the standard error is understated.</para>
+    /// </remarks>
+    public static DifferentialResult RunTrend(
+        double[,] exprLog2FeaturesBySamples,
+        IReadOnlyList<string> featureIds,
+        IReadOnlyList<int> sampleColumns,
+        double[] xValues,
+        DifferentialOptions options)
+    {
+        if (options.Design is not (DifferentialDesign.LinearTrend
+            or DifferentialDesign.LinearTrendWithinSubject))
+            throw new ArgumentException("RunTrend needs a linear-trend design.");
+
+        var withinSubject = options.Design == DifferentialDesign.LinearTrendWithinSubject;
+        var selection = TrendSamples.Resolve(
+            sampleColumns, xValues, options.SubjectLabels?.ToArray(), withinSubject);
+        var messages = new List<string>(selection.Messages);
+        var cols = selection.Columns.ToArray();
+        var x = selection.X.ToArray();
+
+        if (cols.Length < Math.Max(3, options.MinPerGroup))
+            throw new ArgumentException(
+                $"A trend needs at least {Math.Max(3, options.MinPerGroup)} usable samples; "
+                + $"{cols.Length} remained. " + string.Join(" ", messages));
+
+        var range = x.Max() - x.Min();
+        if (!(range > 0))
+            throw new ArgumentException(
+                "The trend column takes only one value across the selected samples, so there is no "
+                + "slope to fit.");
+
+        // [intercept, x, covariates...]. x is centered for the same reason a numeric covariate is:
+        // it leaves the intercept meaning the abundance at the MEAN of x rather than at x = 0,
+        // which for a column like year-of-birth is far outside the data.
+        var mean = x.Average();
+        var (design, covariatesUsed, designMessages) =
+            BuildTrendDesign(x.Select(v => v - mean).ToArray(), cols, options.Covariates);
+        messages.AddRange(designMessages);
+
+        if (withinSubject)
+        {
+            (design, covariatesUsed) = DropWithinSubjectCollinear(
+                design, covariatesUsed, selection.SubjectOf, messages);
+            design = WithSubjectDummies(design, selection.SubjectOf, selection.SubjectCount);
+        }
+
+        return Moderate(exprLog2FeaturesBySamples, featureIds, cols, design, options,
+            PriorGroups(options, cols, nA: 0, nB: 0), covariatesUsed, messages,
+            nA: cols.Length, nB: 0, trendRange: range, nSubjects: selection.SubjectCount);
+    }
+
+    /// <summary>
+    /// Fit the shared design, moderate the variances and build the rows. Everything after the
+    /// design matrix is the same for every design, so it lives here once.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="trendRange"/> being finite is what marks a trend: the coefficient is then
+    /// scaled to the change across that range before it is reported, and the two per-arm means
+    /// become the fitted ends of the line rather than group averages. Everything else - the fit,
+    /// the prior, the moderated t, the correction, the ordering - is identical, which is the point.
+    /// </remarks>
+    private static DifferentialResult Moderate(
+        double[,] exprLog2FeaturesBySamples,
+        IReadOnlyList<string> featureIds,
+        int[] cols,
+        double[,] design,
+        DifferentialOptions options,
+        IReadOnlyList<IReadOnlyList<int>> priorGroups,
+        List<string> covariatesUsed,
+        List<string> messages,
+        int nA,
+        int nB,
+        double trendRange,
+        int nSubjects)
+    {
+        const int coefIdx = 1; // the tested term is always the second design column
+        var isTrend = !double.IsNaN(trendRange);
+        var nFeatures = exprLog2FeaturesBySamples.GetLength(0);
+        var nSamples = cols.Length;
         var nParams = design.GetLength(1);
         if (nSamples - nParams < 1)
             throw new ArgumentException(
@@ -325,7 +444,7 @@ public static class Differential
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
 
         var (squeezed, variancePrior) = FitPrior(
-            options, exprLog2FeaturesBySamples, cols, nA, nB, variances, fit, tested, messages);
+            options, exprLog2FeaturesBySamples, priorGroups, variances, fit, tested, messages);
 
         var dfTotal = fit.DfResidual + squeezed.DfPrior;
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
@@ -333,7 +452,7 @@ public static class Differential
         var pValues = new double[nTested];
         var rows = new DifferentialRow[nTested];
         var groupB = new double[nB];
-        var groupA = new double[nA];
+        var groupA = new double[isTrend ? 0 : nA];
         for (var i = 0; i < nTested; i++)
         {
             var coef = fit.Coefficients[i, coefIdx];
@@ -341,14 +460,33 @@ public static class Differential
             var p = ModeratedPValue(t, dfTotal);
             pValues[i] = p;
 
-            for (var s = 0; s < nA; s++)
-                groupA[s] = mk[i, s];
-            for (var s = 0; s < nB; s++)
-                groupB[s] = mk[i, nA + s];
+            // The reported effect. On a trend the coefficient is log2 per unit of x, so it is
+            // scaled to the span actually measured; on a two-arm contrast the span is 1 by
+            // construction and this is the coefficient itself.
+            var effect = isTrend ? coef * trendRange : coef;
+
+            double meanA, meanB;
+            if (isTrend)
+            {
+                // The fitted line's two ends, centered on the feature's own mean - so their
+                // difference is exactly the reported effect. An intercept-based pair would be the
+                // REFERENCE subject's trajectory under a within-subject design, not the average one.
+                meanA = fit.Amean[i] - effect / 2.0;
+                meanB = fit.Amean[i] + effect / 2.0;
+            }
+            else
+            {
+                for (var s = 0; s < nA; s++)
+                    groupA[s] = mk[i, s];
+                for (var s = 0; s < nB; s++)
+                    groupB[s] = mk[i, nA + s];
+                meanA = NumpyMath.Mean(groupA);
+                meanB = NumpyMath.Mean(groupB);
+            }
 
             rows[i] = new DifferentialRow(
-                featureIds[tested[i]], coef, Math.Pow(2.0, coef), fit.Amean[i], t, p,
-                double.NaN, NumpyMath.Mean(groupA), NumpyMath.Mean(groupB));
+                featureIds[tested[i]], effect, Math.Pow(2.0, effect), fit.Amean[i], t, p,
+                double.NaN, meanA, meanB);
         }
 
         var adj = Fdr.Adjust(pValues, options.Correction);
@@ -358,7 +496,8 @@ public static class Differential
         var ordered = rows.OrderBy(r => r.PValue).ToArray();
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
-            squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings);
+            squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
+            trendRange, nSubjects);
     }
 
     /// <summary>
@@ -367,6 +506,103 @@ public static class Differential
     /// A covariate missing in any selected sample, or constant, is skipped; a dummy level collinear
     /// with the group is dropped. Every skip/drop is recorded in the returned messages.
     /// </summary>
+
+    /// <summary>
+    /// Append a fixed-effect subject block: one indicator per subject after the first, which the
+    /// intercept already spans.
+    /// </summary>
+    /// <remarks>
+    /// The general form of <see cref="WithSubjectBlock"/>, which can assume exactly two samples per
+    /// subject in a known order. Here a subject has any number of samples, so the block is built
+    /// from an explicit subject index per sample.
+    /// </remarks>
+    private static double[,] WithSubjectDummies(double[,] design, IReadOnlyList<int> subjectOf, int nSubjects)
+    {
+        var nSamples = design.GetLength(0);
+        var nParams = design.GetLength(1);
+        if (nSubjects < 2)
+            return design;
+
+        var widened = new double[nSamples, nParams + nSubjects - 1];
+        for (var s = 0; s < nSamples; s++)
+        {
+            for (var c = 0; c < nParams; c++)
+                widened[s, c] = design[s, c];
+            // Subject 0 is the reference level and gets no column.
+            if (subjectOf[s] > 0)
+                widened[s, nParams + subjectOf[s] - 1] = 1.0;
+        }
+
+        return widened;
+    }
+
+    /// <summary>
+    /// Drop covariate columns a subject block would make redundant, naming them.
+    /// </summary>
+    /// <remarks>
+    /// A covariate constant within every subject - sex, genotype, birth year, the usual things to
+    /// tick - is exactly a linear combination of the subject block, so leaving it in makes the
+    /// design rank-deficient and the run dies on a check that names neither the covariate nor a
+    /// block the user never asked for. This is not a limitation of the implementation: a
+    /// within-subject slope cannot estimate a between-subject effect, because the block has already
+    /// absorbed it.
+    /// </remarks>
+    private static (double[,] Design, List<string> Used) DropWithinSubjectCollinear(
+        double[,] design, List<string> covariatesUsed, IReadOnlyList<int> subjectOf,
+        List<string> messages)
+    {
+        var nSamples = design.GetLength(0);
+        var nParams = design.GetLength(1);
+        const int firstCovariate = 2; // [intercept, term, covariates...]
+        if (nParams <= firstCovariate)
+            return (design, covariatesUsed);
+
+        var firstRowOfSubject = new Dictionary<int, int>();
+        for (var s = 0; s < nSamples; s++)
+            if (!firstRowOfSubject.ContainsKey(subjectOf[s]))
+                firstRowOfSubject[subjectOf[s]] = s;
+
+        var keep = new List<int>();
+        var kept = new List<string>();
+        var dropped = new List<string>();
+        for (var c = 0; c < nParams; c++)
+        {
+            if (c < firstCovariate)
+            {
+                keep.Add(c);
+                continue;
+            }
+
+            var constantWithinSubject = true;
+            for (var s = 0; s < nSamples && constantWithinSubject; s++)
+                if (design[s, c] != design[firstRowOfSubject[subjectOf[s]], c])
+                    constantWithinSubject = false;
+
+            var name = covariatesUsed[c - firstCovariate];
+            if (constantWithinSubject)
+                dropped.Add(name);
+            else
+            {
+                keep.Add(c);
+                kept.Add(name);
+            }
+        }
+
+        if (dropped.Count == 0)
+            return (design, covariatesUsed);
+
+        messages.Add(
+            $"{dropped.Count} covariate(s) are constant within every subject, so a within-subject "
+            + $"slope cannot estimate them, and they were dropped ({string.Join(", ", dropped)}).");
+
+        var reduced = new double[nSamples, keep.Count];
+        for (var s = 0; s < nSamples; s++)
+        for (var c = 0; c < keep.Count; c++)
+            reduced[s, c] = design[s, keep[c]];
+
+        return (reduced, kept);
+    }
+
     /// <summary>
     /// Drop covariate columns that the subject block will make redundant, naming them.
     /// </summary>
@@ -484,7 +720,30 @@ public static class Differential
         var grp = new double[nSamples];
         for (var s = nA; s < nSamples; s++)
             grp[s] = 1.0;
+        return BuildDesign(grp, "group", cols, covariates);
+    }
 
+    /// <summary>
+    /// <c>[intercept, x, covariates...]</c> for a trend, where x is the CENTERED trend value.
+    /// </summary>
+    /// <remarks>
+    /// The covariate handling is shared with the two-arm design rather than copied, because it is
+    /// the part with the rules worth keeping identical - missing values skipped, constants skipped,
+    /// numerics centered, categoricals dummy-coded dropping the first sorted level.
+    /// </remarks>
+    private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages)
+        BuildTrendDesign(double[] centeredX, int[] cols, IReadOnlyList<Covariate>? covariates)
+        => BuildDesign(centeredX, "the trend", cols, covariates);
+
+    /// <summary>
+    /// Build <c>[intercept, term, covariates...]</c>. <paramref name="term"/> is the column being
+    /// tested - a group indicator for a two-arm contrast, a centered numeric column for a trend -
+    /// and <paramref name="termName"/> names it in the "confounded with" message.
+    /// </summary>
+    private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages) BuildDesign(
+        double[] grp, string termName, int[] cols, IReadOnlyList<Covariate>? covariates)
+    {
+        var nSamples = grp.Length;
         var extra = new List<double[]>();
         var names = new List<string>();
         var messages = new List<string>();
@@ -556,7 +815,8 @@ public static class Differential
                             continue;
                         if (AllClose(col, grp, complement: false) || AllClose(col, grp, complement: true))
                         {
-                            messages.Add($"Covariate level '{cat.Name}_{level}' is confounded with group - dropped.");
+                            messages.Add(
+                                $"Covariate level '{cat.Name}_{level}' is confounded with {termName} - dropped.");
                             continue;
                         }
 
@@ -642,8 +902,8 @@ public static class Differential
     /// fitted, because a silently substituted prior is a silently different p-value.
     /// </summary>
     private static (SqueezeVarResult Squeezed, string Name) FitPrior(
-        DifferentialOptions options, double[,] expr, int[] cols, int nA, int nB, double[] variances,
-        LinearModelFit fit, List<int> tested, List<string> messages)
+        DifferentialOptions options, double[,] expr, IReadOnlyList<IReadOnlyList<int>> priorGroups,
+        double[] variances, LinearModelFit fit, List<int> tested, List<string> messages)
     {
         // Peptide counts arrive per FEATURE of the input matrix; the fit is over the tested subset,
         // so they have to be gathered in the same order or the trend would pair each variance with
@@ -675,10 +935,20 @@ public static class Differential
                     + "unavailable, so the global prior was used.");
                 break;
 
+            case VariancePrior.IntensityTrend when priorGroups.Count == 0:
+                // A trend design has no groups to take a within-group variance from, and the
+                // estimator is only defined on groups. Inventing one - pooling every sample, say -
+                // would fold the trend itself into the "noise" it is meant to describe, inflating
+                // the prior for exactly the features that have a real slope and over-shrinking
+                // them. So it degrades to the global prior and says how to get a real one back.
+                messages.Add("The intensity-trend prior needs sample groups to take a within-group "
+                    + "variance from, and a trend design has none - the global prior was used. Fit "
+                    + "the prior on the QC and reference replicates to use it here.");
+                break;
+
             case VariancePrior.IntensityTrend:
             {
-                var prior = VariancePriors.IntensityTrend(
-                    expr, tested, PriorGroups(options, cols, nA, nB));
+                var prior = VariancePriors.IntensityTrend(expr, tested, priorGroups);
                 if (prior is not null)
                     return (WithGlobalDf(variances, fit.DfResidual, prior), "intensity-trend");
 
@@ -713,14 +983,21 @@ public static class Differential
     /// columns exist only in the FULL matrix, which is why these indices are absolute.
     /// </remarks>
     private static IReadOnlyList<IReadOnlyList<int>> PriorGroups(
-        DifferentialOptions options, int[] cols, int nA, int nB) =>
-        options.PriorGroupColumns is null
-            ? new IReadOnlyList<int>[]
+        DifferentialOptions options, int[] cols, int nA, int nB)
+    {
+        if (options.PriorGroupColumns is not null)
+            return options.PriorGroupColumns;
+
+        // No arms means no groups. Returning empty rather than one pooled group is deliberate: see
+        // the IntensityTrend case in FitPrior for why a pooled "group" would be worse than none.
+        return nA == 0 && nB == 0
+            ? Array.Empty<IReadOnlyList<int>>()
+            : new IReadOnlyList<int>[]
             {
                 cols.Take(nA).ToArray(),
                 cols.Skip(nA).Take(nB).ToArray(),
-            }
-            : options.PriorGroupColumns;
+            };
+    }
 
     /// <summary>
     /// A per-feature prior scale paired with the GLOBAL prior degrees of freedom.

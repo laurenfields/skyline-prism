@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using SkylinePrism.Core.DifferentialAnalysis;
 using Xunit;
@@ -174,32 +174,31 @@ public class ControlSampleTypesTests
 }
 
 /// <summary>
-/// The linear-trend design is declared but not implemented. It must refuse, not quietly run the
-/// two-arm contrast under its name.
+/// A trend design has no A and B arms, so the two-arm entry point must refuse it and say where to
+/// go - not fall through and run an ordinary contrast under a trend's name.
 /// </summary>
-public class UnimplementedDesignTests
+public class TrendDesignRoutingTests
 {
-    [Fact]
-    public void LinearTrend_Throws_RatherThanRunningAnUnpairedContrast()
+    private static readonly double[,] Expr = { { 1, 2, 3, 4 }, { 2, 3, 4, 5 } };
+    private static readonly string[] Ids = { "F1", "F2" };
+
+    [Theory]
+    [InlineData(DifferentialDesign.LinearTrend)]
+    [InlineData(DifferentialDesign.LinearTrendWithinSubject)]
+    public void TheTwoArmEntryPoint_RefusesATrend_AndNamesTheRightOne(DifferentialDesign design)
     {
-        var expr = new double[,] { { 1, 2, 3, 4 }, { 2, 3, 4, 5 } };
-        var options = new DifferentialOptions { Design = DifferentialDesign.LinearTrend };
+        var ex = Assert.Throws<ArgumentException>(() => Differential.Run(
+            Expr, Ids, new[] { 0, 1 }, new[] { 2, 3 }, new DifferentialOptions { Design = design }));
 
-        var ex = Assert.Throws<NotImplementedException>(() => Differential.Run(
-            expr, new[] { "F1", "F2" }, new[] { 0, 1 }, new[] { 2, 3 }, options));
-
-        // The message has to separate it from the variance prior of nearly the same name, which is
-        // implemented and is the default - that collision is why the guard reads the way it does.
-        Assert.Contains("linear-trend design", ex.Message);
-        Assert.Contains("IntensityTrend", ex.Message);
+        Assert.Contains("no A and B arms", ex.Message);
+        Assert.Contains("RunTrend", ex.Message);
     }
 
     [Theory]
     [InlineData(DifferentialDesign.Unpaired)]
     [InlineData(DifferentialDesign.Paired)]
-    public void TheImplementedDesigns_AreNotCaughtByTheGuard(DifferentialDesign design)
+    public void TheTwoArmDesigns_AreNotCaughtByThatCheck(DifferentialDesign design)
     {
-        var expr = new double[,] { { 1, 2, 3, 4 }, { 2, 3, 4, 5 } };
         var options = new DifferentialOptions
         {
             Design = design,
@@ -208,10 +207,39 @@ public class UnimplementedDesignTests
                 : null,
         };
 
-        // Whatever else they do, they do not throw NotImplementedException.
         var ex = Record.Exception(() => Differential.Run(
-            expr, new[] { "F1", "F2" }, new[] { 0, 1 }, new[] { 2, 3 }, options));
+            Expr, Ids, new[] { 0, 1 }, new[] { 2, 3 }, options));
 
-        Assert.IsNotType<NotImplementedException>(ex);
+        Assert.False(ex is ArgumentException { Message: var m } && m.Contains("RunTrend"));
+    }
+
+    [Fact]
+    public void RunTrend_RefusesATwoArmDesign()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => Differential.RunTrend(
+            Expr, Ids, new[] { 0, 1, 2, 3 }, new[] { 0.0, 1.0, 2.0, 3.0 },
+            new DifferentialOptions { Design = DifferentialDesign.Unpaired }));
+
+        Assert.Contains("linear-trend design", ex.Message);
+    }
+
+    [Fact]
+    public void ATrendColumnWithOneValue_IsRefused_RatherThanFittingARankDeficientDesign()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => Differential.RunTrend(
+            Expr, Ids, new[] { 0, 1, 2, 3 }, new[] { 7.0, 7.0, 7.0, 7.0 },
+            new DifferentialOptions { Design = DifferentialDesign.LinearTrend }));
+
+        Assert.Contains("only one value", ex.Message);
+    }
+
+    [Fact]
+    public void AWithinSubjectTrend_WithoutASubjectColumn_SaysSo()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => Differential.RunTrend(
+            Expr, Ids, new[] { 0, 1, 2, 3 }, new[] { 0.0, 1.0, 2.0, 3.0 },
+            new DifferentialOptions { Design = DifferentialDesign.LinearTrendWithinSubject }));
+
+        Assert.Contains("subject column", ex.Message);
     }
 }
