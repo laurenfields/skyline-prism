@@ -41,7 +41,9 @@ internal static class VariancePriors
     /// 20,000. The intensity trend contributes one point per (feature, group), so a peptide-level
     /// contrast on a 75,000-peptide cohort is n = 150,000, which extrapolates to roughly three
     /// MINUTES - on a pane that re-runs whenever a selector changes, and with this prior as the
-    /// default. With delta at 1% of the x range the same 20,000 points take 23 ms.</para>
+    /// default. With delta at 1% of the x range the same 20,000 points take 23 ms, and a whole
+    /// contrast over 75,000 features x 100 samples - prior, fit, moderation and BH - returns in
+    /// 0.62 s.</para>
     /// <para>The cost is a small approximation: points closer together than delta are linearly
     /// interpolated rather than individually fitted, which moved the fitted values by at most ~3e-5
     /// relative in the same measurement, far below anything that changes a conclusion. On inputs the
