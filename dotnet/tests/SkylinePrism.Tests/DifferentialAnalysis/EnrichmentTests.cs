@@ -55,9 +55,39 @@ public class EnrichmentTests
 
         Assert.Equal(Enrichment.GProfilerUrl, poster.LastUrl);
         Assert.Equal("g_SCS", poster.LastPayload!["significance_threshold_method"]);
-        Assert.Equal(true, poster.LastPayload["no_evidences"]);
+        // Evidence is requested so each term can report its member genes; a response without it
+        // simply yields empty IntersectingGenes.
+        Assert.Equal(false, poster.LastPayload["no_evidences"]);
+        Assert.Empty(terms[0].IntersectingGenes);
         Assert.Equal(genes, ((List<string>)poster.LastPayload["query"]!).ToArray());
         Assert.False(poster.LastPayload.ContainsKey("background"));
+    }
+
+    [Fact]
+    public void GProfiler_ParsesIntersectingGenesFromEvidence()
+    {
+        // Two terms over a 3-gene query (TP53, EGFR, MYC). intersections[j] is the evidence-code list
+        // for query gene j, aligned to meta.genes_metadata.query.query_1.ensgs; a non-empty list means
+        // that gene is in the term. Term 1 contains TP53 and MYC; term 2 contains EGFR only.
+        const string resp =
+            "{\"result\":[" +
+            "{\"source\":\"GO:BP\",\"native\":\"GO:1\",\"name\":\"term one\",\"p_value\":0.001," +
+            "\"term_size\":100,\"query_size\":3,\"intersection_size\":2,\"effective_domain_size\":20000," +
+            "\"intersections\":[[\"IDA\"],[],[\"IMP\",\"IGI\"]]}," +
+            "{\"source\":\"GO:BP\",\"native\":\"GO:2\",\"name\":\"term two\",\"p_value\":0.01," +
+            "\"term_size\":50,\"query_size\":3,\"intersection_size\":1,\"effective_domain_size\":20000," +
+            "\"intersections\":[[],[\"IEA\"],[]]}" +
+            "]," +
+            "\"meta\":{\"genes_metadata\":{\"query\":{\"query_1\":{" +
+            "\"ensgs\":[\"ENSG_TP53\",\"ENSG_EGFR\",\"ENSG_MYC\"]," +
+            "\"mapping\":{\"TP53\":[\"ENSG_TP53\"],\"EGFR\":[\"ENSG_EGFR\"],\"MYC\":[\"ENSG_MYC\"]}}}}}}";
+        var poster = new FakePoster(resp);
+
+        var terms = Enrichment.GProfiler(new[] { "TP53", "EGFR", "MYC" }, null, poster);
+
+        Assert.Equal(2, terms.Count);
+        Assert.Equal(new[] { "TP53", "MYC" }, terms[0].IntersectingGenes.ToArray());
+        Assert.Equal(new[] { "EGFR" }, terms[1].IntersectingGenes.ToArray());
     }
 
     [Fact]

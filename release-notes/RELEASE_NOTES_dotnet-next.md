@@ -177,6 +177,10 @@ as the GitHub Release description and fails if it is missing.
   lab's `proteomics-toolkit` agree (`moderation="limma"`, to ~1e-13) and do not
   (`moderation="intensity_trend"`, a different estimator: median 3-7% on p-values, and hit lists
   that differ).
+- **The Enrichment view is a horizontal bar chart with the term on the y-axis**, most significant at
+  the top, replacing an unlabeled vertical bar strip that named no term. Clicking a term in the table
+  opens a popup listing the significant proteins that term contains (protein, gene, log2FC, adj.P) -
+  g:Profiler is now asked for the per-gene evidence so each term knows its members.
 
 ## Bug Fixes
 
@@ -192,6 +196,11 @@ as the GitHub Release description and fails if it is missing.
 - The differential loader now aligns a run's sample columns to `sample_metadata.csv` by the bare replicate
   name (the part before `__@__`) when no column matches by the full `sample_id`, so a run whose corrected
   matrix and metadata were written with different document/batch stems still loads.
+- **The Detection views now label the y-axis for the p they actually plot.** Both detection volcanoes
+  (Fisher and the Firth GLM) plotted the raw p while the moderated-t Volcano plotted the adjusted p,
+  both under the label "-log10 P". They now go through the same `SignificanceRule` as the Volcano:
+  the axis, the threshold guide line and the point coloring all use whichever p the Hits control
+  selects (adjusted by default, raw on request), and the axis is labeled to match.
 
 ## Performance
 

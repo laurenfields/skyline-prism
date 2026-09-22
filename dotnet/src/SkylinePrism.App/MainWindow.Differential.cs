@@ -133,7 +133,17 @@ public partial class MainWindow
 
     private sealed record DetGlmRow(string Peptide, double RateA, double RateB, double LogOR, double P, double Q);
 
-    private sealed record EnrichRow(string Source, string Term, double PValue, double Fold);
+    private sealed record EnrichRow(string Source, string Term, double PValue, double Fold, string TermId);
+
+    /// <summary>A significant protein that a clicked enrichment term contains.</summary>
+    private sealed record TermProtein(string Protein, string Gene, double Log2FC, double AdjP);
+
+    // Enrichment click-to-members state: the terms just shown, keyed by id, and the significant
+    // features of the run behind them, keyed by gene - so a clicked term names its member proteins.
+    private Dictionary<string, EnrichmentTerm> _enrichTermsById = new(StringComparer.Ordinal);
+    private Dictionary<string, List<TermProtein>> _enrichFeaturesByGene =
+        new(StringComparer.OrdinalIgnoreCase);
+    private TermProteinsWindow? _termProteinsWindow;
 
     private HttpJsonPoster DiffPoster => _diffPoster ??= new HttpJsonPoster();
 
@@ -1475,7 +1485,7 @@ public partial class MainWindow
                 RenderDetection(pairedRows
                     .Select(r => new DetectionRow(r.PeptideId, r.DetA, r.Pairs, r.DetB, r.Pairs,
                         r.RateA, r.RateB, r.P, r.Q))
-                    .ToList());
+                    .ToList(), DiffRule(), detCorrection != MultipleTesting.None);
                 DiffGrid.ItemsSource = pairedRows.Take(1000)
                     .Select(r => new DetPairedRow(r.PeptideId, r.RateA, r.RateB, r.OnlyA, r.OnlyB, r.P, r.Q))
                     .ToList();
@@ -1524,7 +1534,7 @@ public partial class MainWindow
                 return;
             }
 
-            RenderDetectionGlm(glm.Rows);
+            RenderDetectionGlm(glm.Rows, DiffRule(), DiffSelectedCorrection() != MultipleTesting.None);
             DiffGrid.ItemsSource = glm.Rows.Take(1000)
                 .Select(r => new DetGlmRow(r.PeptideId, r.RateA, r.RateB, r.LogOr, r.P, r.Q)).ToList();
             DiffStatusText.Text =
@@ -1549,7 +1559,7 @@ public partial class MainWindow
             return;
         }
 
-        RenderDetection(rows);
+        RenderDetection(rows, DiffRule(), DiffSelectedCorrection() != MultipleTesting.None);
         DiffGrid.ItemsSource = rows.Take(1000)
             .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
         DiffStatusText.Text =
@@ -1633,9 +1643,14 @@ public partial class MainWindow
             return;
         }
 
+        // Index the terms and map each significant gene to its protein(s), so clicking a term row can
+        // list the proteins behind it. Genes come out of the same rule the volcano/enrichment used.
+        _enrichTermsById = terms.ToDictionary(t => t.TermId, t => t, StringComparer.Ordinal);
+        _enrichFeaturesByGene = BuildEnrichFeaturesByGene(res, rule);
+
         RenderEnrichment(terms);
         DiffGrid.ItemsSource = terms.Take(1000)
-            .Select(t => new EnrichRow(t.Source, t.TermName, t.PValue, t.FoldEnrichment)).ToList();
+            .Select(t => new EnrichRow(t.Source, t.TermName, t.PValue, t.FoldEnrichment, t.TermId)).ToList();
         DiffStatusText.Text = terms.Count == 0
             ? $"No enriched terms for {sig.Count} significant genes (background {background.Count})."
             : $"{terms.Count} enriched terms for {sig.Count} significant genes (background {background.Count}).";
@@ -1647,17 +1662,43 @@ public partial class MainWindow
         var plt = DiffPlot.Plot;
         if (terms.Count > 0)
         {
-            var ys = terms.Take(15).Select(t => -Math.Log10(Math.Max(t.PValue, 1e-300))).ToArray();
-            plt.Add.Bars(ys);
-            plt.XLabel("top enriched terms (ranked by p)");
-            plt.YLabel("-log10 p (g:SCS)");
+            // Horizontal bars with the term on the y-axis: a vertical bar chart cannot carry a term
+            // name at all, so the plot said nothing the table did not. Terms arrive sorted by p; the
+            // most significant sits at the TOP (the highest bar position).
+            var top = terms.Take(15).ToList();
+            var bars = new List<ScottPlot.Bar>(top.Count);
+            var positions = new double[top.Count];
+            var labels = new string[top.Count];
+            for (var i = 0; i < top.Count; i++)
+            {
+                var pos = top.Count - 1 - i; // i = 0 (smallest p) -> top of the plot
+                bars.Add(new ScottPlot.Bar
+                {
+                    Position = pos,
+                    Value = -Math.Log10(Math.Max(top[i].PValue, 1e-300)),
+                    Orientation = ScottPlot.Orientation.Horizontal,
+                    FillColor = ScottPlot.Color.FromHex("#2ca02c"),
+                });
+                positions[pos] = pos;
+                labels[pos] = TruncateTerm(top[i].TermName);
+            }
+
+            plt.Add.Bars(bars);
+            plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(positions, labels);
+            plt.Axes.Left.TickLabelStyle.FontSize = 11;
+            plt.Axes.SetLimitsY(-0.7, top.Count - 0.3);
+            plt.XLabel("-log10 p (g:SCS)");
         }
 
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
     }
 
-    private void RenderDetectionGlm(IReadOnlyList<DetectionGlmRow> rows)
+    /// <summary>Keep a long GO term readable on an axis; the full name is in the table beside the plot.</summary>
+    private static string TruncateTerm(string name) =>
+        string.IsNullOrEmpty(name) || name.Length <= 45 ? name ?? string.Empty : name[..44] + "...";
+
+    private void RenderDetectionGlm(IReadOnlyList<DetectionGlmRow> rows, SignificanceRule rule, bool corrected)
     {
         DiffPlot.Reset();
         var plt = DiffPlot.Plot;
@@ -1668,10 +1709,11 @@ public partial class MainWindow
         var sigY = new List<double>();
         foreach (var r in rows)
         {
-            if (!double.IsFinite(r.LogOr) || !double.IsFinite(r.P))
+            var p = rule.UseAdjusted ? r.Q : r.P;
+            if (!double.IsFinite(r.LogOr) || !double.IsFinite(p))
                 continue;
-            var y = -Math.Log10(Math.Max(r.P, 1e-300));
-            if (r.Q < 0.05)
+            var y = -Math.Log10(Math.Max(p, 1e-300));
+            if (p < rule.PThreshold)
             {
                 sigX.Add(r.LogOr);
                 sigY.Add(y);
@@ -1683,20 +1725,22 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "q >= 0.05");
-        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "q < 0.05");
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
+        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "significant");
         plt.Add.VerticalLine(0.0);
+        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
         plt.ShowLegend();
         plt.XLabel("log odds ratio (B / A)");
-        plt.YLabel("-log10 P");
+        plt.YLabel(rule.YAxisLabel(corrected));
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
     }
 
     private void OnDiffGridAutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
     {
-        // FeatureId backs click-to-boxplot from the grid; it is not a column the user needs to see.
-        if (e.PropertyName == "FeatureId")
+        // FeatureId backs click-to-boxplot and TermId backs click-to-members; neither is a column the
+        // user needs to see.
+        if (e.PropertyName is "FeatureId" or "TermId")
         {
             e.Cancel = true;
             return;
@@ -1924,11 +1968,63 @@ public partial class MainWindow
         {
             if (DiffGrid.SelectedItem is VolcanoRow vr)
                 SelectVolcanoFeature(vr.FeatureId);
+            else if (DiffGrid.SelectedItem is EnrichRow er)
+                ShowTermProteins(er);
         }
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnDiffGridSelectionChanged), ex);
         }
+    }
+
+    /// <summary>
+    /// Map each significant feature to its gene(s), so a clicked enrichment term can name the proteins
+    /// behind it. Only the features the rule counts as hits are included - they are the query
+    /// g:Profiler was given, so a term can only contain these.
+    /// </summary>
+    private Dictionary<string, List<TermProtein>> BuildEnrichFeaturesByGene(
+        DifferentialResult res, SignificanceRule rule)
+    {
+        var byGene = new Dictionary<string, List<TermProtein>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in res.Rows)
+        {
+            if (!rule.IsSignificant(r))
+                continue;
+            var label = _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId);
+            foreach (var gene in Enrichment.CleanSymbols(new[] { _diffGeneById.GetValueOrDefault(r.FeatureId) }))
+            {
+                if (!byGene.TryGetValue(gene, out var list))
+                    byGene[gene] = list = new List<TermProtein>();
+                list.Add(new TermProtein(label, gene, r.LogFc, r.AdjPValue));
+            }
+        }
+
+        return byGene;
+    }
+
+    /// <summary>Open (or refresh) the popup listing the significant proteins in a clicked term.</summary>
+    private void ShowTermProteins(EnrichRow row)
+    {
+        if (!_enrichTermsById.TryGetValue(row.TermId, out var term))
+            return;
+
+        var proteins = term.IntersectingGenes
+            .SelectMany(g => _enrichFeaturesByGene.GetValueOrDefault(g) ?? Enumerable.Empty<TermProtein>())
+            .GroupBy(p => p.Protein)
+            .Select(g => g.First())
+            .OrderByDescending(p => Math.Abs(p.Log2FC))
+            .Select(p => new TermProteinsWindow.TermProteinRow(p.Protein, p.Gene, p.Log2FC, p.AdjP))
+            .ToList();
+
+        if (_termProteinsWindow is null)
+        {
+            _termProteinsWindow = new TermProteinsWindow { Owner = this };
+            _termProteinsWindow.Closed += (_, _) => _termProteinsWindow = null;
+        }
+
+        _termProteinsWindow.ShowTerm($"{term.TermId}  {term.TermName}", proteins.Count, term.PValue, proteins);
+        _termProteinsWindow.Show();
+        _termProteinsWindow.Activate();
     }
 
     /// <summary>
@@ -2352,7 +2448,7 @@ public partial class MainWindow
         DiffGrid.ScrollIntoView(row);
     }
 
-    private void RenderDetection(IReadOnlyList<DetectionRow> rows)
+    private void RenderDetection(IReadOnlyList<DetectionRow> rows, SignificanceRule rule, bool corrected)
     {
         DiffPlot.Reset();
         var plt = DiffPlot.Plot;
@@ -2363,9 +2459,15 @@ public partial class MainWindow
         var sigY = new List<double>();
         foreach (var r in rows)
         {
+            // Judge and plot the SAME p the rule uses (raw or adjusted), so the axis label, the
+            // threshold line and the coloring all agree - matching the Volcano. The effect-size cut
+            // does not apply here: a detection effect is a rate difference, not a log2 fold change.
+            var p = rule.UseAdjusted ? r.Q : r.P;
+            if (!double.IsFinite(p))
+                continue;
             var x = r.RateB - r.RateA;
-            var y = -Math.Log10(Math.Max(r.P, 1e-300));
-            if (r.Q < 0.05)
+            var y = -Math.Log10(Math.Max(p, 1e-300));
+            if (p < rule.PThreshold)
             {
                 sigX.Add(x);
                 sigY.Add(y);
@@ -2377,12 +2479,13 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "q >= 0.05");
-        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "q < 0.05");
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
+        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "significant");
         plt.Add.VerticalLine(0.0);
+        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
         plt.ShowLegend();
         plt.XLabel("detection rate difference (B - A)");
-        plt.YLabel("-log10 P");
+        plt.YLabel(rule.YAxisLabel(corrected));
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
     }

@@ -31,7 +31,8 @@ public sealed record EnrichmentTerm(
     int QuerySize,
     int IntersectionSize,
     int DomainSize,
-    double FoldEnrichment);
+    double FoldEnrichment,
+    IReadOnlyList<string> IntersectingGenes);
 
 /// <summary>One gene's novelty classification against Open Targets association scores.</summary>
 public sealed record NoveltyRow(string Gene, double? AssocScore, string Status);
@@ -136,7 +137,10 @@ public static class Enrichment
             ["sources"] = (sources ?? DefaultSources).ToList(),
             ["user_threshold"] = userThreshold,
             ["significance_threshold_method"] = "g_SCS",
-            ["no_evidences"] = true,
+            // Ask for the per-gene evidence so each term can report WHICH of the query's genes it
+            // contains - that is what lets the UI show a term's member proteins. It makes the response
+            // larger (one evidence-code list per query gene per term), which is why it was off before.
+            ["no_evidences"] = false,
         };
 
         var bg = CleanSymbols(background ?? Enumerable.Empty<string?>());
@@ -151,6 +155,12 @@ public static class Enrichment
             || result.ValueKind != JsonValueKind.Array)
             return new List<EnrichmentTerm>();
 
+        // Each term's `intersections` is a list aligned to the query's genes (in ensg order); a
+        // non-empty evidence list at position j means query gene j is in that term. Recover the input
+        // symbols from meta.genes_metadata.query.<the one query>: `ensgs` is that order, `mapping` is
+        // {input symbol -> [ensg]}, inverted here to name each hit.
+        var (ensgOrder, ensgToSymbol) = ReadQueryGeneMap(data);
+
         var terms = new List<EnrichmentTerm>();
         foreach (var t in result.EnumerateArray())
         {
@@ -162,10 +172,66 @@ public static class Enrichment
             var fold = denom != 0.0 ? (double)intersection / querySize / denom : double.NaN;
             terms.Add(new EnrichmentTerm(
                 GetString(t, "source"), GetString(t, "native"), GetString(t, "name"),
-                GetDouble(t, "p_value"), termSize, querySize, intersection, domainSize, fold));
+                GetDouble(t, "p_value"), termSize, querySize, intersection, domainSize, fold,
+                IntersectingGenesOf(t, ensgOrder, ensgToSymbol)));
         }
 
         return terms.OrderBy(x => x.PValue).ToList();
+    }
+
+    /// <summary>
+    /// The query's gene order and an ensg-&gt;input-symbol map from
+    /// <c>meta.genes_metadata.query</c>. Empty when the response carries no evidence (e.g.
+    /// <c>no_evidences=true</c>, or a minimal test stub), in which case terms report no member genes.
+    /// </summary>
+    private static (string[] EnsgOrder, Dictionary<string, string> EnsgToSymbol) ReadQueryGeneMap(
+        JsonElement data)
+    {
+        if (!TryNavigate(data, out var query, "meta", "genes_metadata", "query")
+            || query.ValueKind != JsonValueKind.Object)
+            return (Array.Empty<string>(), new Dictionary<string, string>(StringComparer.Ordinal));
+
+        // One query was sent (an unnamed list becomes "query_1"); take the first regardless of name.
+        foreach (var q in query.EnumerateObject())
+        {
+            var ensgs = q.Value.TryGetProperty("ensgs", out var e) && e.ValueKind == JsonValueKind.Array
+                ? e.EnumerateArray().Select(x => x.GetString() ?? string.Empty).ToArray()
+                : Array.Empty<string>();
+
+            var ensgToSymbol = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (q.Value.TryGetProperty("mapping", out var mapping) && mapping.ValueKind == JsonValueKind.Object)
+                foreach (var sym in mapping.EnumerateObject())
+                    if (sym.Value.ValueKind == JsonValueKind.Array)
+                        foreach (var g in sym.Value.EnumerateArray())
+                            if (g.ValueKind == JsonValueKind.String)
+                                ensgToSymbol[g.GetString()!] = sym.Name;
+
+            return (ensgs, ensgToSymbol);
+        }
+
+        return (Array.Empty<string>(), new Dictionary<string, string>(StringComparer.Ordinal));
+    }
+
+    /// <summary>The input symbols one term contains, from its <c>intersections</c> evidence lists.</summary>
+    private static List<string> IntersectingGenesOf(
+        JsonElement term, string[] ensgOrder, Dictionary<string, string> ensgToSymbol)
+    {
+        var genes = new List<string>();
+        if (ensgOrder.Length == 0
+            || !term.TryGetProperty("intersections", out var inter) || inter.ValueKind != JsonValueKind.Array)
+            return genes;
+
+        var j = 0;
+        foreach (var evidence in inter.EnumerateArray())
+        {
+            if (j < ensgOrder.Length && evidence.ValueKind == JsonValueKind.Array
+                && evidence.GetArrayLength() > 0
+                && ensgToSymbol.TryGetValue(ensgOrder[j], out var symbol))
+                genes.Add(symbol);
+            j++;
+        }
+
+        return genes;
     }
 
     /// <summary>Search Open Targets for a disease by name; returns (efoId, label) for disease hits.</summary>
