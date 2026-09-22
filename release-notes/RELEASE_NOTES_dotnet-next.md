@@ -46,6 +46,24 @@ as the GitHub Release description and fails if it is missing.
   e.g. `experimental + reference` can be contrasted against `qc` as a single arm. A value ticked in
   both arms is refused rather than silently dropped from one, because which side lost it would
   change the answer.
+- **A menu of statistical methods, on three orthogonal axes.** **Design** (unpaired or paired),
+  **Test** (moderated t, Welch t, Student t, Mann-Whitney; paired t and Wilcoxon under a paired
+  design) and **Correct** (Benjamini-Hochberg, Benjamini-Yekutieli, Holm, Bonferroni, none). The
+  controls follow each other: a test that does not apply to the current design is hidden, the
+  variance prior appears only for the moderated t, and "Adjust for" greys out for the tests that
+  have no design matrix to hold a covariate. Every estimator is pinned to scipy or statsmodels by
+  committed goldens, and the status line names the method, the sample counts actually used, and
+  anything the request could not honour.
+- **A paired design.** Match each subject's two samples by a **Pair by** column and test the
+  within-subject change - fitted as a fixed-effect subject block, which takes each subject's overall
+  level out of the residual so a shift is tested against within-subject noise rather than against the
+  spread between people. Subjects present in only one arm, or with several samples in an arm, are
+  left out and counted rather than silently paired.
+- **Two more variance priors.** **Peptide count** is DEqMS (Zhu 2020), a LOWESS against
+  log(peptide count) - a protein rolled up from many peptides is better determined than one rolled up
+  from few at the same intensity, which abundance alone does not say. And the prior can now be fitted
+  on the run's **QC and reference replicates** instead of on the contrast groups, keeping
+  inter-subject biology out of a quantity meant to describe measurement variance.
 - **Clicking a Volcano point selects that protein or peptide in Skyline**, the way the Dynamic Range
   plot does, sharing the same document-tree locator cache and the same precedence (each of PRISM's
   protein groups in turn, then the sequence's first occurrence in the tree). Standalone, it says so

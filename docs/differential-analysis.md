@@ -21,6 +21,48 @@ In summary: BH, Fisher exact, the polygamma functions and OLS agree with scipy/s
 around 1e-13 or better; `squeezeVar` and everything downstream of it agrees with inmoose to 1e-9,
 which is the precision limma's own Newton solve for the prior degrees of freedom delivers.
 
+## What the pane can run
+
+Three orthogonal choices - a **design**, a **test**, and (for the moderated t alone) a **variance
+prior** - which is how `proteomics-toolkit` models it too.
+
+| Design | Test | Reference |
+|---|---|---|
+| unpaired | moderated t | lstsq + `squeezeVar`, composed as limma composes them |
+| unpaired | Welch t / Student t | `scipy.stats.ttest_ind(equal_var=False/True)` |
+| unpaired | Mann-Whitney U | `scipy.stats.mannwhitneyu(method="asymptotic")` |
+| paired | moderated t | the same composition over `[1, group, subject dummies]` |
+| paired | paired t | `scipy.stats.ttest_rel` |
+| paired | Wilcoxon signed-rank | `scipy.stats.wilcoxon(method="asymptotic")` |
+
+Variance priors: **global** (Smyth 2004), **intensity trend** (the default - see below), **limma-trend**
+(`trend=TRUE`), and **peptide count** (DEqMS, protein level only, pinned to the toolkit's
+`_fit_count_dependent_prior`). Any prior that fits a per-feature scale leaves the prior *degrees of
+freedom* at the global value; only limma-trend re-estimates both. The prior can optionally be fitted on
+the run's QC and reference replicates instead of on the contrast groups.
+
+Multiple-testing corrections: Benjamini-Hochberg, Benjamini-Yekutieli, Holm, Bonferroni, none - all
+pinned to `statsmodels multipletests`, and all keeping PRISM's own NaN policy (a NaN passes through and
+does not count toward *m*, where statsmodels returns all-NaN).
+
+### Two things the rank tests do not do
+
+**Neither implements an exact permutation distribution.** scipy's `method="auto"` uses one below n = 9
+for Mann-Whitney and up to n = 50 for Wilcoxon; PRISM always uses the normal approximation with a tie
+correction, so on a small group its p-value differs from a default-argument scipy run. The goldens pin
+`method="asymptotic"` rather than encode a branch PRISM does not have.
+
+**scipy's two rank tests disagree about the continuity correction** - `mannwhitneyu` applies one by
+default, `wilcoxon` does not - and PRISM follows each one's own convention. Copying either to the other
+shifts every p-value in that test by 10-20%, which is how this was found.
+
+### Paired is a fixed-effect subject block
+
+`[1, group, subject dummies]`, matching `statistical_analysis.py:1321`. It is not a random intercept
+and not a mixed model; those are a different estimator and are not implemented. What the block buys is
+that each subject's overall level leaves the residual, so a within-subject shift is tested against
+within-subject noise instead of against the spread between people.
+
 ## PRISM and `proteomics-toolkit` are not interchangeable
 
 The lab's [`proteomics-toolkit`](https://github.com/uw-maccosslab/proteomics-toolkit) implements the

@@ -483,21 +483,70 @@ notebook, no Python, no network except the optional enrichment call. It reads
 directory, so it works on a finished run or any previous run's output directory, with or without a live
 Skyline connection.
 
-Pick the **Level** (protein or peptide), a **Group by** metadata column, and the two values to contrast
-(**A** vs **B**); a positive log2 fold change means higher in B. **Adjust for** ticks any metadata
-column as a covariate — numeric columns are mean-centered, categorical ones dummy-coded — which is how a
-disease-vs-control contrast is run with batch (or sex, PMI, ...) held. **Prior** chooses the
-empirical-Bayes variance prior, and the choice is not cosmetic:
+Pick the **Level** (protein or peptide), a **Group by** metadata column, and the values to contrast
+(**A** vs **B**); a positive log2 fold change means higher in B. Both arms are tick lists, so either
+can be the **union** of several values — `experimental + reference` against `qc` as one arm, say. A
+value ticked in both arms is refused rather than dropped from one, because which side lost it would
+change the answer.
+
+**Adjust for** ticks any metadata column as a covariate — numeric columns are mean-centered,
+categorical ones dummy-coded — which is how a disease-vs-control contrast is run with batch (or sex,
+PMI, ...) held. Only the moderated t can honour a covariate; it is the only test with a design matrix
+to put one in, so the control greys out for the others rather than letting a ticked covariate look
+like it was applied.
+
+**Design** says how the samples are related:
+
+| Design | What it fits |
+|---|---|
+| **Unpaired** (default) | Two independent groups. |
+| **Paired** | Matches each subject's two samples by a **Pair by** column and tests the within-subject change. The moderated t fits it as `[1, group, subject dummies]` — a *fixed*-effect subject block, as the lab's toolkit does, which takes each subject's overall level out of the residual. That is the whole point: a within-subject shift gets tested against within-subject noise rather than against the spread between people. Subjects present in only one arm, or with more than one sample in an arm, are left out and counted in the status line. |
+
+**Test** picks the estimator, and the list follows the design:
+
+| Test | Notes |
+|---|---|
+| **Moderated t** (default) | limma empirical Bayes. Borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. The only test that uses a variance prior, and the only one that can adjust for covariates. |
+| **Welch t** / **Student t** | Ordinary two-sample t, independent per feature — what a reader means by "a t-test", and less powerful here. Welch does not assume equal variances; Student pools them. Unpaired only. |
+| **Mann-Whitney** | Rank test, assumes nothing about the distribution, reports a *median* shift rather than a mean difference. Unpaired only. |
+| **Paired t** | One-sample t on the within-subject differences. Paired only. |
+| **Wilcoxon** | Signed-rank on those differences; reports a median shift. Paired only. |
+
+> [!NOTE]
+> Both rank tests use the normal approximation with a tie correction. scipy's defaults switch to an
+> exact permutation distribution on small samples (below n = 9 for Mann-Whitney, up to n = 50 for
+> Wilcoxon), which PRISM does not implement — so on a very small group its p-value will differ from a
+> default-argument scipy run. Note also that scipy's two rank tests disagree with each other about the
+> continuity correction, and PRISM follows each one's own convention.
+
+**Correct** chooses the multiple-testing correction: Benjamini-Hochberg (default), Benjamini-Yekutieli,
+Holm, Bonferroni, or None. BY is the one to reach for at peptide level, where peptides from one protein
+are strongly correlated — the dependence BH's assumptions do not cover.
+
+**Prior** chooses the empirical-Bayes variance prior, and the choice is not cosmetic:
 
 | Prior | What it fits |
 |---|---|
 | **Intensity trend** (default) | The lab's own, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, one point per (feature, group), replacing only the prior *scale*. |
 | **Global** | One prior for every feature - Smyth (2004). |
 | **limma-trend** | limma's `trend=TRUE`: a natural cubic spline against mean **log2** expression, which also re-estimates the prior *degrees of freedom*. |
+| **Peptide count** | DEqMS (Zhu 2020): a LOWESS against `log(peptide count)`. What it adds is that a protein rolled up from many peptides is better determined than one rolled up from few *at the same intensity* — information abundance alone does not carry. Protein level only, so it is hidden at peptide level. |
 
 **Intensity trend and limma-trend are different estimators despite the similar names** - different
 smoother, different scale, different unit of observation, and only one of them moves the prior degrees
 of freedom. They disagree by a median 3-7% on p-values, so a hit list should say which one produced it.
+
+**from controls** fits the prior on the run's QC and reference replicates instead of on the contrast
+groups. A design group's within-group spread is part biology and part measurement, and only the second
+is what a variance prior is meant to describe; including the first inflates the prior and over-shrinks
+genuine signal. The controls take no part in the contrast itself, and each control type is its own
+group — pooling QC with reference would count the systematic gap between two different materials as
+measurement noise. The box is unavailable on a run with fewer than two control replicates.
+
+Whichever combination is chosen, **the status line names the method that produced the result**, along
+with the sample counts the test actually used and anything it could not honour (a covariate a rank test
+cannot take, a prior that could not be fitted and fell back). With a menu this size that line is the
+record of what a hit list came from.
 The status line names the prior that ran. The **View** selector gives three things over the same
 contrast:
 
