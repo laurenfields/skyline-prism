@@ -53,7 +53,7 @@ as the GitHub Release description and fails if it is missing.
   variance prior appears only for the moderated t, and "Adjust for" greys out for the tests that
   have no design matrix to hold a covariate. Every estimator is pinned to scipy or statsmodels by
   committed goldens, and the status line names the method, the sample counts actually used, and
-  anything the request could not honour.
+  anything the request could not honor.
 - **The contrast re-runs as you change it.** Every selector runs on its own; the arms and the
   covariate list run when you close their dropdown, which is the moment a choice made from several
   ticks is finished. Run remains as a manual refresh rather than a required step. A superseded run

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using SkylinePrism.App;
@@ -67,7 +67,7 @@ public class QcGroupColumnsTests
     /// <summary>
     /// Attaching a clinical CSV in the Differential pane must reach this list too. Otherwise it
     /// enriches the Volcano's covariates and leaves the PCA - which is now the only sample PCA in
-    /// the window - unable to colour by any of them.
+    /// the window - unable to color by any of them.
     /// </summary>
     [Fact]
     public void ClinicalColumnsJoinedInTheDifferentialPane_BecomeGroupings()
@@ -116,7 +116,7 @@ public class QcGroupColumnsTests
     }
 
     /// <summary>
-    /// The Replicates report comes first: it is what the person analysing the data curated in
+    /// The Replicates report comes first: it is what the person analyzing the data curated in
     /// Skyline, and a richer source should add columns without reordering it.
     /// </summary>
     [Fact]

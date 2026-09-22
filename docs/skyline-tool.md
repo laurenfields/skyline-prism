@@ -491,7 +491,7 @@ change the answer.
 
 **Adjust for** ticks any metadata column as a covariate — numeric columns are mean-centered,
 categorical ones dummy-coded — which is how a disease-vs-control contrast is run with batch (or sex,
-PMI, ...) held. Only the moderated t can honour a covariate; it is the only test with a design matrix
+PMI, ...) held. Only the moderated t can honor a covariate; it is the only test with a design matrix
 to put one in, so the control greys out for the others rather than letting a ticked covariate look
 like it was applied.
 
@@ -544,7 +544,7 @@ group — pooling QC with reference would count the systematic gap between two d
 measurement noise. The box is unavailable on a run with fewer than two control replicates.
 
 Whichever combination is chosen, **the status line names the method that produced the result**, along
-with the sample counts the test actually used and anything it could not honour (a covariate a rank test
+with the sample counts the test actually used and anything it could not honor (a covariate a rank test
 cannot take, a prior that could not be fitted and fell back). With a menu this size that line is the
 record of what a hit list came from.
 The status line names the prior that ran. The **View** selector gives three things over the same

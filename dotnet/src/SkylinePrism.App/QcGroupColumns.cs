@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -17,7 +17,7 @@ namespace SkylinePrism.App;
 /// nothing and <c>batch</c> has to arrive from the run's own <c>sample_metadata.csv</c>. For a
 /// batch-correction tool, grouping by batch is the first thing anyone reaches for.</item>
 /// <item>A clinical CSV attached in the Differential pane must reach this list too, or attaching one
-/// enriches the Volcano's covariates while leaving the PCA unable to colour by any of them.</item>
+/// enriches the Volcano's covariates while leaving the PCA unable to color by any of them.</item>
 /// </list>
 /// </remarks>
 internal static class QcGroupColumns
@@ -31,7 +31,7 @@ internal static class QcGroupColumns
     /// </summary>
     /// <param name="replicateColumns">
     /// Columns from the document's own Replicates report - first because that is what the person
-    /// analysing the data curated in Skyline. Empty on a CLI run.
+    /// analyzing the data curated in Skyline. Empty on a CLI run.
     /// </param>
     /// <param name="extraColumns">
     /// Columns from the run's <c>sample_metadata.csv</c> and any joined clinical table.

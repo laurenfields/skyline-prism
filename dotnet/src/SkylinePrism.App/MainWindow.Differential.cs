@@ -666,7 +666,7 @@ public partial class MainWindow
 
             // The QC pane draws the only sample PCA now, so its Group-by list has to learn about
             // these columns too - otherwise attaching a clinical CSV would enrich the Volcano's
-            // covariates and leave the PCA unable to colour by any of them, which is the split
+            // covariates and leave the PCA unable to color by any of them, which is the split
             // that put a second PCA in this pane in the first place.
             PublishClinicalToQcPane(result.AddedColumns);
 
@@ -836,7 +836,7 @@ public partial class MainWindow
         var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
         var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
         // Name the method. With a menu this size the status line is the only record of what
-        // produced a hit list, and any message Core raised (an unhonoured covariate, a prior that
+        // produced a hit list, and any message Core raised (an unhonored covariate, a prior that
         // could not be fitted) belongs beside it rather than nowhere.
         var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
         // res.NA/NB, not a.Count/b.Count: a paired design drops unmatched subjects, so the arms the
@@ -1467,7 +1467,7 @@ public partial class MainWindow
             // The ADJUSTED p-value, because that is what decides a hit here (AdjPValue < 0.05) and
             // what the axis says. Differential.Run always applies Benjamini-Hochberg, so AdjPValue is
             // always a q-value - there is no raw-only mode to fall back to. Plotting raw p while
-            // colouring by q put the cut-off line at whatever raw p the weakest surviving hit
+            // coloring by q put the cut-off line at whatever raw p the weakest surviving hit
             // happened to have, which moved with the data and matched no number the reader could see.
             var y = -Math.Log10(Math.Max(r.AdjPValue, 1e-300));
             if (double.IsFinite(r.LogFc) && double.IsFinite(y))
@@ -1528,7 +1528,7 @@ public partial class MainWindow
         _volcanoHoverText = text;
 
         // Distinguishable from the hover ring at a glance: bigger, thicker, and in the significant
-        // colour rather than black, because the two can be on screen at the same time.
+        // color rather than black, because the two can be on screen at the same time.
         var sel = plt.Add.Marker(
             0, 0, ScottPlot.MarkerShape.OpenCircle, DiffSigPointSize + 15,
             ScottPlot.Color.FromHex("#d62728"));
