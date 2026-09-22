@@ -54,6 +54,11 @@ as the GitHub Release description and fails if it is missing.
   have no design matrix to hold a covariate. Every estimator is pinned to scipy or statsmodels by
   committed goldens, and the status line names the method, the sample counts actually used, and
   anything the request could not honour.
+- **The contrast re-runs as you change it.** Every selector runs on its own; the arms and the
+  covariate list run when you close their dropdown, which is the moment a choice made from several
+  ticks is finished. Run remains as a manual refresh rather than a required step. A superseded run
+  now paints nothing at all - each view computation carries a generation token checked after every
+  await, so the contrast on screen is always the one the controls describe, whichever finishes first.
 - **A paired design.** Match each subject's two samples by a **Pair by** column and test the
   within-subject change - fitted as a fixed-effect subject block, which takes each subject's overall
   level out of the residual so a shift is tested against within-subject noise rather than against the

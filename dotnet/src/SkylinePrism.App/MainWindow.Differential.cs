@@ -431,7 +431,7 @@ public partial class MainWindow
         UpdateDiffControls();
         DiffStatusText.Text =
             $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
-            $"{ds.SampleIds.Length} samples. Pick groups and Run.";
+            $"{ds.SampleIds.Length} samples. Pick the arms to contrast; it runs as you choose.";
     }
 
     /// <summary>Prefer the first non-reserved metadata column with at least two values; else sample_type.</summary>
@@ -1245,6 +1245,32 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnDiffPriorSourceChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// A tick list re-runs when its dropdown CLOSES, not on every tick.
+    /// </summary>
+    /// <remarks>
+    /// <para>Closing the dropdown is the moment the choice is finished. Running on each tick instead
+    /// would fire once per click while an arm is being assembled from several values, and would show
+    /// "tick at least one value for each arm" in passing every time the last value was cleared before
+    /// the next was set - a complaint about a state the user was moving through, not one they
+    /// chose.</para>
+    /// <para>It also matters for the Enrichment view, which posts to g:Profiler: once per
+    /// interaction is reasonable, once per tick is not.</para>
+    /// </remarks>
+    private async void OnDiffTickListClosed(object sender, EventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffTickListClosed), ex);
         }
     }
 
