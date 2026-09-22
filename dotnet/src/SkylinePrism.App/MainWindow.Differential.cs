@@ -144,6 +144,23 @@ public partial class MainWindow
             _ => VariancePrior.IntensityTrend,
         };
 
+    /// <summary>The design the Design combo is pointing at.</summary>
+    private DifferentialDesign DiffSelectedDesign() =>
+        ((DiffDesignCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "Paired"
+            ? DifferentialDesign.Paired
+            : DifferentialDesign.Unpaired;
+
+    /// <summary>
+    /// The pairing key per sample, aligned to the dataset's sample order, or null when no pairing
+    /// column is chosen.
+    /// </summary>
+    private string?[]? DiffSubjectLabels()
+    {
+        if (_diffDataset is null || DiffPairByCombo.SelectedItem is not string col)
+            return null;
+        return _diffDataset.MetadataColumns.Contains(col) ? _diffDataset.MetadataValues(col) : null;
+    }
+
     /// <summary>The estimator the Test combo is pointing at.</summary>
     private DifferentialTest DiffSelectedTest() =>
         ((DiffTestCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
@@ -151,6 +168,8 @@ public partial class MainWindow
             "WelchT" => DifferentialTest.WelchT,
             "StudentT" => DifferentialTest.StudentT,
             "MannWhitney" => DifferentialTest.MannWhitney,
+            "PairedT" => DifferentialTest.PairedT,
+            "Wilcoxon" => DifferentialTest.Wilcoxon,
             _ => DifferentialTest.ModeratedT,
         };
 
@@ -170,9 +189,11 @@ public partial class MainWindow
         new()
         {
             Covariates = covariates,
+            Design = DiffSelectedDesign(),
             Test = DiffSelectedTest(),
             Prior = DiffSelectedPrior(),
             Correction = DiffSelectedCorrection(),
+            SubjectLabels = DiffSubjectLabels(),
             MinPerGroup = 2,
         };
 
@@ -190,6 +211,31 @@ public partial class MainWindow
     /// </remarks>
     private void UpdateDiffControls()
     {
+        var paired = DiffSelectedDesign() == DifferentialDesign.Paired;
+
+        // The pairing column only means something under the paired design.
+        var pairVisibility = paired ? Visibility.Visible : Visibility.Collapsed;
+        DiffPairByLabel.Visibility = pairVisibility;
+        DiffPairByCombo.Visibility = pairVisibility;
+
+        // A test belongs to one design or the other. Collapsed AND disabled, because WPF's
+        // arrow-key and type-ahead selection skip only disabled items, so hiding alone would leave
+        // an inapplicable test one keypress away.
+        ShowTest(DiffTestWelchItem, !paired);
+        ShowTest(DiffTestStudentItem, !paired);
+        ShowTest(DiffTestMannWhitneyItem, !paired);
+        ShowTest(DiffTestPairedTItem, paired);
+        ShowTest(DiffTestWilcoxonItem, paired);
+
+        // Changing the design can strand the selection on a test that no longer applies. Fall back
+        // to the moderated t, which is valid under both, rather than leaving an invisible selection.
+        if (DiffTestCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
+        {
+            _diffSuppress = true;
+            DiffTestCombo.SelectedIndex = 0;
+            _diffSuppress = false;
+        }
+
         var moderated = DiffSelectedTest() == DifferentialTest.ModeratedT;
         var priorVisibility = moderated ? Visibility.Visible : Visibility.Collapsed;
         DiffPriorLabel.Visibility = priorVisibility;
@@ -197,6 +243,12 @@ public partial class MainWindow
 
         DiffCovariatesLabel.IsEnabled = moderated;
         DiffCovariatesCombo.IsEnabled = moderated;
+    }
+
+    private static void ShowTest(ComboBoxItem item, bool applies)
+    {
+        item.Visibility = applies ? Visibility.Visible : Visibility.Collapsed;
+        item.IsEnabled = applies;
     }
 
     private DiffView DiffSelectedView() =>
@@ -231,6 +283,8 @@ public partial class MainWindow
                 DiffPriorCombo.SelectedIndex = 0;
             if (DiffTestCombo.SelectedItem is null)
                 DiffTestCombo.SelectedIndex = 0; // Moderated t
+            if (DiffDesignCombo.SelectedItem is null)
+                DiffDesignCombo.SelectedIndex = 0; // Unpaired
             if (DiffCorrectionCombo.SelectedItem is null)
                 DiffCorrectionCombo.SelectedIndex = 0; // Benjamini-Hochberg
         }
@@ -359,6 +413,25 @@ public partial class MainWindow
         DiffACombo.ItemsSource = _diffAValues;
         DiffBCombo.ItemsSource = _diffBValues;
         UpdateDiffArmSummaries();
+
+        // Any metadata column can identify a subject except the one being contrasted - pairing by
+        // the contrast column itself would put every subject in one arm.
+        var pairCandidates = _diffDataset.MetadataColumns
+            .Where(m => !string.Equals(m, col, StringComparison.Ordinal))
+            .ToList();
+        var keepPair = DiffPairByCombo.SelectedItem as string;
+        _diffSuppress = true;
+        try
+        {
+            DiffPairByCombo.ItemsSource = pairCandidates;
+            DiffPairByCombo.SelectedItem = keepPair is not null && pairCandidates.Contains(keepPair)
+                ? keepPair
+                : null;
+        }
+        finally
+        {
+            _diffSuppress = false;
+        }
 
         PopulateDiffCovariates(col);
     }
@@ -691,8 +764,11 @@ public partial class MainWindow
         // produced a hit list, and any message Core raised (an unhonoured covariate, a prior that
         // could not be fitted) belongs beside it rather than nowhere.
         var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
+        // res.NA/NB, not a.Count/b.Count: a paired design drops unmatched subjects, so the arms the
+        // test actually used can be smaller than the arms that were picked. Reporting the picked
+        // sizes would credit the result with samples that took no part in it.
         DiffStatusText.Text =
-            $"{options.Describe()}: {aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - "
+            $"{options.Describe()}: {aVal} (n={res.NA}) vs {bVal} (n={res.NB}) - "
             + $"{res.NFeaturesTested} tested, {nSig} significant{adj}.{note} "
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
@@ -994,6 +1070,53 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ReportHandlerFailure(nameof(OnDiffPlotMouseDown), ex);
+        }
+    }
+
+    /// <summary>
+    /// Changing the design changes which tests apply and whether a pairing column is needed, so the
+    /// controls are updated before anything is re-run.
+    /// </summary>
+    private async void OnDiffDesignChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized)
+                return;
+            UpdateDiffControls();
+            if (_diffSuppress || _diffDataset is null)
+                return;
+            // A paired design with no pairing column yet is an incomplete request, not an error:
+            // say what is missing and wait rather than throwing from the run.
+            if (DiffSelectedDesign() == DifferentialDesign.Paired && DiffSubjectLabels() is null)
+            {
+                DiffStatusText.Text = "Paired: choose the metadata column that identifies the subject "
+                    + "under 'Pair by'.";
+                return;
+            }
+
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffDesignChanged), ex);
+        }
+    }
+
+    /// <summary>Choosing the pairing column completes a paired request, so run it.</summary>
+    private async void OnDiffPairByChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            if (DiffSelectedDesign() != DifferentialDesign.Paired)
+                return; // the column is only consulted by the paired design
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffPairByChanged), ex);
         }
     }
 

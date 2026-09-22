@@ -642,4 +642,111 @@ public class DifferentialGoldenTests
     }
 
     public static IEnumerable<object[]> CorrectionCases() => Golden.CaseNames("corrections.json");
+
+    /// <summary>
+    /// The paired t and the Wilcoxon signed-rank, against scipy, driven through
+    /// <see cref="Differential.Run"/> with a pairing column so the pair resolution is covered too.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PairedCases))]
+    public void PairedTests_MatchScipy(string name)
+    {
+        var c = Golden.Case("paired.json", name);
+        var a = Golden.Vec(c, "a");
+        var b = Golden.Vec(c, "b");
+        var n = a.Length;
+
+        var expr = new double[1, 2 * n];
+        for (var i = 0; i < n; i++)
+        {
+            expr[0, i] = a[i];
+            expr[0, n + i] = b[i];
+        }
+
+        // Subject j is at column j in arm A and n + j in arm B, deliberately given in a scrambled
+        // arm order so the resolution is doing real work rather than agreeing by position.
+        var subjects = new string?[2 * n];
+        for (var i = 0; i < n; i++)
+        {
+            subjects[i] = $"s{i}";
+            subjects[n + i] = $"s{i}";
+        }
+
+        var groupA = Enumerable.Range(0, n).Reverse().ToArray();
+        var groupB = Enumerable.Range(n, n).ToArray();
+
+        DifferentialRow Run(DifferentialTest test) => Differential.Run(
+            expr, new[] { "f0" }, groupA, groupB,
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.Paired,
+                Test = test,
+                Correction = MultipleTesting.None,
+                SubjectLabels = subjects,
+            }).Rows[0];
+
+        var t = Run(DifferentialTest.PairedT);
+        Golden.Close(Golden.Num(c, "paired_t"), t.T, 1e-12, $"{name} paired t");
+        Golden.Close(Golden.Num(c, "paired_p"), t.PValue, 1e-12, $"{name} paired p");
+        Golden.Close(Golden.Num(c, "mean_diff"), t.LogFc, 1e-12, $"{name} mean diff");
+
+        var w = Run(DifferentialTest.Wilcoxon);
+        Golden.Close(Golden.Num(c, "wilcoxon_w"), w.T, 1e-12, $"{name} wilcoxon W");
+        Golden.Close(Golden.Num(c, "wilcoxon_p"), w.PValue, 1e-12, $"{name} wilcoxon p");
+        Golden.Close(Golden.Num(c, "median_diff"), w.LogFc, 1e-12, $"{name} median diff");
+    }
+
+    public static IEnumerable<object[]> PairedCases() => Golden.CaseNames("paired.json");
+
+    /// <summary>
+    /// The paired moderated design - <c>[1, grp, subject dummies]</c> - against the same lstsq +
+    /// squeezeVar composition limma uses.
+    /// </summary>
+    /// <remarks>
+    /// This is the half that pairing exists for: the subject block takes each subject's overall
+    /// level out of the residual, so a within-subject shift is tested against within-subject noise
+    /// rather than against the spread between people. The fixture's data has deliberately large
+    /// between-subject variation, so a design missing the block would not merely differ in the last
+    /// digits - it would lose the effect.
+    /// </remarks>
+    [Fact]
+    public void PairedModeratedDesign_MatchesTheLimmaComposition()
+    {
+        var m = Golden.Load("paired.json").GetProperty("moderated");
+        var expr = Golden.Mat(m, "expr_log2");
+        var nPairs = m.GetProperty("n_pairs").GetInt32();
+        var ids = Enumerable.Range(0, expr.GetLength(0)).Select(i => $"f{i}").ToArray();
+
+        var subjects = new string?[2 * nPairs];
+        for (var j = 0; j < nPairs; j++)
+        {
+            subjects[j] = $"s{j}";
+            subjects[nPairs + j] = $"s{j}";
+        }
+
+        var res = Differential.Run(
+            expr, ids, Enumerable.Range(0, nPairs).ToArray(), Enumerable.Range(nPairs, nPairs).ToArray(),
+            new DifferentialOptions
+            {
+                Design = DifferentialDesign.Paired,
+                Prior = VariancePrior.Global,
+                Correction = MultipleTesting.None,
+                SubjectLabels = subjects,
+            });
+
+        Golden.Close(Golden.Num(m, "df_residual"), res.DfResidual, 1e-12, "paired df residual");
+        Golden.Close(Golden.Num(m, "df_prior"), res.DfPrior, 1e-9, "paired df prior");
+
+        var byId = res.Rows.ToDictionary(r => r.FeatureId);
+        var logfc = Golden.Vec(m, "logfc");
+        var t = Golden.Vec(m, "t");
+        var p = Golden.Vec(m, "p");
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var row = byId[ids[i]];
+            Golden.Close(logfc[i], row.LogFc, 1e-9, $"f{i} logFC");
+            Golden.Close(t[i], row.T, 1e-9, $"f{i} t");
+            Golden.Close(p[i], row.PValue, 1e-9, $"f{i} p");
+        }
+    }
 }

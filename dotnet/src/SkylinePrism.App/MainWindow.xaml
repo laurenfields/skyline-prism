@@ -571,13 +571,30 @@
                                     <ComboBoxItem>Protein</ComboBoxItem>
                                     <ComboBoxItem>Peptide</ComboBoxItem>
                                 </ComboBox>
+                                <TextBlock Text="Design:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffDesignCombo" Width="100" SelectionChanged="OnDiffDesignChanged"
+                                          ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a pairing column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. Subjects present in only one arm, or with more than one sample in an arm, are left out and reported.">
+                                    <ComboBoxItem Tag="Unpaired">Unpaired</ComboBoxItem>
+                                    <ComboBoxItem Tag="Paired">Paired</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffPairByLabel" Text="Pair by:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffPairByCombo" Width="140" SelectionChanged="OnDiffPairByChanged"
+                                          ToolTip="The metadata column identifying the subject, so each subject's two samples can be matched. Usually a patient or donor id." />
                                 <TextBlock Text="Test:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffTestCombo" Width="130" SelectionChanged="OnDiffTestChanged"
                                           ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
                                     <ComboBoxItem Tag="ModeratedT">Moderated t</ComboBoxItem>
-                                    <ComboBoxItem Tag="WelchT">Welch t</ComboBoxItem>
-                                    <ComboBoxItem Tag="StudentT">Student t</ComboBoxItem>
-                                    <ComboBoxItem Tag="MannWhitney">Mann-Whitney</ComboBoxItem>
+                                    <!-- Each of these applies to one design only. UpdateDiffControls
+                                         collapses AND disables the ones that do not apply: WPF's
+                                         arrow-key and type-ahead selection skip disabled items but
+                                         not collapsed ones, so hiding alone leaves an inapplicable
+                                         test one keypress away. Same idiom as RefreshQcPlotKinds. -->
+                                    <ComboBoxItem x:Name="DiffTestWelchItem" Tag="WelchT">Welch t</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestStudentItem" Tag="StudentT">Student t</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestMannWhitneyItem" Tag="MannWhitney">Mann-Whitney</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestPairedTItem" Tag="PairedT">Paired t</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestWilcoxonItem" Tag="Wilcoxon">Wilcoxon</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffGroupByCombo" Width="150" SelectionChanged="OnDiffGroupByChanged"

@@ -187,10 +187,42 @@ public static class Differential
     {
         var minPerGroup = options.MinPerGroup;
         var covariates = options.Covariates;
+        var pairingMessages = new List<string>();
+        IReadOnlyList<SamplePair>? pairs = null;
+
+        if (options.Design == DifferentialDesign.Paired)
+        {
+            if (options.SubjectLabels is null)
+                throw new ArgumentException(
+                    "A paired design needs a pairing column (DifferentialOptions.SubjectLabels).");
+
+            var resolved = PairedSamples.Resolve(options.SubjectLabels, groupAColumns, groupBColumns);
+            pairs = resolved.Pairs;
+            pairingMessages.AddRange(resolved.Messages);
+            if (pairs.Count < minPerGroup)
+                throw new ArgumentException(
+                    $"A paired design needs at least {minPerGroup} matched subjects; {pairs.Count} "
+                    + "matched. " + string.Join(" ", resolved.Messages));
+
+            // From here the arms ARE the matched pairs, in a common subject order. Everything
+            // downstream - the design's subject block, the complete-case filter, the per-group means
+            // - then lines up by position, and an unmatched sample cannot leak into one arm only.
+            groupAColumns = pairs.Select(pair => pair.AColumn).ToList();
+            groupBColumns = pairs.Select(pair => pair.BColumn).ToList();
+        }
+
+        if (options.Test is DifferentialTest.PairedT or DifferentialTest.Wilcoxon)
+        {
+            if (pairs is null)
+                throw new ArgumentException(
+                    $"{options.Test} is a paired test and needs the Paired design.");
+            return SimpleTests.RunPaired(exprLog2FeaturesBySamples, featureIds, pairs, options.Test,
+                options.Correction, minPerGroup, Messages(options, pairingMessages));
+        }
 
         if (options.Test != DifferentialTest.ModeratedT)
             return RunSimple(exprLog2FeaturesBySamples, featureIds, groupAColumns, groupBColumns,
-                options);
+                options, pairingMessages);
         var nFeatures = exprLog2FeaturesBySamples.GetLength(0);
         var nColumns = exprLog2FeaturesBySamples.GetLength(1);
         if (featureIds.Count != nFeatures)
@@ -222,6 +254,9 @@ public static class Differential
         var nSamples = cols.Length;
 
         var (design, covariatesUsed, messages) = BuildDesign(nA, nB, cols, covariates);
+        messages.InsertRange(0, pairingMessages);
+        if (pairs is not null)
+            design = WithSubjectBlock(design, pairs.Count);
         const int coefIdx = 1; // groupB is the second design column
         var nParams = design.GetLength(1);
         if (nSamples - nParams < 1)
@@ -304,6 +339,54 @@ public static class Differential
     /// A covariate missing in any selected sample, or constant, is skipped; a dummy level collinear
     /// with the group is dropped. Every skip/drop is recorded in the returned messages.
     /// </summary>
+    /// <summary>
+    /// Append a fixed-effect subject block to a paired design: one indicator per subject after the
+    /// first, each marking that subject's two samples.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is what makes the contrast a WITHIN-subject one. Without it every subject's overall
+    /// level is part of the residual, so between-subject variation - which a paired design exists to
+    /// remove - inflates the variance and costs the test its power.</para>
+    /// <para>A FIXED effect, not a random one, matching the lab's toolkit
+    /// (<c>statistical_analysis.py:1321</c>). A random intercept would be a mixed model, which is a
+    /// different estimator and is not implemented. The first subject is dropped, as always with
+    /// indicator coding, because the intercept already spans it.</para>
+    /// <para>The columns are positional: the caller has already reduced the arms to matched pairs in
+    /// a common subject order, so subject j is at row j in arm A and row <c>nPairs + j</c> in arm B.</para>
+    /// </remarks>
+    private static double[,] WithSubjectBlock(double[,] design, int nPairs)
+    {
+        var nSamples = design.GetLength(0);
+        var nParams = design.GetLength(1);
+        var extra = nPairs - 1;
+        if (extra <= 0)
+            return design;
+
+        var widened = new double[nSamples, nParams + extra];
+        for (var r = 0; r < nSamples; r++)
+        for (var c = 0; c < nParams; c++)
+            widened[r, c] = design[r, c];
+
+        for (var j = 1; j < nPairs; j++)
+        {
+            widened[j, nParams + j - 1] = 1.0;          // arm A half
+            widened[nPairs + j, nParams + j - 1] = 1.0; // arm B half
+        }
+
+        return widened;
+    }
+
+    /// <summary>Pairing notes plus whatever the options themselves make unusable.</summary>
+    private static List<string> Messages(DifferentialOptions options, List<string> pairingMessages)
+    {
+        var messages = new List<string>(pairingMessages);
+        if (options.Covariates is { Count: > 0 } cov)
+            messages.Add($"{options.Describe()} cannot adjust for covariates "
+                + $"({string.Join(", ", cov.Select(c => c.Name))}) - it has no design matrix to put "
+                + "them in. Use the moderated t for an adjusted contrast.");
+        return messages;
+    }
+
     private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages) BuildDesign(
         int nA, int nB, int[] cols, IReadOnlyList<Covariate>? covariates)
     {
@@ -450,9 +533,10 @@ public static class Differential
         IReadOnlyList<string> featureIds,
         IReadOnlyList<int> groupAColumns,
         IReadOnlyList<int> groupBColumns,
-        DifferentialOptions options)
+        DifferentialOptions options,
+        IReadOnlyList<string> pairingMessages)
     {
-        var messages = new List<string>();
+        var messages = new List<string>(pairingMessages);
         if (options.Covariates is { Count: > 0 } cov)
             messages.Add($"{options.Describe()} cannot adjust for covariates "
                 + $"({string.Join(", ", cov.Select(c => c.Name))}) - it has no design matrix to put "

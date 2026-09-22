@@ -34,6 +34,9 @@ Which library is the reference for which quantity:
 | `VariancePriors.IntensityTrend`   | `proteomics_toolkit._fit_intensity_trend_prior`          |
 | `SimpleTests` (Welch/Student)     | `scipy.stats.ttest_ind(equal_var=...)`                  |
 | `SimpleTests` (Mann-Whitney)      | `scipy.stats.mannwhitneyu(method='asymptotic')`         |
+| `SimpleTests` (paired t)          | `scipy.stats.ttest_rel`                                 |
+| `SimpleTests` (Wilcoxon)          | `scipy.stats.wilcoxon(method='asymptotic')`             |
+| paired moderated design           | lstsq on `[1, grp, subject dummies]` + squeezeVar        |
 | `Fdr.{BenjaminiYekutieli,Bonferroni,Holm}` | `statsmodels multipletests`                    |
 
 Nothing here imports PRISM. The point of a golden is that it was produced without reference to the
@@ -1089,6 +1092,126 @@ def gen_corrections() -> None:
     )
 
 
+def gen_paired() -> None:
+    """The paired tests, and the paired moderated design's subject block.
+
+    Wilcoxon is pinned to ``method="asymptotic"`` for the same reason Mann-Whitney is: scipy's
+    ``auto`` uses the exact signed-rank distribution up to n = 50 and PRISM implements only the
+    normal approximation. ``ttest_rel`` has no such branch, so it is pinned as-is.
+
+    The moderated case exercises the WITHIN-subject design: ``[1, grp, subject dummies]`` over the
+    matched pairs, which is what removes between-subject level from the residual. It is composed
+    here the way limma composes it, exactly as ``gen_moderated_t`` does - no PRISM code involved.
+    """
+    rng = Rng(89)
+    cases = []
+
+    def add(name: str, a, b, note: str) -> None:
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        d = b - a
+        rel = stats.ttest_rel(b, a)
+        wil = stats.wilcoxon(d, alternative="two-sided", method="asymptotic")
+        cases.append(
+            {
+                "name": name,
+                "note": note,
+                "a": vec(a),
+                "b": vec(b),
+                "paired_t": num(float(rel.statistic)),
+                "paired_p": num(float(rel.pvalue)),
+                "paired_df": num(float(rel.df)),
+                "mean_diff": num(float(np.mean(d))),
+                "wilcoxon_w": num(float(wil.statistic)),
+                "wilcoxon_p": num(float(wil.pvalue)),
+                "median_diff": num(float(np.median(d))),
+            }
+        )
+
+    n = 8
+    base = [rng.normal() * 2 for _ in range(n)]  # subject level, which pairing removes
+    add("consistent_shift",
+        [x + 0.3 * rng.normal() for x in base],
+        [x + 1.1 + 0.3 * rng.normal() for x in base],
+        "a real within-subject shift on top of large between-subject spread - the case pairing is for")
+    add("no_shift",
+        [x + 0.3 * rng.normal() for x in base],
+        [x + 0.3 * rng.normal() for x in base],
+        "null: subject level still large, but no within-subject change")
+    add("with_ties",
+        [round(x + 0.3 * rng.normal(), 1) for x in base],
+        [round(x + 0.7 + 0.3 * rng.normal(), 1) for x in base],
+        "rounded, so Wilcoxon's tie correction is exercised")
+    big = [rng.normal() * 2 for _ in range(15)]
+    add("fifteen_subjects",
+        [x + 0.25 * rng.normal() for x in big],
+        [x + 0.6 + 0.25 * rng.normal() for x in big],
+        "15 pairs")
+
+    # --- the paired MODERATED design, composed the way limma does ---
+    n_feat, n_pairs = 9, 6
+    subj = [rng.normal() * 1.5 for _ in range(n_pairs)]
+    expr = []
+    for f in range(n_feat):
+        level = 12 + f * 0.4
+        row_a = [level + subj[j] + 0.35 * rng.normal() for j in range(n_pairs)]
+        row_b = [level + subj[j] + (0.9 if f < 3 else 0.0) + 0.35 * rng.normal() for j in range(n_pairs)]
+        expr.append(row_a + row_b)
+    expr = np.asarray(expr, dtype=float)
+
+    # [intercept, grp, subject dummies for subjects 1..k-1]
+    design = np.zeros((2 * n_pairs, 2 + (n_pairs - 1)))
+    design[:, 0] = 1.0
+    design[n_pairs:, 1] = 1.0
+    for j in range(1, n_pairs):
+        design[j, 1 + j] = 1.0
+        design[n_pairs + j, 1 + j] = 1.0
+
+    beta, _, _, _ = np.linalg.lstsq(design, expr.T, rcond=None)
+    resid = expr.T - design @ beta
+    df_resid = design.shape[0] - np.linalg.matrix_rank(design)
+    sigma2 = (resid ** 2).sum(axis=0) / df_resid
+    xtx_inv = np.linalg.inv(design.T @ design)
+    v_c = xtx_inv[1, 1]
+
+    sq = squeezeVar(sigma2, df_resid)
+    df_prior = float(np.atleast_1d(sq["df_prior"])[0])
+    var_post = np.atleast_1d(sq["var_post"])
+    df_total = df_resid + df_prior
+    # stdev_unscaled[1] = sqrt(v_c); same quantity as gen_moderated_t, spelled the same way.
+    t_mod = beta[1, :] / (np.sqrt(v_c) * np.sqrt(var_post))
+    if np.isinf(df_total):
+        p_mod = 2.0 * scipy.stats.norm.cdf(-np.abs(t_mod))
+    else:
+        p_mod = 2.0 * scipy.stats.t.cdf(-np.abs(t_mod), df=df_total)
+
+    write(
+        "paired.json",
+        {
+            "reference": (
+                "scipy.stats.ttest_rel, scipy.stats.wilcoxon(method='asymptotic'), and "
+                "numpy.linalg.lstsq + inmoose.limma.squeezeVar composed as limma composes them"
+            ),
+            "note": (
+                "Differences are B - A throughout. `moderated` is the paired DESIGN: samples are "
+                "[A pairs..., B pairs...] in a common subject order, and the design is "
+                "[1, grp, subject dummies 1..k-1]. Wilcoxon's W is the smaller signed-rank sum, as "
+                "scipy reports for a two-sided test."
+            ),
+            "cases": cases,
+            "moderated": {
+                "n_pairs": n_pairs,
+                "expr_log2": mat(expr),
+                "logfc": vec(beta[1, :]),
+                "t": vec(t_mod),
+                "p": vec(p_mod),
+                "df_residual": num(float(df_resid)),
+                "df_prior": num(df_prior),
+            },
+        },
+    )
+
+
 def main() -> None:
     if not OUT.is_dir():
         raise SystemExit(f"run from the repository root: {OUT} not found")
@@ -1105,6 +1228,7 @@ def main() -> None:
     gen_intensity_trend()
     gen_simple_tests()
     gen_corrections()
+    gen_paired()
 
 
 if __name__ == "__main__":

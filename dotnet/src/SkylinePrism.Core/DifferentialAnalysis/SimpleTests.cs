@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using SkylinePrism.Core.Numerics;
@@ -105,6 +105,152 @@ internal static class SimpleTests
             // No linear model, so no residual df shared across features (Welch's differs per
             // feature) and no prior at all. NaN rather than a number that would be read as one.
             double.NaN, double.NaN, "none", Array.Empty<string>(), messages, Array.Empty<string>());
+    }
+
+    /// <summary>
+    /// The paired tests: a t or a Wilcoxon signed-rank on the WITHIN-SUBJECT differences.
+    /// </summary>
+    /// <remarks>
+    /// The pairs are resolved once, by <see cref="PairedSamples"/>, so this and the paired moderated
+    /// design are always over the same subjects. A feature is tested where both halves of a pair are
+    /// present - the pair is the unit, so half of one is no more usable than none of it.
+    /// </remarks>
+    public static DifferentialResult RunPaired(
+        double[,] exprLog2FeaturesBySamples,
+        IReadOnlyList<string> featureIds,
+        IReadOnlyList<SamplePair> pairs,
+        DifferentialTest test,
+        MultipleTesting correction,
+        int minPairs,
+        IReadOnlyList<string> messages)
+    {
+        var nFeatures = exprLog2FeaturesBySamples.GetLength(0);
+        if (pairs.Count < minPairs)
+            throw new ArgumentException(
+                $"a paired analysis needs at least {minPairs} matched subjects; {pairs.Count} matched");
+
+        var tested = new List<int>(nFeatures);
+        for (var f = 0; f < nFeatures; f++)
+        {
+            var ok = true;
+            foreach (var pair in pairs)
+                if (!double.IsFinite(exprLog2FeaturesBySamples[f, pair.AColumn])
+                    || !double.IsFinite(exprLog2FeaturesBySamples[f, pair.BColumn]))
+                {
+                    ok = false;
+                    break;
+                }
+
+            if (ok)
+                tested.Add(f);
+        }
+
+        if (tested.Count == 0)
+            throw new InvalidOperationException("No feature is observed in both halves of every pair.");
+
+        var diff = new double[pairs.Count];
+        var aVals = new double[pairs.Count];
+        var bVals = new double[pairs.Count];
+        var rows = new DifferentialRow[tested.Count];
+        var pValues = new double[tested.Count];
+
+        for (var i = 0; i < tested.Count; i++)
+        {
+            var f = tested[i];
+            for (var j = 0; j < pairs.Count; j++)
+            {
+                aVals[j] = exprLog2FeaturesBySamples[f, pairs[j].AColumn];
+                bVals[j] = exprLog2FeaturesBySamples[f, pairs[j].BColumn];
+                diff[j] = bVals[j] - aVals[j]; // B - A, matching every other path
+            }
+
+            var (stat, pv, logFc) = test == DifferentialTest.Wilcoxon
+                ? SignedRank(diff)
+                : OneSampleT(diff);
+
+            pValues[i] = pv;
+            var meanA = NumpyMath.Mean(aVals);
+            var meanB = NumpyMath.Mean(bVals);
+            rows[i] = new DifferentialRow(
+                featureIds[f], logFc, Math.Pow(2.0, logFc), 0.5 * (meanA + meanB),
+                stat, pv, double.NaN, meanA, meanB);
+        }
+
+        var adjusted = Fdr.Adjust(pValues, correction);
+        for (var i = 0; i < rows.Length; i++)
+            rows[i] = rows[i] with { AdjPValue = adjusted[i] };
+
+        return new DifferentialResult(
+            rows.OrderBy(r => r.PValue).ToList(), pairs.Count, pairs.Count, nFeatures, tested.Count,
+            double.NaN, double.NaN, "none", Array.Empty<string>(), messages, Array.Empty<string>());
+    }
+
+    /// <summary>One-sample t against zero - the paired t-test, <c>scipy.stats.ttest_rel</c>.</summary>
+    private static (double T, double P, double LogFc) OneSampleT(double[] diff)
+    {
+        var n = diff.Length;
+        var mean = NumpyMath.Mean(diff);
+        var variance = NumpyMath.Var(diff, ddof: 1);
+        var se = Math.Sqrt(variance / n);
+        if (!(se > 0))
+            return (double.NaN, double.NaN, mean); // every pair moved identically
+        var t = mean / se;
+        return (t, Distributions.TwoSidedT(t, n - 1), mean);
+    }
+
+    /// <summary>
+    /// Wilcoxon signed-rank, two-sided, by the normal approximation with tie and continuity
+    /// corrections - <c>scipy.stats.wilcoxon(..., method="asymptotic")</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Zero differences are DROPPED and the sample shrunk accordingly, which is scipy's
+    /// <c>zero_method="wilcox"</c> default. On a dense proteomics matrix exact zeros are rare, but
+    /// they are not impossible and the two conventions give different p-values.</para>
+    /// <para>Asymptotic always, never the exact signed-rank distribution: scipy's
+    /// <c>method="auto"</c> uses the exact one up to n = 50 with no ties. PRISM reports the
+    /// difference rather than hiding it - see the caller's message.</para>
+    /// <para>The reported effect is the MEDIAN difference, not the mean: a rank test makes no claim
+    /// about means.</para>
+    /// </remarks>
+    private static (double W, double P, double LogFc) SignedRank(double[] diff)
+    {
+        var median = Median(diff);
+        var nonZero = diff.Where(d => d != 0.0).ToArray();
+        var n = nonZero.Length;
+        if (n == 0)
+            return (double.NaN, double.NaN, median); // no pair moved at all
+
+        var absRanks = Stats.RankAverage(nonZero.Select(Math.Abs).ToArray());
+        double wPlus = 0, wMinus = 0;
+        for (var i = 0; i < n; i++)
+        {
+            if (nonZero[i] > 0)
+                wPlus += absRanks[i];
+            else
+                wMinus += absRanks[i];
+        }
+
+        // scipy reports the SMALLER of the two rank sums for a two-sided test.
+        var w = Math.Min(wPlus, wMinus);
+        var mean = n * (n + 1) / 4.0;
+
+        var tieTerm = 0.0;
+        foreach (var run in nonZero.Select(Math.Abs).GroupBy(v => v))
+        {
+            double t = run.Count();
+            if (t > 1)
+                tieTerm += t * t * t - t;
+        }
+
+        var variance = (n * (n + 1) * (2.0 * n + 1) - tieTerm / 2.0) / 24.0;
+        if (!(variance > 0))
+            return (w, double.NaN, median);
+
+        // NO continuity correction. scipy.stats.wilcoxon defaults to correction=False, unlike
+        // mannwhitneyu, which defaults to use_continuity=True - the two functions disagree on this
+        // and copying one convention to the other inflates every signed-rank p-value.
+        var z = (w - mean) / Math.Sqrt(variance);
+        return (w, Distributions.TwoSidedNormal(z), median);
     }
 
     /// <summary>
