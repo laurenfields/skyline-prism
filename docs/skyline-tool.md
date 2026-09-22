@@ -486,9 +486,20 @@ Skyline connection.
 Pick the **Level** (protein or peptide), a **Group by** metadata column, and the two values to contrast
 (**A** vs **B**); a positive log2 fold change means higher in B. **Adjust for** ticks any metadata
 column as a covariate — numeric columns are mean-centered, categorical ones dummy-coded — which is how a
-disease-vs-control contrast is run with batch (or sex, PMI, ...) held. **Trend prior** switches the
-empirical-Bayes variance prior from global to the intensity-trend spline (limma-trend). The **View**
-selector gives three things over the same contrast:
+disease-vs-control contrast is run with batch (or sex, PMI, ...) held. **Prior** chooses the
+empirical-Bayes variance prior, and the choice is not cosmetic:
+
+| Prior | What it fits |
+|---|---|
+| **Intensity trend** (default) | The lab's own, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, one point per (feature, group), replacing only the prior *scale*. |
+| **Global** | One prior for every feature - Smyth (2004). |
+| **limma-trend** | limma's `trend=TRUE`: a natural cubic spline against mean **log2** expression, which also re-estimates the prior *degrees of freedom*. |
+
+**Intensity trend and limma-trend are different estimators despite the similar names** - different
+smoother, different scale, different unit of observation, and only one of them moves the prior degrees
+of freedom. They disagree by a median 3-7% on p-values, so a hit list should say which one produced it.
+The status line names the prior that ran. The **View** selector gives three things over the same
+contrast:
 
 - **Volcano** — moderated-t log2 fold change against -log10 p, with a ranked hit table beside it.
   Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
@@ -507,8 +518,10 @@ selector gives three things over the same contrast:
 > is always available) *plus* any clinical CSV attached below, and lets you pick which component pair to
 > plot, so there is one PCA and it can do what both could.
 
-Each view carries an honest interpretation note under the plot (the dense matrix conflates detection with
-abundance; peptide-level q-values are anti-conservative; enrichment only re-describes the hit list). The
+Read every view against the same caveats: the corrected matrix is dense, so an "undetected" peptide is
+imputed baseline rather than missing and a fold change can reflect baseline noise (the Detection view is
+the on/off signal); peptide-level q-values are anti-conservative because peptides from one protein are
+correlated; and enrichment only re-describes whatever hit list it was handed. The
 statistics all live in `SkylinePrism.Core.DifferentialAnalysis`, are covered by the cross-platform test
 suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
 [differential-analysis.md](differential-analysis.md), which also records where PRISM and the lab's

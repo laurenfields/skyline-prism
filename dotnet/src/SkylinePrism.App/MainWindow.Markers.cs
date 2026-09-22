@@ -223,12 +223,30 @@ public partial class MainWindow
         RenderMarkers();
     }
 
+    /// <summary>
+    /// Forget the loaded matrix so the pane reloads on its next show (new dir / new run), the
+    /// counterpart of <c>InvalidateDifferential</c>.
+    /// </summary>
+    /// <remarks>
+    /// The cache is keyed on (directory, level), so a re-run into the SAME output directory - which
+    /// is the ordinary way to iterate on settings - matched the key and kept serving the previous
+    /// run's matrix. Nothing looked wrong: the heatmap drew, captioned as the run that had just
+    /// finished. <c>_markersActive</c> is cleared as well because RenderMarkers reads it directly
+    /// rather than re-deriving which cache to use, so leaving it set would redraw the stale matrix
+    /// even after the cache behind it was dropped.
+    /// </remarks>
+    private void InvalidateMarkers()
+    {
+        _markersDataset = null;
+        _markersDir = null;
+        _markersActive = null;
+    }
+
     private async void OnMarkersReload(object sender, System.Windows.RoutedEventArgs e)
     {
         try
         {
-            _markersDataset = null;
-            _markersDir = null;
+            InvalidateMarkers();
             await LoadMarkersAsync();
         }
         catch (Exception ex)

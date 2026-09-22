@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -12,6 +12,56 @@ public enum FeatureLevel
 {
     Protein,
     Peptide,
+}
+
+/// <summary>
+/// Everything one feature is known by: what to show a reader, and what to look it up by in a Skyline
+/// document.
+/// </summary>
+/// <remarks>
+/// The plural lists are not a convenience - a peptide shared between protein groups genuinely belongs
+/// to all of them, and which one quantifies it is a decision about the rollup rather than a fact about
+/// the peptide. PRISM also runs its OWN parsimony, so its groups need not line up with the document's;
+/// offering every accession and name is what lets a group whose leading protein is absent from the
+/// document still be found by one of its other members.
+/// </remarks>
+/// <param name="FeatureId">The matrix row's id: a protein-group id, or a modified peptide sequence.</param>
+/// <param name="Label">What to show for it - a gene name for a protein, the sequence for a peptide.</param>
+/// <param name="ProteinGroups">PRISM's protein-group ids, empty if the matrix carried none.</param>
+/// <param name="Accessions">Leading accession per group, index-aligned to <paramref name="ProteinGroups"/>.</param>
+/// <param name="ProteinNames">Leading protein name per group, index-aligned.</param>
+/// <param name="Genes">Leading gene name per group, index-aligned.</param>
+public sealed record FeatureIdentity(
+    string FeatureId,
+    string Label,
+    IReadOnlyList<string> ProteinGroups,
+    IReadOnlyList<string> Accessions,
+    IReadOnlyList<string> ProteinNames,
+    IReadOnlyList<string> Genes)
+{
+    /// <summary>True when this feature maps to more than one protein group.</summary>
+    public bool IsShared => ProteinGroups.Count > 1;
+
+    /// <summary>
+    /// A one-line description for a hover readout or a status line: the label, then the gene and
+    /// protein it belongs to, then every further group it is shared with. Nothing is invented - a
+    /// part is left out entirely when the matrix did not carry it.
+    /// </summary>
+    public string Describe()
+    {
+        var parts = new List<string>();
+        var gene = Genes.FirstOrDefault(g => !string.IsNullOrEmpty(g));
+        if (gene is not null && gene != Label)
+            parts.Add(gene);
+        var protein = ProteinNames.FirstOrDefault(n => !string.IsNullOrEmpty(n))
+                      ?? Accessions.FirstOrDefault(a => !string.IsNullOrEmpty(a));
+        if (protein is not null && protein != Label)
+            parts.Add(protein);
+        if (IsShared)
+            parts.Add($"shared across {ProteinGroups.Count} protein groups");
+
+        return parts.Count == 0 ? Label : $"{Label}  ({string.Join(" - ", parts)})";
+    }
 }
 
 /// <summary>Outcome of joining a clinical metadata CSV to a dataset.</summary>
@@ -29,15 +79,24 @@ public sealed class DifferentialDataset
 {
     private readonly Dictionary<string, string?[]> _metaByColumn;
     private readonly List<string> _metadataColumns;
+    private readonly string[] _featureGroups;
+    private readonly string[] _featureAccessions;
+    private readonly string[] _featureProteinNames;
 
     private DifferentialDataset(FeatureLevel level, double[,] exprLog2, string[] featureIds,
-        string[] featureLabels, string[] sampleIds, string idColumn, string labelColumn,
+        string[] featureLabels, string[] featureGenes, string[] featureGroups,
+        string[] featureAccessions, string[] featureProteinNames,
+        string[] sampleIds, string idColumn, string labelColumn,
         IReadOnlyList<string> metadataColumns, Dictionary<string, string?[]> metaByColumn)
     {
+        _featureGroups = featureGroups;
+        _featureAccessions = featureAccessions;
+        _featureProteinNames = featureProteinNames;
         Level = level;
         ExprLog2 = exprLog2;
         FeatureIds = featureIds;
         FeatureLabels = featureLabels;
+        FeatureGenes = featureGenes;
         SampleIds = sampleIds;
         IdColumn = idColumn;
         LabelColumn = labelColumn;
@@ -56,6 +115,48 @@ public sealed class DifferentialDataset
 
     /// <summary>Human-readable feature labels (gene names for proteins); parallel to <see cref="FeatureIds"/>.</summary>
     public string[] FeatureLabels { get; }
+
+    /// <summary>
+    /// Gene symbol per feature, or "" where none is known; parallel to <see cref="FeatureIds"/>.
+    /// A shared peptide names every group it belongs to, <c>;</c>-separated, which is what
+    /// <c>Enrichment.CleanSymbols</c> splits on.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="FeatureLabels"/> on purpose. At peptide level the label is the
+    /// modified sequence - the right thing to show on a Volcano point or a boxplot title - but a
+    /// sequence is not a gene symbol, and enrichment submitted it as one: it passes CleanSymbols
+    /// untouched (that only drops empty/"nan" and splits delimiters), so g:Profiler was asked about
+    /// a list of peptide sequences and the empty result was captioned as a gene enrichment.
+    /// <c>corrected_peptides.parquet</c> carries <c>leading_gene_name</c> for exactly this
+    /// (PrismPipeline.PeptideGroupColumns stamps it on), so the gene is available at both levels -
+    /// it just has to be kept apart from the display label. Empty for a peptide file written before
+    /// those columns existed, which callers must treat as "no genes", never as a symbol.
+    /// </remarks>
+    public string[] FeatureGenes { get; }
+
+    /// <summary>
+    /// Everything feature <paramref name="index"/> is known by - what to show a reader, and what to
+    /// look it up by in a Skyline document. Every list is empty where the matrix carried no such
+    /// column, never a placeholder: a caller finding an element by name must not be handed a
+    /// protein-group id or a peptide sequence to search for.
+    /// </summary>
+    public FeatureIdentity IdentityOf(int index) => new(
+        FeatureIds[index],
+        FeatureLabels[index],
+        SplitGroups(_featureGroups[index]),
+        SplitGroups(_featureAccessions[index]),
+        SplitGroups(_featureProteinNames[index]),
+        SplitGroups(FeatureGenes[index]));
+
+    /// <summary>
+    /// <see cref="IdentityOf(int)"/> for a feature id, or null when the id is not in this matrix.
+    /// </summary>
+    public FeatureIdentity? IdentityOf(string featureId)
+    {
+        var i = Array.IndexOf(FeatureIds, featureId);
+        return i < 0 ? null : IdentityOf(i);
+    }
+
 
     /// <summary>Sample identifiers (matrix columns), matching the metadata's sample ids.</summary>
     public string[] SampleIds { get; }
@@ -276,6 +377,19 @@ public sealed class DifferentialDataset
         var nFeatures = table.RowCount;
         var featureIds = table.GetString(idColumn).Select(s => s ?? string.Empty).ToArray();
         var featureLabels = table.GetString(labelColumn).Select(s => s ?? string.Empty).ToArray();
+        // Genes come from leading_gene_name at BOTH levels - the C# engine stamps it onto
+        // corrected_peptides as well (PrismPipeline.PeptideGroupColumns) - and are kept apart from
+        // the display label, which at peptide level is the modified sequence. Empty when the column
+        // is absent, which is a peptide file written before it existed; enrichment must then report
+        // that it has no genes rather than fall back to the label and submit sequences as symbols.
+        var featureGenes = IdentityColumn(table, "leading_gene_name", nFeatures);
+        // The rest of the identity: what the feature is called in a Skyline document. Both corrected
+        // matrices carry these - PrismPipeline stamps the protein-group columns onto the peptide
+        // output too - and a shared peptide names every group it belongs to, ";"-separated and
+        // index-aligned across the four.
+        var featureGroups = IdentityColumn(table, "protein_group", nFeatures);
+        var featureAccessions = IdentityColumn(table, "leading_protein", nFeatures);
+        var featureProteinNames = IdentityColumn(table, "leading_name", nFeatures);
 
         var exprLog2 = new double[nFeatures, sampleCols.Length];
         for (var j = 0; j < sampleCols.Length; j++)
@@ -298,8 +412,9 @@ public sealed class DifferentialDataset
             metaByColumn[metaColumns[m]] = values;
         }
 
-        return new DifferentialDataset(level, exprLog2, featureIds, featureLabels, sampleCols,
-            idColumn, labelColumn, metaColumns, metaByColumn);
+        return new DifferentialDataset(level, exprLog2, featureIds, featureLabels, featureGenes,
+            featureGroups, featureAccessions, featureProteinNames,
+            sampleCols, idColumn, labelColumn, metaColumns, metaByColumn);
     }
 
     /// <summary>
@@ -412,4 +527,20 @@ public sealed class DifferentialDataset
 
         return (byRow, columns);
     }
+
+    /// <summary>An identity column, or all-empty when the matrix does not carry it.</summary>
+    private static string[] IdentityColumn(ParquetTable table, string name, int nFeatures) =>
+        table.HasColumn(name)
+            ? table.GetString(name).Select(s => s ?? string.Empty).ToArray()
+            : Enumerable.Repeat(string.Empty, nFeatures).ToArray();
+
+    /// <summary>
+    /// The members of a ";"-separated group column. A shared peptide lists every protein group it
+    /// belongs to; which one quantifies it is a decision about the rollup, not a fact about the
+    /// peptide, so all of them are kept and the caller decides.
+    /// </summary>
+    private static IReadOnlyList<string> SplitGroups(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? Array.Empty<string>()
+            : value.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 }

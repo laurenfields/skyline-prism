@@ -2,9 +2,13 @@
 
 The Skyline tool's **Differential** pane runs a limma empirical-Bayes moderated-t contrast on a
 PRISM output directory: protein or peptide level, two groups from any metadata or clinical column,
-optional covariate adjustment, and optionally the intensity-trend variance prior (limma's
-`trend=TRUE`). The statistics live in `SkylinePrism.Core.DifferentialAnalysis` and are reachable
-without the GUI.
+optional covariate adjustment, and a choice of empirical-Bayes variance prior. The statistics live
+in `SkylinePrism.Core.DifferentialAnalysis` and are reachable without the GUI.
+
+The **default prior is the lab's own**, `VariancePriors.IntensityTrend` - the same estimator as
+`proteomics-toolkit`'s `moderation="intensity_trend"`, and pinned to it by
+`intensity_trend.json`. limma's `trend=TRUE` is still available as **limma-trend**, and the two are
+not the same thing; the section below is about exactly that.
 
 ## What each quantity is held to
 
@@ -35,11 +39,12 @@ Smyth (2004) landing on the same numbers is good evidence all three are right.
 The trend disagreement is not a bug in either tool. They are **different estimators that share a
 name**:
 
-- **limma `trend=TRUE`, which PRISM implements** (`EmpiricalBayes.SqueezeVarTrend`): fitFDist with
+- **limma `trend=TRUE`** (`EmpiricalBayes.SqueezeVarTrend`, offered as **limma-trend**): fitFDist with
   a covariate. A natural cubic spline of `log(s^2)` on mean **log2** expression, with the spline df
   chosen as `1 + (n>=3) + (n>=6) + (n>=30)`. The prior scale **and** the prior degrees of freedom
   are both re-estimated from that spline fit.
-- **toolkit `moderation="intensity_trend"`** (`_fit_intensity_trend_prior`): a LOWESS of
+- **toolkit `moderation="intensity_trend"`** (`_fit_intensity_trend_prior`; PRISM's
+  `VariancePriors.IntensityTrend`, and the **default**): a LOWESS of
   `log(within-group variance)` on `log(within-group mean)` computed on **raw, pre-log** intensities,
   one point per (feature, group); converted back to log space by the delta method
   (`var_log ~ var_raw / mean_raw^2`) and combined across groups as a sample-size-weighted mean. The
@@ -50,12 +55,16 @@ abundance vs raw intensity), in what contributes a point (a feature vs a feature
 in whether the prior df is re-estimated. Expecting them to agree to more than a few percent would
 be expecting a coincidence.
 
-Two practical consequences:
+PRISM now implements both, so the disagreement is selectable rather than baked in - but it is still
+a disagreement, and the two remain different estimators that happen to share a name. Two practical
+consequences:
 
 - **Do not treat a result from one as reproducing a result from the other** when the trend prior is
   on. Quote which tool and which moderation produced a hit list.
 - **`moderation="limma"` is the setting to compare across the two tools.** If a comparison is the
-  point, use it in both.
+  point, use it in both - PRISM's equivalent is the **Global** prior.
+- **To reproduce a toolkit run at its own default**, leave PRISM on **Intensity trend**: that is the
+  same estimator, held to the toolkit by a committed golden.
 
 The toolkit's own global prior also differs from limma's `fitFDist` in two small ways that do not
 matter on dense proteomics data and could on sparse: it drops zero and negative residual variances

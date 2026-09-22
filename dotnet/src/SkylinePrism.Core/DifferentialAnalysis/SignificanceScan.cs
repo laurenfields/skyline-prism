@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -217,7 +217,12 @@ public static class SignificanceScan
 
                     yield return (a, b);
                     count++;
-                    if (count >= maxTests)
+                    // One PAST the budget, not at it. Run detects truncation by receiving a split
+                    // beyond maxTests (nDone > maxTests); stopping at exactly maxTests handed it the
+                    // last affordable split and nothing more, so a capped search reported
+                    // Truncated == false however many candidates were left. The extra split is only
+                    // ever used as that signal - Run breaks without testing it.
+                    if (count > maxTests)
                         yield break;
                 }
 

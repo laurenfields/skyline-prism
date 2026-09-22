@@ -39,6 +39,41 @@ public class DifferentialDatasetTests
         Assert.Equal(138, d.MetadataValues("sample_type").Count(v => v == "experimental"));
     }
 
+    /// <summary>
+    /// Genes are their own array, never the display label. At protein level the two happen to agree
+    /// - the label IS leading_gene_name - so this side only fixes that FeatureGenes is populated.
+    /// </summary>
+    [Fact]
+    public void Load_Protein_CarriesGeneSymbols()
+    {
+        var d = DifferentialDataset.Load(MiniOutput, FeatureLevel.Protein);
+
+        Assert.Equal(d.FeatureIds.Length, d.FeatureGenes.Length);
+        Assert.Contains(d.FeatureGenes, g => !string.IsNullOrEmpty(g));
+    }
+
+    /// <summary>
+    /// The half that matters: on a peptide matrix the label is the modified SEQUENCE, and a sequence
+    /// must never reach FeatureGenes. Enrichment reads FeatureGenes and submits it to g:Profiler as
+    /// gene symbols; a sequence passes CleanSymbols untouched, so substituting the label there asked
+    /// g:Profiler about peptide sequences and captioned the empty answer as a gene enrichment.
+    ///
+    /// <para>This fixture predates the leading_gene_name column on corrected_peptides (the C# engine
+    /// stamps it on now), which makes it exactly the "no genes known" case: every entry must be
+    /// empty rather than fall back to the sequence.</para>
+    /// </summary>
+    [Fact]
+    public void Load_Peptide_NeverPutsTheSequenceInTheGeneArray()
+    {
+        var d = DifferentialDataset.Load(MiniOutput, FeatureLevel.Peptide);
+
+        Assert.Equal(d.FeatureIds.Length, d.FeatureGenes.Length);
+        // The labels really are sequences here - the premise of the test.
+        Assert.Equal(d.FeatureIds, d.FeatureLabels);
+        Assert.All(d.FeatureGenes, g => Assert.True(string.IsNullOrEmpty(g),
+            $"a gene array must not carry the peptide sequence, but held '{g}'"));
+    }
+
     [Fact]
     public void LoadThenDifferential_MatchesExplorerEndToEnd()
     {

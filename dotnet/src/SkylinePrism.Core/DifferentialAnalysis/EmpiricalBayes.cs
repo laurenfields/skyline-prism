@@ -24,8 +24,7 @@ public sealed class SqueezeVarResult
 
     /// <summary>
     /// Prior scale <c>s0^2</c> of the fitted scaled-F distribution. Length 1 for the global prior; the
-    /// (not-yet-implemented) intensity-trend prior returns one value per feature, which is why this is
-    /// an array rather than a scalar.
+    /// trend priors return one value per feature, which is why this is an array rather than a scalar.
     /// </summary>
     public double[] VarPrior { get; }
 
@@ -178,6 +177,36 @@ public static class EmpiricalBayes
     /// (the caller falls back to the global prior otherwise), and falls back to global when the spline
     /// degrees of freedom collapse below 2.
     /// </summary>
+    /// <summary>
+    /// The empirical-Bayes posterior for a prior whose SCALE is already known per feature and whose
+    /// degrees of freedom are not re-estimated: <c>(d0*s0_i^2 + d*s_i^2) / (d0 + d)</c>, collapsing to
+    /// <c>s0_i^2</c> as <c>d0 -> inf</c>.
+    /// </summary>
+    /// <remarks>
+    /// Exists so the toolkit-style priors in <see cref="VariancePriors"/> - which fit only a scale and
+    /// deliberately keep the GLOBAL <paramref name="dfPrior"/> - compose the posterior through the
+    /// same arithmetic as every other path rather than restating it. Restating it is how two priors
+    /// end up shrinking by subtly different amounts.
+    /// </remarks>
+    /// <param name="varPrior">Per-feature prior scale, one per entry of <paramref name="variances"/>.</param>
+    /// <param name="dfPrior">The global prior degrees of freedom, typically from <see cref="SqueezeVarGlobal"/>.</param>
+    public static SqueezeVarResult SqueezeVarWithScale(
+        ReadOnlySpan<double> variances, double dfResidual, double[] varPrior, double dfPrior,
+        IReadOnlyList<string>? warnings = null)
+    {
+        var n = variances.Length;
+        if (varPrior.Length != n)
+            throw new ArgumentException("varPrior length must match variances", nameof(varPrior));
+
+        var varPost = new double[n];
+        for (var i = 0; i < n; i++)
+            varPost[i] = double.IsInfinity(dfPrior)
+                ? varPrior[i]
+                : (dfPrior * varPrior[i] + dfResidual * variances[i]) / (dfPrior + dfResidual);
+
+        return new SqueezeVarResult(varPost, varPrior, dfPrior, warnings ?? Array.Empty<string>());
+    }
+
     public static SqueezeVarResult SqueezeVarTrend(ReadOnlySpan<double> variances, double dfResidual,
         double[] covariate)
     {

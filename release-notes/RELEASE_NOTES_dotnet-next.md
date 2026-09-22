@@ -8,14 +8,21 @@ as the GitHub Release description and fails if it is missing.
 
 - **Differential analysis pane.** A new "Differential" visualization pane runs a limma-style moderated-t
   contrast over the corrected matrix (protein or peptide level) entirely locally. Pick a grouping column
-  and two values (A vs B), optionally adjust for covariates, and toggle the intensity-trend variance
-  prior (limma-trend). Views: a **Volcano** plot with a ranked hit table, a sample **PCA**, a peptide
+  and the values for each arm (A vs B), optionally adjust for covariates, and choose the variance
+  prior. The Volcano's y axis is `-log10(adjusted p-value)` with the significance line at exactly
+  `q = 0.05`. Views: a **Volcano** plot with a ranked hit table, a peptide
   **Detection**-frequency test (Fisher exact, or Firth-penalized logistic regression when covariates are
-  set), and functional **Enrichment** of the significant hits via g:Profiler. The statistics live in
-  `SkylinePrism.Core.DifferentialAnalysis` and are validated to 1e-9 against the reference implementation.
+  set), and functional **Enrichment** of the significant hits via g:Profiler - which submits gene
+  symbols at both feature levels, reading `leading_gene_name` rather than the display label (a
+  peptide's label is its modified sequence, which is not a gene symbol). The statistics live in
+  `SkylinePrism.Core.DifferentialAnalysis` and are validated to 1e-9 against the reference
+  implementation.
 - **Per-feature boxplots.** Clicking a point on the Volcano plot - or a row in the hit table - opens a
   detail window with that feature's log2 abundance split into a boxplot per contrast group, with jittered
-  per-sample points and the log2FC / adj.P in the title.
+  per-sample points and the log2FC / adj.P in the title. Hovering a point names the replicate it came
+  from. The per-group counts are labelled non-missing values rather than detections, because a Skyline
+  export integrates an imputed peak boundary for every replicate - a finite value there need not be a
+  detection (the Detection view is the on/off signal).
 - **Attach an external clinical CSV.** A top-level "Clinical CSV" input (beside the metadata report)
   joins an external clinical metadata table to the samples by an auto-detected key column (best value
   match, preferring near one-to-one keys). Joined columns become available for grouping and covariate
@@ -25,6 +32,29 @@ as the GitHub Release description and fails if it is missing.
   toggle to per-sample) plus a per-group boxplot of each sample's mean marker z-score, and a "found
   N/total members / not detected" report. Panels are the same protein lists the Dynamic Range plot uses
   (your own plus the shipped panels), and several can be ticked to union into one heatmap.
+
+- **A choice of variance prior for the Volcano, defaulting to the lab's own.** The **Prior** picker
+  offers **Intensity trend** (the default), **Global** and **limma-trend**. Intensity trend is the
+  same estimator as `proteomics-toolkit`'s `moderation="intensity_trend"` - a LOWESS of within-group
+  variance against within-group mean intensity, fitted on the raw linear scale, replacing only the
+  prior scale and leaving the prior degrees of freedom global - and is pinned to that tool by a
+  committed golden (`intensity_trend.json`). It is deliberately **not** limma's `trend=TRUE`, which
+  is offered separately as limma-trend: the two share a name in the literature but are different
+  estimators and disagree by a median 3-7% on p-values, so the status line and the tooltip both name
+  which one produced a result.
+- **Either contrast arm can be the union of several groups.** A and B are tick lists, so
+  e.g. `experimental + reference` can be contrasted against `qc` as a single arm. A value ticked in
+  both arms is refused rather than silently dropped from one, because which side lost it would
+  change the answer.
+- **Clicking a Volcano point selects that protein or peptide in Skyline**, the way the Dynamic Range
+  plot does, sharing the same document-tree locator cache and the same precedence (each of PRISM's
+  protein groups in turn, then the sequence's first occurrence in the tree). Standalone, it says so
+  rather than doing nothing silently.
+- **Hovering a Volcano point names the feature**, with the gene and protein behind it - which at
+  peptide level is the only place that context appears, since the label is a modified sequence.
+- **The Volcano and the hit table are one selection.** Clicking either rings the point and selects
+  the row, opens the per-feature boxplot and follows in Skyline. Picking a row whose point is off
+  screen pans the plot, keeping the zoom, so a selection is never invisible.
 
 - **One PCA, not two.** The QC scatter and the Differential pane's sample plot were separate
   implementations; they are now one `Core/Numerics/Pca.cs` with options for what actually differed

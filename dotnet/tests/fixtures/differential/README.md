@@ -32,6 +32,15 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `firth.json` | `Detection.FirthLogit` | `scipy.optimize` on the penalized log-likelihood |
 | `detection_lrt.json` | `Detection.DetectionGlm` | the above, twice, + `scipy.stats.chi2.sf(., 1)` |
 | `pca.json` | `Pca.Fit` (center-only, complete-case) | `numpy.linalg.svd(full_matrices=False)` |
+| `intensity_trend.json` | `VariancePriors.IntensityTrend` | `proteomics_toolkit._fit_intensity_trend_prior` |
+
+**One reference is a sibling lab tool, deliberately.** `intensity_trend.json` is pinned to
+`proteomics-toolkit`, not to a third-party library, because the estimator is not a published formula
+with an independent implementation to check against - it IS that tool's
+`moderation="intensity_trend"`, and reproducing it is the whole requirement. It stands to PRISM as
+`inmoose` does for `squeezeVar`: the definition, not a second opinion. The rule below forbids
+consulting the code under test, which this does not. Regenerating it needs the toolkit installed (the
+PEP 723 header pulls it from git).
 
 The generator imports nothing from PRISM. A golden that was produced by consulting the code under
 test cannot catch a mistake the two share, which is the only kind of mistake a golden is for.

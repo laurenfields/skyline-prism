@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -532,4 +532,114 @@ public class DifferentialGoldenTests
         Assert.True(trend.VarPrior.Distinct().Count() > 1,
             "prior scale is constant across features - the spline path did not run");
     }
+    /// <summary>
+    /// The lab's intensity-trend variance prior, against the toolkit that defines it.
+    /// </summary>
+    /// <remarks>
+    /// This is the one golden in the directory whose reference is another MacCoss Lab tool rather
+    /// than a third-party library, and deliberately so: the estimator is not a published formula
+    /// with an independent implementation to check against - it IS
+    /// <c>proteomics-toolkit</c>'s <c>moderation="intensity_trend"</c>, and reproducing that is the
+    /// whole requirement. It stands to PRISM as inmoose does for squeezeVar.
+    /// <para>Note what is asserted: the per-feature prior SCALE only. The prior degrees of freedom
+    /// are not part of this estimator - they stay at the global squeezeVar value - and that is
+    /// precisely what distinguishes it from limma's <c>trend=TRUE</c>, which re-estimates both.</para>
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(IntensityTrendCases))]
+    public void IntensityTrendPrior_MatchesTheToolkit(string name)
+    {
+        var c = Golden.Case("intensity_trend.json", name);
+        var exprLog2 = Golden.Mat(c, "expr_log2");
+        var nA = c.GetProperty("n_a").GetInt32();
+        var nB = c.GetProperty("n_b").GetInt32();
+        var expected = Golden.Vec(c, "expected");
+
+        var groups = new IReadOnlyList<int>[]
+        {
+            Enumerable.Range(0, nA).ToArray(),
+            Enumerable.Range(nA, nB).ToArray(),
+        };
+
+        var actual = VariancePriors.IntensityTrend(exprLog2, groups);
+
+        Assert.NotNull(actual);
+        // 1e-9: the chain is a LOWESS fit, an interpolation and a delta-method division, all in
+        // double precision with no iterative solve - so this is ordinary floating-point agreement,
+        // not the looser tolerance squeezeVar's Newton step forces elsewhere in this file.
+        Golden.CloseAll(expected, actual!, 1e-9, $"{name} prior scale");
+    }
+
+    public static IEnumerable<object[]> IntensityTrendCases() => Golden.CaseNames("intensity_trend.json");
+
+    /// <summary>
+    /// Welch, Student and Mann-Whitney against scipy, run through the public
+    /// <see cref="Differential.Run"/> entry point so the dispatch is covered too.
+    /// </summary>
+    /// <remarks>
+    /// Mann-Whitney is pinned to scipy's <c>method="asymptotic"</c>, not its <c>"auto"</c> default:
+    /// PRISM implements only the normal approximation, and <c>auto</c> switches to the exact
+    /// permutation distribution when the larger sample is 8 or fewer with no ties. Pinning
+    /// <c>auto</c> would assert a branch PRISM does not have.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(SimpleTestCases))]
+    public void SimpleTests_MatchScipy(string name)
+    {
+        var c = Golden.Case("simple_tests.json", name);
+        var a = Golden.Vec(c, "a");
+        var b = Golden.Vec(c, "b");
+
+        // One feature, samples laid out as [A..., B...].
+        var expr = new double[1, a.Length + b.Length];
+        for (var i = 0; i < a.Length; i++)
+            expr[0, i] = a[i];
+        for (var i = 0; i < b.Length; i++)
+            expr[0, a.Length + i] = b[i];
+        var groupA = Enumerable.Range(0, a.Length).ToArray();
+        var groupB = Enumerable.Range(a.Length, b.Length).ToArray();
+        var ids = new[] { "f0" };
+
+        DifferentialRow Run(DifferentialTest test) => Differential.Run(
+            expr, ids, groupA, groupB,
+            new DifferentialOptions { Test = test, Correction = MultipleTesting.None }).Rows[0];
+
+        var welch = Run(DifferentialTest.WelchT);
+        Golden.Close(Golden.Num(c, "welch_t"), welch.T, 1e-12, $"{name} welch t");
+        Golden.Close(Golden.Num(c, "welch_p"), welch.PValue, 1e-12, $"{name} welch p");
+        Golden.Close(Golden.Num(c, "logfc"), welch.LogFc, 1e-12, $"{name} logFC");
+
+        var student = Run(DifferentialTest.StudentT);
+        Golden.Close(Golden.Num(c, "student_t"), student.T, 1e-12, $"{name} student t");
+        Golden.Close(Golden.Num(c, "student_p"), student.PValue, 1e-12, $"{name} student p");
+
+        var mw = Run(DifferentialTest.MannWhitney);
+        Golden.Close(Golden.Num(c, "mw_u"), mw.T, 1e-12, $"{name} mann-whitney U");
+        Golden.Close(Golden.Num(c, "mw_p"), mw.PValue, 1e-12, $"{name} mann-whitney p");
+        // A rank test reports a median shift, not a mean difference.
+        Golden.Close(Golden.Num(c, "median_diff"), mw.LogFc, 1e-12, $"{name} median diff");
+    }
+
+    public static IEnumerable<object[]> SimpleTestCases() => Golden.CaseNames("simple_tests.json");
+
+    /// <summary>
+    /// The multiple-testing methods beside BH, against statsmodels. Every case is NaN-free, where
+    /// PRISM's own NaN policy and statsmodels' agree; <c>FdrTests</c> pins where they do not.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(CorrectionCases))]
+    public void Corrections_MatchStatsmodels(string name)
+    {
+        var c = Golden.Case("corrections.json", name);
+        var p = Golden.Vec(c, "p");
+
+        Golden.CloseAll(Golden.Vec(c, "by"),
+            Fdr.Adjust(p, MultipleTesting.BenjaminiYekutieli), 1e-12, $"{name} BY");
+        Golden.CloseAll(Golden.Vec(c, "bonferroni"),
+            Fdr.Adjust(p, MultipleTesting.Bonferroni), 1e-12, $"{name} bonferroni");
+        Golden.CloseAll(Golden.Vec(c, "holm"),
+            Fdr.Adjust(p, MultipleTesting.Holm), 1e-12, $"{name} holm");
+    }
+
+    public static IEnumerable<object[]> CorrectionCases() => Golden.CaseNames("corrections.json");
 }

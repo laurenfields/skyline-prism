@@ -6,6 +6,7 @@
 #     "scipy==1.18.1",
 #     "statsmodels==0.15.0",
 #     "inmoose==0.9.1",
+#     "proteomics-toolkit @ git+https://github.com/uw-maccosslab/proteomics-toolkit@v26.7.1",
 # ]
 # ///
 """Generate the differential-analysis golden fixtures from the reference implementations.
@@ -30,9 +31,21 @@ Which library is the reference for which quantity:
 | `Detection.FirthLogit`            | `scipy.optimize` on the penalized log-likelihood        |
 | `Pca.Fit` (center-only, complete-case) | `numpy.linalg.svd(full_matrices=False)`            |
 | `Detection.DetectionGlm`          | penalized LRT: `scipy.optimize` twice + `scipy.stats.chi2` |
+| `VariancePriors.IntensityTrend`   | `proteomics_toolkit._fit_intensity_trend_prior`          |
+| `SimpleTests` (Welch/Student)     | `scipy.stats.ttest_ind(equal_var=...)`                  |
+| `SimpleTests` (Mann-Whitney)      | `scipy.stats.mannwhitneyu(method='asymptotic')`         |
+| `Fdr.{BenjaminiYekutieli,Bonferroni,Holm}` | `statsmodels multipletests`                    |
 
 Nothing here imports PRISM. The point of a golden is that it was produced without reference to the
 code under test, so a shared mistake cannot cancel out.
+
+`VariancePriors.IntensityTrend` is the one entry whose reference is another MacCoss Lab tool
+rather than a third-party library, and that is deliberate rather than a lapse. The estimator is
+not a published formula with an independent implementation to check against - it is specifically
+`proteomics-toolkit`'s `moderation="intensity_trend"`, and reproducing THAT is the whole
+requirement. It stands in the same relation to PRISM as `inmoose` does for `squeezeVar`: the
+definition, not a second opinion. What the rule above forbids is consulting the C# code under
+test, and this does not.
 
 `FirthLogit` is the one entry with no library implementation to call. Rather than pin it to the
 sibling Python implementation it was ported from - which would only prove the two agree - the
@@ -54,9 +67,11 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import scipy.optimize
 import scipy.special
 import scipy.stats
+from scipy import stats
 from inmoose.limma import squeezeVar
 from inmoose.utils.splines import ns
 from statsmodels.stats.multitest import multipletests
@@ -885,6 +900,195 @@ def gen_detection_lrt() -> None:
     )
 
 
+def gen_intensity_trend() -> None:
+    """The toolkit's intensity-trend variance prior, per feature.
+
+    The fixture stores LOG2 values because that is what PRISM holds in memory (its parquet is linear
+    and the loader log2s it); the reference is handed the raw intensities those came from, so the
+    delta-method conversion back into log2 space is exercised on both sides rather than cancelling
+    out.
+    """
+    from proteomics_toolkit.statistical_analysis import _fit_intensity_trend_prior
+
+    class Cfg:
+        analysis_type = "unpaired"
+        group_column = "Group"
+        group_labels = ["A", "B"]
+        log_base = "log2"
+        variance_prior_group_column = None
+        variance_prior_groups = None
+        paired_column = None
+        time_column = None
+        dose_column = None
+
+    cases = []
+
+    def add(name: str, raw, n_a: int, note: str) -> None:
+        raw = np.asarray(raw, dtype=float)
+        n_feat, n_samp = raw.shape
+        n_b = n_samp - n_a
+        samples = [f"S{i}" for i in range(n_samp)]
+        features = [f"f{i}" for i in range(n_feat)]
+        expected, _ = _fit_intensity_trend_prior(
+            {"features": features},
+            pd.DataFrame(raw, index=features, columns=samples),
+            pd.DataFrame({"Sample": samples, "Group": ["A"] * n_a + ["B"] * n_b}),
+            Cfg(),
+        )
+        cases.append(
+            {
+                "name": name,
+                "note": note,
+                "n_a": n_a,
+                "n_b": n_b,
+                "expr_log2": mat(np.log2(raw)),
+                "expected": vec(np.asarray(expected, dtype=float)),
+            }
+        )
+
+    rng = Rng(29)
+    # Three decades of abundance, which is what makes a trend worth fitting at all.
+    base = [1.0e4, 3.0e4, 1.0e5, 4.0e5, 9.0e5, 2.0e6, 5.0e6, 1.2e7]
+
+    def arm(b, n, cv, mult=1.0):
+        return [abs(b * mult * (1.0 + cv * rng.normal())) for _ in range(n)]
+
+    add("eight_features_two_groups",
+        [arm(b, 4, 0.15) + arm(b, 4, 0.15, 1.4) for b in base], 4,
+        "8 features over three decades, 4 + 4 samples: the ordinary case")
+
+    # Heteroscedastic on purpose - noise falling with abundance is the relationship the LOWESS is
+    # there to capture, and the reason a single global prior is wrong.
+    cvs = [0.45, 0.38, 0.30, 0.22, 0.17, 0.13, 0.10, 0.08]
+    add("heteroscedastic",
+        [arm(b, 5, cv) + arm(b, 5, cv, 1.25) for b, cv in zip(base, cvs)], 5,
+        "noise falls with abundance - the trend the prior exists to follow")
+
+    # The per-feature combination is a SAMPLE-SIZE-weighted mean over groups, so an unbalanced
+    # design is the case that tells a weighted mean from a plain one.
+    add("unbalanced_arms",
+        [arm(b, 6, 0.2) + arm(b, 3, 0.2, 1.3) for b in base], 6,
+        "6 vs 3: distinguishes the sample-size-weighted combination from an unweighted one")
+
+    write(
+        "intensity_trend.json",
+        {
+            "reference": (
+                "proteomics_toolkit.statistical_analysis._fit_intensity_trend_prior "
+                "(moderation='intensity_trend'), v26.7.1"
+            ),
+            "note": (
+                "Per-feature PRIOR SCALE, in log2 space. The prior DEGREES OF FREEDOM are not part of "
+                "this estimator - they stay at the global value squeezeVar returns, which is exactly "
+                "what makes it the toolkit's prior rather than limma's trend=TRUE. `expr_log2` is "
+                "what PRISM holds in memory; the reference was handed 2**expr_log2."
+            ),
+            "cases": cases,
+        },
+    )
+
+
+def gen_simple_tests() -> None:
+    """Welch, Student and Mann-Whitney, per feature.
+
+    Mann-Whitney is pinned to ``method="asymptotic"`` ON PURPOSE. scipy's ``method="auto"`` switches
+    to the exact permutation distribution when the larger sample is 8 or fewer and there are no
+    ties; PRISM implements only the normal approximation, which is what every realistic cohort size
+    uses. Pinning ``auto`` here would encode a branch PRISM does not have and fail on the small
+    cases for a reason that has nothing to do with a defect.
+    """
+    rng = Rng(53)
+    cases = []
+
+    def add(name: str, a, b, note: str) -> None:
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        welch = stats.ttest_ind(b, a, equal_var=False)
+        student = stats.ttest_ind(b, a, equal_var=True)
+        mw = stats.mannwhitneyu(b, a, alternative="two-sided", method="asymptotic")
+        cases.append(
+            {
+                "name": name,
+                "note": note,
+                "a": vec(a),
+                "b": vec(b),
+                "welch_t": num(float(welch.statistic)),
+                "welch_p": num(float(welch.pvalue)),
+                "welch_df": num(float(welch.df)),
+                "student_t": num(float(student.statistic)),
+                "student_p": num(float(student.pvalue)),
+                "student_df": num(float(student.df)),
+                "mw_u": num(float(mw.statistic)),
+                "mw_p": num(float(mw.pvalue)),
+                "logfc": num(float(np.mean(b) - np.mean(a))),
+                "median_diff": num(float(np.median(b) - np.median(a))),
+            }
+        )
+
+    add("balanced", [rng.normal() for _ in range(6)], [1.2 + rng.normal() for _ in range(6)],
+        "6 vs 6, similar spread")
+    add("unequal_variance",
+        [rng.normal() * 0.3 for _ in range(7)], [0.8 + rng.normal() * 2.5 for _ in range(9)],
+        "the case Welch and Student disagree on - unequal n AND unequal spread")
+    add("unbalanced_n", [rng.normal() for _ in range(12)], [0.5 + rng.normal() for _ in range(4)],
+        "12 vs 4")
+    add("no_difference", [rng.normal() for _ in range(10)], [rng.normal() for _ in range(10)],
+        "null case: p should be unremarkable")
+    add("with_ties",
+        [round(rng.normal(), 1) for _ in range(10)], [round(0.6 + rng.normal(), 1) for _ in range(10)],
+        "rounded values, so Mann-Whitney's tie correction is exercised")
+    add("large", [rng.normal() for _ in range(40)], [0.35 + rng.normal() for _ in range(40)],
+        "40 vs 40, where the normal approximation is the only sensible test anyway")
+
+    write(
+        "simple_tests.json",
+        {
+            "reference": (
+                "scipy.stats.ttest_ind(equal_var=False|True) and "
+                "scipy.stats.mannwhitneyu(alternative='two-sided', method='asymptotic')"
+            ),
+            "note": (
+                "Contrast direction is B - A throughout, matching the moderated path. Mann-Whitney's "
+                "U is for B against A. `median_diff` is what PRISM reports as the rank test's "
+                "effect: a rank test makes no claim about means."
+            ),
+            "cases": cases,
+        },
+    )
+
+
+def gen_corrections() -> None:
+    """The multiple-testing methods beside BH."""
+    rng = Rng(67)
+    cases = []
+
+    def add(name: str, p, note: str) -> None:
+        p = np.asarray(p, dtype=float)
+        row = {"name": name, "note": note, "p": vec(p)}
+        for key, method in (("by", "fdr_by"), ("bonferroni", "bonferroni"), ("holm", "holm")):
+            row[key] = vec(multipletests(p, method=method)[1])
+        cases.append(row)
+
+    add("uniform_steps", [0.01, 0.02, 0.03, 0.04, 0.05], "every step-up value equal")
+    add("one_strong_hit", [1e-8, 0.2, 0.4, 0.6, 0.8, 0.9], "a single dominant hit")
+    add("ties", [0.04, 0.04, 0.04, 0.2, 0.2, 0.9], "tied p-values take an identical adjusted value")
+    add("single", [0.031], "m = 1: every method returns the raw value")
+    add("many", [rng.next_double() ** 3 for _ in range(200)], "200 values, skewed to small p")
+
+    write(
+        "corrections.json",
+        {
+            "reference": "statsmodels.stats.multitest.multipletests(method='fdr_by'|'bonferroni'|'holm')",
+            "note": (
+                "PRISM's NaN policy (pass through, excluded from m) is its own and differs from "
+                "statsmodels, which returns all-NaN if any input is NaN - so every case here is "
+                "NaN-free, where the two agree exactly. FdrTests pins the NaN behavior."
+            ),
+            "cases": cases,
+        },
+    )
+
+
 def main() -> None:
     if not OUT.is_dir():
         raise SystemExit(f"run from the repository root: {OUT} not found")
@@ -898,6 +1102,9 @@ def main() -> None:
     gen_firth()
     gen_pca()
     gen_detection_lrt()
+    gen_intensity_trend()
+    gen_simple_tests()
+    gen_corrections()
 
 
 if __name__ == "__main__":

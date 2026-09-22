@@ -103,6 +103,51 @@ public class SignificanceScanTests
         Assert.Equal(expected, splits);
     }
 
+    /// <summary>
+    /// The budget has to be overshot by exactly one, because that extra split is the ONLY way
+    /// <see cref="SignificanceScan.Run"/> can tell "there were more candidates" from "that was all of
+    /// them" - it sets Truncated on receiving a split past maxTests. Stopping at exactly maxTests
+    /// made a capped SubsetPairs search report <c>Truncated == false</c> however many candidates it
+    /// had actually left untested. OneVsRest and Pairwise are uncapped here and so were never
+    /// affected.
+    /// </summary>
+    [Fact]
+    public void EnumerateSplits_SubsetPairs_OvershootsTheBudgetByOneSoTruncationIsDetectable()
+    {
+        var capped = SignificanceScan
+            .EnumerateSplits(new[] { "a", "b", "c" }, ScanScope.SubsetPairs, 3)
+            .ToArray();
+
+        Assert.Equal(4, capped.Length);
+
+        // And a budget no smaller than the candidate count still yields them all, with no phantom
+        // extra split invented to signal a truncation that did not happen.
+        var whole = SignificanceScan
+            .EnumerateSplits(new[] { "a", "b", "c" }, ScanScope.SubsetPairs, 6)
+            .ToArray();
+
+        Assert.Equal(6, whole.Length);
+    }
+
+    /// <summary>
+    /// The user-visible half of the same rule: a scan that ran out of budget must say so, and one
+    /// that covered every split must not.
+    /// </summary>
+    [Fact]
+    public void Run_SubsetPairs_ReportsTruncatedOnlyWhenTheBudgetRanOut()
+    {
+        var capped = SignificanceScan.Run(
+            BuildMatrix(), FeatureIds, Labels, null, ScanScope.SubsetPairs, maxTests: 3);
+
+        Assert.True(capped.Truncated);
+        Assert.Equal(3, capped.Rows.Count);   // the overshoot split is a signal, never a result
+
+        var whole = SignificanceScan.Run(
+            BuildMatrix(), FeatureIds, Labels, null, ScanScope.SubsetPairs, maxTests: 400);
+
+        Assert.False(whole.Truncated);
+    }
+
     [Fact]
     public void PermuteCalibrate_IsReproducibleAndBelowObserved()
     {

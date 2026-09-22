@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -11,7 +11,9 @@ using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.DifferentialAnalysis.Detection;
 using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
 using SkylinePrism.Core.IO;
+using SkylinePrism.Core.Qc;
 using SkylinePrism.Core.Visualization;
+using SkylinePrism.Skyline;
 
 namespace SkylinePrism.App;
 
@@ -31,12 +33,38 @@ public partial class MainWindow
     private static readonly HashSet<string> ReservedMetaColumns =
         new(StringComparer.Ordinal) { "sample", "sample_type", "batch" };
 
+    /// <summary>
+    /// Marker sizes for the scatter views (Volcano and the two Detection plots), the significant
+    /// series a little larger so it still reads as the emphasized one.
+    /// </summary>
+    /// <remarks>
+    /// Raised from 6/7. At that size a point on a full-screen Volcano was a two-pixel speck: hard to
+    /// see at all on a sparse plot, and much smaller than the 18 px
+    /// <see cref="QcPlotChrome.HoverRadiusPx"/> that decides what a click lands on - so the target
+    /// was far bigger than the thing it was aiming at, which reads as a plot that does not respond.
+    /// Named rather than repeated at each call site, because the three views must agree for the
+    /// hover radius to mean the same thing on each.
+    /// </remarks>
+    private const float DiffPointSize = 9;
+
+    /// <summary><see cref="DiffPointSize"/> for the significant series.</summary>
+    private const float DiffSigPointSize = 11;
+
     private DifferentialDataset? _diffDataset;
     private Dictionary<string, string> _diffLabelById = new(StringComparer.Ordinal);
+
+    /// <summary>Feature id -> gene symbol(s), for enrichment only. No entry where none is known.</summary>
+    private Dictionary<string, string> _diffGeneById = new(StringComparer.Ordinal);
     private DetectionMatrixData? _detectionData;
     private string? _detectionDir;
     private string? _clinicalCsvPath;
     private List<QcGroupValue> _diffCovariateValues = new();
+
+    // The two contrast arms, as tick lists. An arm is a SET of metadata values whose samples are
+    // pooled, not a single value - which is what lets two control classes be contrasted against the
+    // rest as one arm.
+    private List<QcGroupValue> _diffAValues = new();
+    private List<QcGroupValue> _diffBValues = new();
     private HttpJsonPoster? _diffPoster;
     private bool _diffSuppress;
     private int _diffRequest;
@@ -53,6 +81,24 @@ public partial class MainWindow
     private string _volcanoAName = "A";
     private string _volcanoBName = "B";
     private FeatureDetailWindow? _featureDetailWindow;
+
+    // Hover readout and selection ring, both created hidden by RenderVolcano and then only moved.
+    // Moving a plottable and refreshing is far cheaper than re-rendering, and it means the highlight
+    // does not depend on keeping the DifferentialResult alive to redraw from.
+    private ScottPlot.Plottables.Marker? _volcanoHoverMarker;
+    private ScottPlot.Plottables.Text? _volcanoHoverText;
+    private ScottPlot.Plottables.Marker? _volcanoSelMarker;
+
+    /// <summary>The feature the plot ring and the grid row are both pointing at, or null.</summary>
+    private string? _volcanoSelectedId;
+
+    /// <summary>
+    /// Set while one of the two selections is being driven from the other. The grid raises
+    /// SelectionChanged when its SelectedItem is set in code, so without this a plot click would
+    /// select the row, which would re-enter and select the point, and each hop would re-issue the
+    /// Skyline selection and reopen the detail window.
+    /// </summary>
+    private bool _volcanoSyncing;
 
     private enum DiffView
     {
@@ -86,6 +132,73 @@ public partial class MainWindow
             ? FeatureLevel.Peptide
             : FeatureLevel.Protein;
 
+    /// <summary>
+    /// The variance prior the Prior combo is pointing at, defaulting to the lab's choice before the
+    /// combo has been populated (the first render happens during window construction).
+    /// </summary>
+    private VariancePrior DiffSelectedPrior() =>
+        ((DiffPriorCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "Global" => VariancePrior.Global,
+            "LimmaTrend" => VariancePrior.LimmaTrend,
+            _ => VariancePrior.IntensityTrend,
+        };
+
+    /// <summary>The estimator the Test combo is pointing at.</summary>
+    private DifferentialTest DiffSelectedTest() =>
+        ((DiffTestCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "WelchT" => DifferentialTest.WelchT,
+            "StudentT" => DifferentialTest.StudentT,
+            "MannWhitney" => DifferentialTest.MannWhitney,
+            _ => DifferentialTest.ModeratedT,
+        };
+
+    /// <summary>The multiple-testing correction the Correct combo is pointing at.</summary>
+    private MultipleTesting DiffSelectedCorrection() =>
+        ((DiffCorrectionCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "BenjaminiYekutieli" => MultipleTesting.BenjaminiYekutieli,
+            "Holm" => MultipleTesting.Holm,
+            "Bonferroni" => MultipleTesting.Bonferroni,
+            "None" => MultipleTesting.None,
+            _ => MultipleTesting.BenjaminiHochberg,
+        };
+
+    /// <summary>What the contrast views should run: the current selections, as Core sees them.</summary>
+    private DifferentialOptions DiffOptions(IReadOnlyList<Covariate>? covariates) =>
+        new()
+        {
+            Covariates = covariates,
+            Test = DiffSelectedTest(),
+            Prior = DiffSelectedPrior(),
+            Correction = DiffSelectedCorrection(),
+            MinPerGroup = 2,
+        };
+
+    /// <summary>
+    /// Show only the controls the selected test actually uses.
+    /// </summary>
+    /// <remarks>
+    /// The same two rules the QC pane's <c>UpdateQcControls</c> documents, for the same reasons.
+    /// The variance prior is <b>hidden</b> outside the moderated t, because it means nothing there
+    /// and this row is already crowded - a disabled control still invites a click. "Adjust for" is
+    /// <b>greyed</b> rather than hidden, because it is a real and common setting that simply cannot
+    /// be honored by a test with no design matrix; hiding it would make a ticked covariate vanish
+    /// with the control, and leaving it live would imply the contrast had been adjusted when it had
+    /// not.
+    /// </remarks>
+    private void UpdateDiffControls()
+    {
+        var moderated = DiffSelectedTest() == DifferentialTest.ModeratedT;
+        var priorVisibility = moderated ? Visibility.Visible : Visibility.Collapsed;
+        DiffPriorLabel.Visibility = priorVisibility;
+        DiffPriorCombo.Visibility = priorVisibility;
+
+        DiffCovariatesLabel.IsEnabled = moderated;
+        DiffCovariatesCombo.IsEnabled = moderated;
+    }
+
     private DiffView DiffSelectedView() =>
         ((DiffViewCombo.SelectedItem as ComboBoxItem)?.Content as string) switch
         {
@@ -113,6 +226,13 @@ public partial class MainWindow
                 DiffViewCombo.SelectedIndex = 0;
             if (DiffLevelCombo.SelectedItem is null)
                 DiffLevelCombo.SelectedIndex = 0;
+            // Index 0 is Intensity trend - the lab's default, and deliberately NOT set in the XAML.
+            if (DiffPriorCombo.SelectedItem is null)
+                DiffPriorCombo.SelectedIndex = 0;
+            if (DiffTestCombo.SelectedItem is null)
+                DiffTestCombo.SelectedIndex = 0; // Moderated t
+            if (DiffCorrectionCombo.SelectedItem is null)
+                DiffCorrectionCombo.SelectedIndex = 0; // Benjamini-Hochberg
         }
         finally
         {
@@ -151,9 +271,17 @@ public partial class MainWindow
         _diffLoadedDir = dir;
         _diffLoadedLevel = level;
         _diffLabelById = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Genes are kept in their own map: unlike the label there is NO falling back to the feature
+        // id, because a protein group id or a peptide sequence is not a gene symbol and enrichment
+        // would submit it as one.
+        _diffGeneById = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < ds.FeatureIds.Length; i++)
+        {
             _diffLabelById[ds.FeatureIds[i]] =
                 string.IsNullOrEmpty(ds.FeatureLabels[i]) ? ds.FeatureIds[i] : ds.FeatureLabels[i];
+            if (!string.IsNullOrEmpty(ds.FeatureGenes[i]))
+                _diffGeneById[ds.FeatureIds[i]] = ds.FeatureGenes[i];
+        }
 
         // Re-apply a previously attached clinical CSV to the freshly loaded dataset (best-effort).
         if (_clinicalCsvPath is not null && File.Exists(_clinicalCsvPath))
@@ -180,7 +308,7 @@ public partial class MainWindow
         }
 
         PopulateDiffGroupValues();
-        UpdateDiffCaveat();
+        UpdateDiffControls();
         DiffStatusText.Text =
             $"Loaded {ds.FeatureIds.Length} {level.ToString().ToLowerInvariant()} features x " +
             $"{ds.SampleIds.Length} samples. Pick groups and Run.";
@@ -213,20 +341,53 @@ public partial class MainWindow
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToList();
 
-        DiffACombo.ItemsSource = values;
-        DiffBCombo.ItemsSource = values;
-        if (values.Count >= 2)
-        {
-            DiffACombo.SelectedIndex = 0;
-            DiffBCombo.SelectedIndex = 1;
-        }
-        else
-        {
-            DiffACombo.SelectedIndex = -1;
-            DiffBCombo.SelectedIndex = -1;
-        }
+        // Default to the first two values, which is what the single pickers did; anything more is
+        // an explicit choice by the user.
+        _diffAValues = values
+            .Select((v, i) => new QcGroupValue
+            {
+                Name = v!, IsSelected = i == 0, Changed = UpdateDiffArmSummaries,
+            })
+            .ToList();
+        _diffBValues = values
+            .Select((v, i) => new QcGroupValue
+            {
+                Name = v!, IsSelected = i == 1, Changed = UpdateDiffArmSummaries,
+            })
+            .ToList();
+
+        DiffACombo.ItemsSource = _diffAValues;
+        DiffBCombo.ItemsSource = _diffBValues;
+        UpdateDiffArmSummaries();
 
         PopulateDiffCovariates(col);
+    }
+
+    /// <summary>
+    /// The closed-state text of the two arm pickers, and of the covariates picker beside them.
+    /// </summary>
+    /// <remarks>
+    /// A tick-list ComboBox has no SelectedItem, so WPF has nothing to display when it is closed and
+    /// the text stays at whatever the XAML set. Every other tick list in this window writes its own
+    /// summary; the covariates one did not, so it read "(none)" however many covariates were ticked -
+    /// fixed here rather than left as the odd one out.
+    /// </remarks>
+    private void UpdateDiffArmSummaries()
+    {
+        DiffACombo.Text = SummarizeArm(_diffAValues);
+        DiffBCombo.Text = SummarizeArm(_diffBValues);
+        var covariates = _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        DiffCovariatesCombo.Text = covariates.Count == 0 ? "(none)" : string.Join(", ", covariates);
+    }
+
+    /// <summary>
+    /// " + " rather than ", ": the values are POOLED into one arm, and a comma reads like a list of
+    /// separate things to compare.
+    /// </summary>
+    private static string SummarizeArm(IReadOnlyList<QcGroupValue> values)
+    {
+        var on = values.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        return on.Count == 0 ? "(pick one or more)" : string.Join(" + ", on);
     }
 
     private void PopulateDiffCovariates(string groupByColumn)
@@ -237,7 +398,7 @@ public partial class MainWindow
         // Any metadata column can be a covariate except the sample id itself and the contrast column.
         _diffCovariateValues = _diffDataset.MetadataColumns
             .Where(c => c != groupByColumn && c != "sample")
-            .Select(c => new QcGroupValue { Name = c })
+            .Select(c => new QcGroupValue { Name = c, Changed = UpdateDiffArmSummaries })
             .ToList();
         DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
     }
@@ -370,6 +531,13 @@ public partial class MainWindow
             // that put a second PCA in this pane in the first place.
             PublishClinicalToQcPane(result.AddedColumns);
 
+            // The Markers pane keeps its own cache for the OTHER feature level, and that copy was
+            // loaded before this join existed. GetMarkersDatasetAsync reuses the Differential
+            // dataset when the directory and level both match - so the stale case is specifically
+            // the two panes sitting on different levels, where the marker cache is returned as-is
+            // and the clinical columns promised here never appear in it.
+            InvalidateMarkers();
+
             // Refresh the group-by choices so the new clinical columns appear; select the first one.
             _diffSuppress = true;
             try
@@ -428,7 +596,6 @@ public partial class MainWindow
             return;
         }
 
-        UpdateDiffCaveat();
         switch (DiffSelectedView())
         {
             case DiffView.Detection:
@@ -443,35 +610,6 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>
-    /// Show the honest interpretation caveats for the current view, carried over from the explorer's
-    /// README so the native tool does not lose them. These are the methodology limits a reader must keep
-    /// in mind, not error messages.
-    /// </summary>
-    private void UpdateDiffCaveat()
-    {
-        DiffCaveatText.Text = DiffSelectedView() switch
-        {
-            DiffView.Detection =>
-                "Detection recovers genuine on/off from transition-level merged_data (a cell counts as "
-                + "detected only where DetectionQValue < 0.01), which the dense abundance matrix cannot "
-                + "show. Per-peptide Fisher exact test, or Firth-penalized logistic regression when "
-                + "covariates are set. Peptides from one protein are correlated, so the BH q-values are "
-                + "exploratory ranking, not protein-level significance.",
-            DiffView.Enrichment =>
-                "Enrichment runs g:Profiler over the significant hits against the tested background and "
-                + "needs network access. It only re-describes the hit list - any inflation from the "
-                + "caveats on the Volcano or Detection views is carried straight into it. Exploratory.",
-            _ =>
-                "Volcano is limma moderated-t on the log2 corrected matrix, which is DENSE: Skyline "
-                + "integrates a peak boundary for every replicate, so an 'undetected' peptide is imputed "
-                + "baseline, not missing - a fold change can reflect baseline noise rather than real "
-                + "signal (use the Detection view for on/off). At peptide level BH q-values are "
-                + "anti-conservative (peptides from one protein are correlated). When batch and condition "
-                + "are confounded, add batch under 'Adjust for'.",
-        };
-    }
-
     private bool TryGetGroups(out string col, out List<int> groupA, out List<int> groupB,
         out string aVal, out string bVal)
     {
@@ -480,35 +618,56 @@ public partial class MainWindow
         bVal = string.Empty;
         groupA = new List<int>();
         groupB = new List<int>();
-        if (_diffDataset is null || DiffGroupByCombo.SelectedItem is not string c
-            || DiffACombo.SelectedItem is not string a || DiffBCombo.SelectedItem is not string b || a == b)
+        if (_diffDataset is null || DiffGroupByCombo.SelectedItem is not string c)
+            return false;
+
+        var aSet = _diffAValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        var bSet = _diffBValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        if (aSet.Count == 0 || bSet.Count == 0)
+            return false;
+
+        // A value in both arms would put the same samples on both sides of the contrast, which is
+        // not a contrast. Refused here rather than silently dropped from one side, because which
+        // side it was dropped from would change the answer.
+        if (aSet.Intersect(bSet, StringComparer.Ordinal).Any())
             return false;
 
         col = c;
-        aVal = a;
-        bVal = b;
+        aVal = string.Join(" + ", aSet);
+        bVal = string.Join(" + ", bSet);
+        var inA = new HashSet<string>(aSet, StringComparer.Ordinal);
+        var inB = new HashSet<string>(bSet, StringComparer.Ordinal);
         var meta = _diffDataset.MetadataValues(c);
-        groupA = Enumerable.Range(0, meta.Length).Where(j => meta[j] == a).ToList();
-        groupB = Enumerable.Range(0, meta.Length).Where(j => meta[j] == b).ToList();
-        return true;
+        for (var j = 0; j < meta.Length; j++)
+        {
+            if (meta[j] is not { } v)
+                continue;
+            if (inA.Contains(v))
+                groupA.Add(j);
+            else if (inB.Contains(v))
+                groupB.Add(j);
+        }
+
+        return groupA.Count > 0 && groupB.Count > 0;
     }
 
     private async Task RunVolcanoAsync()
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
-            DiffStatusText.Text = "Pick a group-by column and two different values.";
+            DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
+                + "arm. A value cannot be in both.";
             return;
         }
 
         var dataset = _diffDataset!;
         var covariates = SelectedCovariatesFor(dataset.SampleIds);
-        var trend = DiffTrendCheck.IsChecked == true;
+        var options = DiffOptions(covariates);
         DifferentialResult res;
         try
         {
             res = await Task.Run(() =>
-                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates, trend));
+                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, options));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -528,16 +687,22 @@ public partial class MainWindow
 
         var nSig = res.Rows.Count(r => r.AdjPValue < 0.05 && Math.Abs(r.LogFc) >= 1.0);
         var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
+        // Name the method. With a menu this size the status line is the only record of what
+        // produced a hit list, and any message Core raised (an unhonoured covariate, a prior that
+        // could not be fitted) belongs beside it rather than nowhere.
+        var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
         DiffStatusText.Text =
-            $"{aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - {res.NFeaturesTested} tested, {nSig} significant{adj}. "
-            + "Click a point for its per-sample boxplot.";
+            $"{options.Describe()}: {aVal} (n={a.Count}) vs {bVal} (n={b.Count}) - "
+            + $"{res.NFeaturesTested} tested, {nSig} significant{adj}.{note} "
+            + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
     }
 
     private async Task RunDetectionAsync()
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
-            DiffStatusText.Text = "Pick a group-by column and two different values.";
+            DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
+                + "arm. A value cannot be in both.";
             return;
         }
 
@@ -645,18 +810,37 @@ public partial class MainWindow
     {
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
-            DiffStatusText.Text = "Pick a group-by column and two different values.";
+            DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
+                + "arm. A value cannot be in both.";
             return;
         }
 
         var dataset = _diffDataset!;
+
+        // Enrichment is about GENES, so it reads FeatureGenes and never the display label. At
+        // peptide level the label is the modified sequence, and a sequence passes CleanSymbols
+        // untouched - it only drops empty/"nan" and splits delimiters - so using the label asked
+        // g:Profiler about a list of peptide sequences and captioned the empty answer as a gene
+        // enrichment. leading_gene_name is stamped onto corrected_peptides for exactly this, so
+        // peptide-level enrichment works; it is only impossible on a peptide file written before
+        // that column existed, and then we say so rather than guess.
+        if (dataset.FeatureGenes.All(string.IsNullOrEmpty))
+        {
+            ClearDiffOutput();
+            DiffStatusText.Text =
+                "Enrichment needs gene symbols and this run carries none - its "
+                + (dataset.Level == FeatureLevel.Protein ? "protein" : "peptide")
+                + " matrix has no leading_gene_name column. Re-run the pipeline to add it.";
+            return;
+        }
+
         var covariates = SelectedCovariatesFor(dataset.SampleIds);
-        var trend = DiffTrendCheck.IsChecked == true;
+        var options = DiffOptions(covariates);
         DifferentialResult res;
         try
         {
             res = await Task.Run(() =>
-                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, 2, covariates, trend));
+                Differential.Run(dataset.ExprLog2, dataset.FeatureIds, a, b, options));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -665,7 +849,7 @@ public partial class MainWindow
         }
 
         var (sig, background) = Enrichment.SigAndBackgroundGenes(
-            res, fid => _diffLabelById.GetValueOrDefault(fid), 0.05, 1.0);
+            res, fid => _diffGeneById.GetValueOrDefault(fid), 0.05, 1.0);
         if (sig.Count == 0)
         {
             ClearDiffOutput();
@@ -736,8 +920,8 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, "q >= 0.05");
-        AddMarkers(plt, sigX, sigY, "#2ca02c", 7, "q < 0.05");
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "q >= 0.05");
+        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "q < 0.05");
         plt.Add.VerticalLine(0.0);
         plt.ShowLegend();
         plt.XLabel("log odds ratio (B / A)");
@@ -785,31 +969,181 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// On the Volcano view, a click near a point opens a per-feature boxplot of that feature's log2
-    /// abundance split by the two contrast groups (the explorer's "Feature detail").
+    /// On the Volcano view, a click near a point makes that feature the selection: it rings the
+    /// point, selects its row in the hit table, opens the per-feature boxplot, and selects the
+    /// protein or peptide in Skyline.
     /// </summary>
     private void OnDiffPlotMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0 || _diffDataset is null)
-            return;
+        try
+        {
+            if (DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0 || _diffDataset is null)
+                return;
 
-        var plt = DiffPlot.Plot;
-        var pos = e.GetPosition(DiffPlot);
-        var scale = DiffPlot.DisplayScale;
-        var cursor = new ScottPlot.Pixel(pos.X * scale, pos.Y * scale);
-        var idx = QcPlotChrome.NearestPoint(
-            _volcanoPoints.Select(p => plt.GetPixel(p.Loc)).ToList(), cursor);
-        if (idx < 0)
-            return;
+            var plt = DiffPlot.Plot;
+            var pos = e.GetPosition(DiffPlot);
+            var scale = DiffPlot.DisplayScale;
+            var cursor = new ScottPlot.Pixel(pos.X * scale, pos.Y * scale);
+            var idx = QcPlotChrome.NearestPoint(
+                _volcanoPoints.Select(p => plt.GetPixel(p.Loc)).ToList(), cursor);
+            if (idx < 0)
+                return;
 
-        ShowFeatureDetail(_volcanoPoints[idx].FeatureId);
+            SelectVolcanoFeature(_volcanoPoints[idx].FeatureId);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffPlotMouseDown), ex);
+        }
     }
 
-    /// <summary>Selecting a hit row in the sidebar opens the same per-feature boxplot as a volcano click.</summary>
+    /// <summary>
+    /// Changing the estimator re-runs the current view, and shows or hides the controls that only
+    /// some estimators use.
+    /// </summary>
+    private async void OnDiffTestChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized)
+                return;
+            // Outside the suppress guard: the controls must follow the combo even while a load is
+            // populating the pane, or they would be left describing the previous test.
+            UpdateDiffControls();
+            if (_diffSuppress || _diffDataset is null)
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffTestChanged), ex);
+        }
+    }
+
+    /// <summary>Changing the correction re-runs: it changes every adjusted p in the table.</summary>
+    private async void OnDiffCorrectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffCorrectionChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// Changing the variance prior re-runs the current view, the way changing the View already does -
+    /// it is a different estimator, so the plot on screen is no longer the one the controls describe.
+    /// </summary>
+    private async void OnDiffPriorChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            // IsInitialized as well as the suppress flag: this combo has a SelectionChanged handler,
+            // and if it ever gains a XAML-side default it would fire part way through
+            // InitializeComponent. See XamlInitializationOrderTests.
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffPriorChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// Selecting a hit row does everything a volcano click does - the same selection, reached from
+    /// the other side - so the ring moves to that feature's point and Skyline follows too.
+    /// </summary>
     private void OnDiffGridSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DiffGrid.SelectedItem is VolcanoRow vr)
-            ShowFeatureDetail(vr.FeatureId);
+        try
+        {
+            if (DiffGrid.SelectedItem is VolcanoRow vr)
+                SelectVolcanoFeature(vr.FeatureId);
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffGridSelectionChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// Select the feature's protein or peptide in the running Skyline document, and say what
+    /// happened in the status line.
+    /// </summary>
+    /// <remarks>
+    /// <para>Shares the Dynamic Range pane's locator machinery rather than repeating it: the same
+    /// cached document tree, the same "try each of PRISM's groups then fall back to the sequence's
+    /// first occurrence" precedence, and the same distinction between "could not read the tree" and
+    /// "this one is not in it" - which look identical to a user but need opposite responses.</para>
+    /// <para>Nothing happens at all when PRISM is running standalone; that is reported once, in the
+    /// status line, rather than being silent.</para>
+    /// </remarks>
+    private void SelectFeatureInSkyline(string featureId)
+    {
+        var identity = _diffDataset?.IdentityOf(featureId);
+        if (identity is null)
+            return;
+
+        var label = identity.Describe();
+        if (_session is null)
+        {
+            // Said rather than skipped: the click asked for something specific and nothing at all
+            // happened, which is indistinguishable from a click that missed the point.
+            DiffStatusText.Text = $"{label} - not attached to a running Skyline, so nothing to select.";
+            return;
+        }
+
+        // The DATASET's level, not _diffLoadedLevel: the identity just came out of this dataset, and
+        // resolving it against the other level's document tree would look up a peptide among
+        // proteins.
+        var level = _diffDataset!.Level == FeatureLevel.Protein
+            ? AbundanceLevel.Protein
+            : AbundanceLevel.Peptide;
+
+        // ResolveLocator speaks AbundanceEntry, so the identity is presented as one. Only the
+        // identity fields matter here - the abundance/rank fields are never read on this path.
+        var entry = new AbundanceEntry(
+            Key: identity.FeatureId,
+            Label: identity.Label,
+            Accession: identity.Accessions.FirstOrDefault(),
+            Gene: identity.Genes.FirstOrDefault(),
+            ProteinName: identity.ProteinNames.FirstOrDefault(),
+            MeanAbundance: 0, Log10Abundance: 0, Rank: 0, SamplesUsed: 0)
+        {
+            ProteinGroups = identity.ProteinGroups,
+            ProteinNames = identity.ProteinNames,
+        };
+
+        var locator = ResolveLocatorLocked(entry, level, out var viaFallback, out var treeUnavailable);
+        if (locator is null)
+        {
+            DiffStatusText.Text = treeUnavailable
+                ? $"{label} - could not read the document tree from Skyline (it may be busy; see the "
+                  + "Log tab). Click again to retry."
+                : $"{label} - no matching element in the Skyline document (PRISM's protein grouping "
+                  + "can differ from the document's).";
+            return;
+        }
+
+        var driver = new SkylineReportDriver(_session, Log);
+        if (!driver.SelectElement(locator))
+        {
+            DiffStatusText.Text = $"Could not select {label} in Skyline.";
+            return;
+        }
+
+        DiffStatusText.Text = $"Selected {label} in Skyline"
+            + (viaFallback
+                ? " - under the first protein in the document tree, since PRISM's grouping did not "
+                  + "match a protein node."
+                : ".");
     }
 
     private void ShowFeatureDetail(string featureId)
@@ -820,20 +1154,28 @@ public partial class MainWindow
         if (row < 0)
             return;
 
+        // Values and replicate names are collected together so they stay index-aligned: the
+        // non-finite cells are skipped, and a name list built separately would silently shift.
         var aVals = new List<double>();
+        var aReps = new List<string>();
         foreach (var s in _volcanoGroupA)
         {
             var v = _diffDataset.ExprLog2[row, s];
-            if (double.IsFinite(v))
-                aVals.Add(v);
+            if (!double.IsFinite(v))
+                continue;
+            aVals.Add(v);
+            aReps.Add(_diffDataset.SampleIds[s]);
         }
 
         var bVals = new List<double>();
+        var bReps = new List<string>();
         foreach (var s in _volcanoGroupB)
         {
             var v = _diffDataset.ExprLog2[row, s];
-            if (double.IsFinite(v))
-                bVals.Add(v);
+            if (!double.IsFinite(v))
+                continue;
+            bVals.Add(v);
+            bReps.Add(_diffDataset.SampleIds[s]);
         }
 
         var label = _diffLabelById.GetValueOrDefault(featureId, featureId);
@@ -846,7 +1188,8 @@ public partial class MainWindow
         }
 
         _featureDetailWindow.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
-            dr?.AdjPValue ?? double.NaN, _volcanoAName, aVals, _volcanoBName, bVals);
+            dr?.AdjPValue ?? double.NaN,
+            _volcanoAName, aVals, aReps, _volcanoBName, bVals, bReps);
         _featureDetailWindow.Show();
         _featureDetailWindow.Activate();
     }
@@ -860,12 +1203,16 @@ public partial class MainWindow
         var bgY = new List<double>();
         var sigX = new List<double>();
         var sigY = new List<double>();
-        var pThresh = double.NaN;
         _volcanoPoints = new List<(ScottPlot.Coordinates, string)>(res.Rows.Count);
         _volcanoRowById = new Dictionary<string, DifferentialRow>(StringComparer.Ordinal);
         foreach (var r in res.Rows)
         {
-            var y = -Math.Log10(Math.Max(r.PValue, 1e-300));
+            // The ADJUSTED p-value, because that is what decides a hit here (AdjPValue < 0.05) and
+            // what the axis says. Differential.Run always applies Benjamini-Hochberg, so AdjPValue is
+            // always a q-value - there is no raw-only mode to fall back to. Plotting raw p while
+            // colouring by q put the cut-off line at whatever raw p the weakest surviving hit
+            // happened to have, which moved with the data and matched no number the reader could see.
+            var y = -Math.Log10(Math.Max(r.AdjPValue, 1e-300));
             if (double.IsFinite(r.LogFc) && double.IsFinite(y))
                 _volcanoPoints.Add((new ScottPlot.Coordinates(r.LogFc, y), r.FeatureId));
             _volcanoRowById[r.FeatureId] = r;
@@ -873,8 +1220,6 @@ public partial class MainWindow
             {
                 sigX.Add(r.LogFc);
                 sigY.Add(y);
-                if (double.IsNaN(pThresh) || r.PValue > pThresh)
-                    pThresh = r.PValue;
             }
             else
             {
@@ -883,18 +1228,227 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, "not significant");
-        AddMarkers(plt, sigX, sigY, "#d62728", 7, "significant");
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "not significant");
+        AddMarkers(plt, sigX, sigY, "#d62728", DiffSigPointSize, "significant");
         plt.Add.VerticalLine(1.0);
         plt.Add.VerticalLine(-1.0);
-        if (!double.IsNaN(pThresh))
-            plt.Add.HorizontalLine(-Math.Log10(Math.Max(pThresh, 1e-300)));
+        // Now an exact, readable threshold rather than a data-dependent one: q = 0.05.
+        plt.Add.HorizontalLine(-Math.Log10(0.05));
+
+        // Both overlays belong to this Plot instance, so they are recreated with it and must be
+        // re-seeded rather than carried over from the previous contrast.
+        AddVolcanoOverlays(plt);
 
         plt.ShowLegend();
         plt.XLabel("log2 fold change (B / A)");
-        plt.YLabel("-log10 P");
+        // Benjamini-Hochberg is unconditional, so name what is actually on the axis. Ties in the
+        // adjusted values are expected and show up as horizontal bands - that is a property of BH,
+        // not a rendering fault.
+        plt.YLabel("-log10(adjusted p-value)");
         PlotRenderer.StyleQcPlot(plt);
         DiffPlot.Refresh();
+    }
+
+    /// <summary>
+    /// The Volcano's hidden hover readout (ring + text) and its selection ring, seeded anywhere -
+    /// they are positioned when something is hovered or selected.
+    /// </summary>
+    private void AddVolcanoOverlays(ScottPlot.Plot plt)
+    {
+        var hover = plt.Add.Marker(
+            0, 0, ScottPlot.MarkerShape.OpenCircle, DiffPointSize + 11, ScottPlot.Colors.Black);
+        hover.IsVisible = false;
+        _volcanoHoverMarker = hover;
+
+        var text = plt.Add.Text(" ", 0, 0);
+        // 20 to match the QC pane's readout: StyleQcPlot draws tick labels at 24, so a smaller size
+        // makes the one piece of text a user leans in to read the smallest on the plot.
+        PlotRenderer.StyleTextLabel(text, 20, bold: true);
+        text.LabelFontColor = ScottPlot.Colors.Black;
+        text.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.85);
+        text.LabelAlignment = ScottPlot.Alignment.LowerLeft;
+        text.IsVisible = false;
+        _volcanoHoverText = text;
+
+        // Distinguishable from the hover ring at a glance: bigger, thicker, and in the significant
+        // colour rather than black, because the two can be on screen at the same time.
+        var sel = plt.Add.Marker(
+            0, 0, ScottPlot.MarkerShape.OpenCircle, DiffSigPointSize + 15,
+            ScottPlot.Color.FromHex("#d62728"));
+        sel.MarkerLineWidth = 3;
+        sel.IsVisible = false;
+        _volcanoSelMarker = sel;
+
+        // A re-render is a new contrast, so nothing is selected until the user picks again - and the
+        // old id would point into a hit list that no longer contains it.
+        _volcanoSelectedId = null;
+    }
+
+    /// <summary>
+    /// Show what the cursor is over: the feature's label plus the gene and protein it belongs to,
+    /// which for a peptide is the only place that context appears on this plot.
+    /// </summary>
+    private void OnDiffPlotMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        try
+        {
+            if (_volcanoHoverMarker is null || _volcanoHoverText is null)
+                return;
+            if (DiffSelectedView() != DiffView.Volcano || _volcanoPoints.Count == 0 || _diffDataset is null)
+                return;
+
+            var plt = DiffPlot.Plot;
+            var pos = e.GetPosition(DiffPlot);
+            var scale = DiffPlot.DisplayScale;
+            var idx = QcPlotChrome.NearestPoint(
+                _volcanoPoints.Select(pt => plt.GetPixel(pt.Loc)).ToList(),
+                new ScottPlot.Pixel(pos.X * scale, pos.Y * scale));
+
+            if (idx >= 0)
+            {
+                var point = _volcanoPoints[idx];
+                _volcanoHoverMarker.Location = point.Loc;
+                _volcanoHoverMarker.IsVisible = true;
+                _volcanoHoverText.Location = point.Loc;
+                _volcanoHoverText.LabelText = DescribeFeature(point.FeatureId);
+                _volcanoHoverText.IsVisible = true;
+                DiffPlot.Refresh();
+            }
+            else if (_volcanoHoverMarker.IsVisible)
+            {
+                _volcanoHoverMarker.IsVisible = false;
+                _volcanoHoverText.IsVisible = false;
+                DiffPlot.Refresh();
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffPlotMouseMove), ex);
+        }
+    }
+
+    /// <summary>
+    /// One line for a feature: its label, and the gene / protein / sharing behind it. Falls back to
+    /// the id when the matrix carried no identity columns, rather than inventing any.
+    /// </summary>
+    private string DescribeFeature(string featureId)
+    {
+        var identity = _diffDataset?.IdentityOf(featureId);
+        if (identity is not null)
+            return identity.Describe();
+        return _diffLabelById.GetValueOrDefault(featureId, featureId);
+    }
+
+    /// <summary>
+    /// Make <paramref name="featureId"/> the selected feature everywhere: the ring on the plot, the
+    /// row in the hit table, the per-feature boxplot, and the selection in Skyline.
+    /// </summary>
+    /// <remarks>
+    /// One entry point for both directions deliberately. The grid and the plot each raise an event
+    /// when the other drives it, so routing both through here with <see cref="_volcanoSyncing"/> set
+    /// is what stops a click echoing back and forth - each echo would otherwise re-issue the Skyline
+    /// RPC and reopen the detail window.
+    /// </remarks>
+    private void SelectVolcanoFeature(string featureId)
+    {
+        if (_volcanoSyncing)
+            return;
+
+        _volcanoSyncing = true;
+        try
+        {
+            _volcanoSelectedId = featureId;
+            HighlightVolcanoPoint(featureId);
+            HighlightGridRow(featureId);
+            ShowFeatureDetail(featureId);
+            SelectFeatureInSkyline(featureId);
+        }
+        finally
+        {
+            _volcanoSyncing = false;
+        }
+    }
+
+    /// <summary>Move the selection ring onto a feature's point, or hide it if it has none plotted.</summary>
+    private void HighlightVolcanoPoint(string featureId)
+    {
+        if (_volcanoSelMarker is null)
+            return;
+
+        foreach (var (loc, id) in _volcanoPoints)
+        {
+            if (!string.Equals(id, featureId, StringComparison.Ordinal))
+                continue;
+            _volcanoSelMarker.Location = loc;
+            _volcanoSelMarker.IsVisible = true;
+            BringIntoView(loc);
+            DiffPlot.Refresh();
+            return;
+        }
+
+        // A feature with a non-finite fold change or p-value is in the table but not on the plot.
+        _volcanoSelMarker.IsVisible = false;
+        DiffPlot.Refresh();
+    }
+
+    /// <summary>
+    /// Pan the Volcano so a selected point is actually on screen, keeping the current zoom.
+    /// </summary>
+    /// <remarks>
+    /// Selecting from the hit table can name a point that is outside the view - the table is ranked
+    /// by significance and is not affected by zooming, so after zooming into one corner most rows
+    /// refer to points that are not visible. Ringing one of those rings nothing the user can see,
+    /// which looks identical to the selection having failed.
+    /// <para>A minimal pan rather than a re-fit or a re-center: the zoom the user chose is
+    /// deliberate, and re-centering on every off-screen pick makes the plot jump further than it
+    /// needs to. The point is brought just inside the edge it was past, with a margin so it does not
+    /// sit under the axis.</para>
+    /// </remarks>
+    private void BringIntoView(ScottPlot.Coordinates loc)
+    {
+        var plt = DiffPlot.Plot;
+        var limits = plt.Axes.GetLimits();
+        var xSpan = limits.Right - limits.Left;
+        var ySpan = limits.Top - limits.Bottom;
+        if (!(xSpan > 0) || !(ySpan > 0))
+            return; // an unrendered plot has no meaningful limits to preserve
+
+        const double marginFraction = 0.08;
+        var xMargin = xSpan * marginFraction;
+        var yMargin = ySpan * marginFraction;
+
+        var dx = 0.0;
+        if (loc.X < limits.Left + xMargin)
+            dx = loc.X - (limits.Left + xMargin);
+        else if (loc.X > limits.Right - xMargin)
+            dx = loc.X - (limits.Right - xMargin);
+
+        var dy = 0.0;
+        if (loc.Y < limits.Bottom + yMargin)
+            dy = loc.Y - (limits.Bottom + yMargin);
+        else if (loc.Y > limits.Top - yMargin)
+            dy = loc.Y - (limits.Top - yMargin);
+
+        if (dx == 0 && dy == 0)
+            return; // already comfortably in view: leave the axes exactly as the user set them
+
+        plt.Axes.SetLimits(
+            limits.Left + dx, limits.Right + dx,
+            limits.Bottom + dy, limits.Top + dy);
+    }
+
+    /// <summary>Select a feature's row in the hit table and scroll it into view.</summary>
+    private void HighlightGridRow(string featureId)
+    {
+        if (DiffGrid.ItemsSource is not IEnumerable<VolcanoRow> rows)
+            return;
+
+        var row = rows.FirstOrDefault(r => string.Equals(r.FeatureId, featureId, StringComparison.Ordinal));
+        if (row is null)
+            return;
+
+        DiffGrid.SelectedItem = row;
+        DiffGrid.ScrollIntoView(row);
     }
 
     private void RenderDetection(IReadOnlyList<DetectionRow> rows)
@@ -922,8 +1476,8 @@ public partial class MainWindow
             }
         }
 
-        AddMarkers(plt, bgX, bgY, "#b8c4d0", 6, "q >= 0.05");
-        AddMarkers(plt, sigX, sigY, "#2ca02c", 7, "q < 0.05");
+        AddMarkers(plt, bgX, bgY, "#b8c4d0", DiffPointSize, "q >= 0.05");
+        AddMarkers(plt, sigX, sigY, "#2ca02c", DiffSigPointSize, "q < 0.05");
         plt.Add.VerticalLine(0.0);
         plt.ShowLegend();
         plt.XLabel("detection rate difference (B - A)");

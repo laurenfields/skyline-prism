@@ -1075,6 +1075,18 @@ public partial class MainWindow
     private string? ResolveLocatorLocked(AbundanceEntry entry, out bool viaFallback, out bool unavailable)
     {
         var level = RangeLevel; // read on the UI thread, before taking the lock
+        return ResolveLocatorLocked(entry, level, out viaFallback, out unavailable);
+    }
+
+    /// <summary>
+    /// <see cref="ResolveLocatorLocked(AbundanceEntry, out bool, out bool)"/> for a caller whose level
+    /// is not the Dynamic Range pane's - the Volcano runs at its own protein/peptide setting. The
+    /// locator map and its lock are deliberately shared: it is the same document either way, and one
+    /// cached tree read serves both panes.
+    /// </summary>
+    private string? ResolveLocatorLocked(
+        AbundanceEntry entry, AbundanceLevel level, out bool viaFallback, out bool unavailable)
+    {
         lock (_rangeLocatorLock)
             return ResolveLocator(entry, level, out viaFallback, out unavailable);
     }

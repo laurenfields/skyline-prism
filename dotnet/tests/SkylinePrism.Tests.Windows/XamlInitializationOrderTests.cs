@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -54,41 +55,113 @@ public class XamlInitializationOrderTests
         }
 
         Assert.True(unguarded.Count == 0,
-            "These selectors set SelectedIndex in XAML, so their SelectionChanged fires during "
-            + "InitializeComponent - before the controls declared after them exist. Their handlers must "
-            + "return early on !IsInitialized, or the first one to touch a later control crashes the "
-            + "tool on startup:" + Environment.NewLine
+            "These selectors are preselected in XAML - SelectedIndex on the selector, or IsSelected "
+            + "on an item it declares - so their SelectionChanged fires during InitializeComponent, "
+            + "before the controls declared after them exist. Their handlers must return early on "
+            + "!IsInitialized, or the first one to touch a later control crashes the tool on startup:"
+            + Environment.NewLine
             + string.Join(Environment.NewLine, unguarded));
     }
 
     /// <summary>
-    /// Every selector in the window's XAML that sets both <c>SelectedIndex</c> and
+    /// Every selector in the window's XAML that is preselected in markup AND handles
     /// <c>SelectionChanged</c>, as (control name, handler name).
     /// </summary>
     /// <remarks>
-    /// Not just <c>ComboBox</c>: the rule is a property of <c>Selector</c>, so it holds for the
+    /// <para>Not just <c>ComboBox</c>: the rule is a property of <c>Selector</c>, so it holds for the
     /// <c>ListBox</c> nav rail and for a nested <c>TabControl</c> too. Scanning only ComboBoxes was a
     /// hole - the visualization rail is a ListBox whose handler reaches the panes declared after it,
-    /// which is precisely the crash this test exists to prevent, and it would have gone unnoticed.
+    /// which is precisely the crash this test exists to prevent, and it would have gone unnoticed.</para>
+    /// <para>And not just <c>SelectedIndex</c>: a selector is equally preselected by
+    /// <c>IsSelected</c> on one of the items it declares, which raises <c>SelectionChanged</c> from
+    /// <c>EndInit</c> just the same. Checking only the opening tag was the second hole, and the QC
+    /// pane's PC pickers fell straight into it - they preselect components 1 and 2 as
+    /// <c>&lt;ComboBoxItem IsSelected="True"&gt;</c>, so this scan passed them over while
+    /// <c>OnQcChanged</c> reached <c>QcImage</c>, declared below them, and crashed the tool on
+    /// startup.</para>
     /// </remarks>
     private static List<(string Control, string Handler)> PreselectedComboHandlers()
     {
         var xaml = File.ReadAllText(Path.Combine(AppDir, "MainWindow.xaml"));
         var found = new List<(string, string)>();
-        // Attributes may be spread over several lines, so match the whole opening tag.
+        // Attributes may be spread over several lines, so match the whole opening tag. (?![\w.])
+        // keeps <ComboBox> from also matching <ComboBoxItem> and the <ComboBox.ItemTemplate>
+        // property element.
         foreach (Match tag in Regex.Matches(
-                     xaml, @"<(?:ComboBox|ListBox|ListView|TabControl)\b[^>]*>", RegexOptions.Singleline))
+                     xaml, @"<(ComboBox|ListBox|ListView|TabControl)(?![\w.])[^>]*>", RegexOptions.Singleline))
         {
             var text = tag.Value;
-            if (!Regex.IsMatch(text, @"\bSelectedIndex\s*="))
-                continue;
             var handler = Regex.Match(text, @"\bSelectionChanged\s*=\s*""(\w+)""");
             if (!handler.Success)
+                continue;
+            // A Binding to a property named IsSelected is not a preselection, so this looks for the
+            // literal attribute value rather than the identifier.
+            var preselected = Regex.IsMatch(text, @"\bSelectedIndex\s*=")
+                              || Regex.IsMatch(OwnMarkup(xaml, tag), @"\bIsSelected\s*=\s*""[Tt]rue""");
+            if (!preselected)
                 continue;
             var name = Regex.Match(text, @"\bx:Name\s*=\s*""(\w+)""");
             found.Add((name.Success ? name.Groups[1].Value : "(unnamed selector)", handler.Groups[1].Value));
         }
         return found;
+    }
+
+    /// <summary>
+    /// A selector's OWN markup: its element body with every nested selector subtree removed, so an
+    /// ancestor is never credited with a descendant's preselection.
+    /// </summary>
+    /// <remarks>
+    /// <c>MainTabs</c> contains every pane in the window, the QC pane's preselected PC pickers
+    /// among them, so a plain body scan reports it as preselected. What actually reaches its handler
+    /// from those pickers is a BUBBLED <c>SelectionChanged</c> - <c>SelectionChanged</c> is a routed
+    /// event - and <c>OnMainTabChanged</c> already filters that on <c>e.Source</c>. Conflating the
+    /// two would demand an <c>IsInitialized</c> guard where the existing source check is the correct
+    /// one, so the distinction is kept here.
+    /// </remarks>
+    private static string OwnMarkup(string xaml, Match openingTag)
+    {
+        var body = ElementBody(xaml, openingTag);
+        var own = new StringBuilder();
+        var depth = 0;
+        var cut = 0;
+        foreach (Match token in Regex.Matches(
+                     body,
+                     @"<(?:ComboBox|ListBox|ListView|TabControl)(?![\w.])[^>]*>"
+                     + @"|</(?:ComboBox|ListBox|ListView|TabControl)\s*>",
+                     RegexOptions.Singleline))
+        {
+            if (depth == 0)
+                own.Append(body, cut, token.Index - cut);
+            if (token.Value.StartsWith("</", StringComparison.Ordinal))
+                depth--;
+            else if (!token.Value.EndsWith("/>", StringComparison.Ordinal))
+                depth++;
+            cut = token.Index + token.Length;
+        }
+        if (depth == 0)
+            own.Append(body, cut, body.Length - cut);
+        return own.ToString();
+    }
+
+    /// <summary>
+    /// The markup between a selector's opening tag and its matching close, or "" when the tag is
+    /// self-closing. Same-named descendants are counted so an outer selector's body does not stop at
+    /// an inner one's closing tag.
+    /// </summary>
+    private static string ElementBody(string xaml, Match openingTag)
+    {
+        if (openingTag.Value.EndsWith("/>", StringComparison.Ordinal))
+            return "";
+        var name = openingTag.Groups[1].Value;
+        var bodyStart = openingTag.Index + openingTag.Length;
+        var depth = 1;
+        foreach (Match token in Regex.Matches(xaml[bodyStart..], $@"<{name}(?![\w.])|</{name}\s*>"))
+        {
+            depth += token.Value.StartsWith("</", StringComparison.Ordinal) ? -1 : 1;
+            if (depth == 0)
+                return xaml[bodyStart..(bodyStart + token.Index)];
+        }
+        return xaml[bodyStart..];
     }
 
     /// <summary>

@@ -571,15 +571,46 @@
                                     <ComboBoxItem>Protein</ComboBoxItem>
                                     <ComboBoxItem>Peptide</ComboBoxItem>
                                 </ComboBox>
+                                <TextBlock Text="Test:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffTestCombo" Width="130" SelectionChanged="OnDiffTestChanged"
+                                          ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
+                                    <ComboBoxItem Tag="ModeratedT">Moderated t</ComboBoxItem>
+                                    <ComboBoxItem Tag="WelchT">Welch t</ComboBoxItem>
+                                    <ComboBoxItem Tag="StudentT">Student t</ComboBoxItem>
+                                    <ComboBoxItem Tag="MannWhitney">Mann-Whitney</ComboBoxItem>
+                                </ComboBox>
                                 <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffGroupByCombo" Width="150" SelectionChanged="OnDiffGroupByChanged"
                                           ToolTip="Metadata column to split samples by (from sample_metadata.csv)." />
                                 <TextBlock Text="A =" VerticalAlignment="Center" Margin="16,0,4,0" />
-                                <ComboBox x:Name="DiffACombo" Width="150" ToolTip="Group A value (reference)." />
+                                <!-- Tick lists, not single pickers: an arm is often the UNION of
+                                     several values - two control classes against the rest, say - and
+                                     no single value expresses that. Same idiom as the QC pane's
+                                     Group-by values; the closed-state text has to be written by hand
+                                     because a tick list has no SelectedItem. -->
+                                <ComboBox x:Name="DiffACombo" Width="150" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick one or more)"
+                                          ToolTip="Group A, the reference arm. Tick more than one value to contrast their union - e.g. Quality Control + Standard as one control arm. A value ticked in both arms is refused rather than silently dropped from one.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
                                 <TextBlock Text="vs B =" VerticalAlignment="Center" Margin="12,0,4,0" />
-                                <ComboBox x:Name="DiffBCombo" Width="150"
-                                          ToolTip="Group B value (treatment; a positive log2 fold change means higher in B)." />
-                                <TextBlock Text="Adjust for:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffBCombo" Width="150" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick one or more)"
+                                          ToolTip="Group B, the treatment arm; a positive log2 fold change means higher in B. Tick more than one value to contrast their union.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffCovariatesLabel" Text="Adjust for:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffCovariatesCombo" Width="170" IsEditable="True" IsReadOnly="True"
                                           Text="(none)"
                                           ToolTip="Covariates to adjust the contrast for (Sex, PMI, batch...). Tick any metadata column; numeric columns are centered, categorical ones dummy-coded. A ticked covariate switches Detection to the Firth GLM.">
@@ -590,28 +621,46 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <CheckBox x:Name="DiffTrendCheck" Content="Trend prior" VerticalAlignment="Center"
-                                          Margin="16,0,0,0"
-                                          ToolTip="Use the intensity-trend variance prior (limma-trend) instead of the global prior for the Volcano and Enrichment tests." />
+                                <!-- Tag carries the value, Content the label, as the Density and Ion
+                                     Accounting pickers do - so the displayed wording can change
+                                     without touching the dispatch. No SelectedIndex here: a
+                                     preselected Selector raises SelectionChanged from EndInit, part
+                                     way through InitializeComponent. LoadDifferentialAsync sets it.
+                                     See XamlInitializationOrderTests. -->
+                                <TextBlock x:Name="DiffPriorLabel" Text="Prior:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffPriorCombo" Width="150"
+                                          SelectionChanged="OnDiffPriorChanged"
+                                          ToolTip="Variance prior for the moderated-t (Volcano and Enrichment). 'Intensity trend' is the lab's default and matches proteomics-toolkit's moderation='intensity_trend': a LOWESS of within-group variance against within-group mean intensity, fitted on the raw linear scale, replacing only the prior scale. 'limma-trend' is limma's trend=TRUE - a spline against mean log2 expression that also re-estimates the prior degrees of freedom. They are DIFFERENT estimators despite the similar names and disagree by a few percent on p-values, so quote which one produced a hit list. 'Global' is one prior for every feature.">
+                                    <ComboBoxItem Tag="IntensityTrend">Intensity trend</ComboBoxItem>
+                                    <ComboBoxItem Tag="Global">Global</ComboBoxItem>
+                                    <ComboBoxItem Tag="LimmaTrend">limma-trend</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffCorrectionLabel" Text="Correct:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffCorrectionCombo" Width="150"
+                                          SelectionChanged="OnDiffCorrectionChanged"
+                                          ToolTip="Multiple-testing correction applied to the raw p-values. Benjamini-Hochberg controls the false-discovery rate under independence or positive dependence. Benjamini-Yekutieli is valid under arbitrary dependence - worth reaching for at peptide level, where peptides from one protein are strongly correlated. Bonferroni and Holm control the family-wise error rate instead, and are far stricter. 'None' reports the raw p in the adjusted column.">
+                                    <ComboBoxItem Tag="BenjaminiHochberg">Benjamini-Hochberg</ComboBoxItem>
+                                    <ComboBoxItem Tag="BenjaminiYekutieli">Benjamini-Yekutieli</ComboBoxItem>
+                                    <ComboBoxItem Tag="Holm">Holm</ComboBoxItem>
+                                    <ComboBoxItem Tag="Bonferroni">Bonferroni</ComboBoxItem>
+                                    <ComboBoxItem Tag="None">None</ComboBoxItem>
+                                </ComboBox>
                                 <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
                                         Click="OnRunDifferential"
                                         ToolTip="Run the limma moderated-t contrast on the two groups." />
                                 <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>
-                            <Border DockPanel.Dock="Bottom" Background="#FFF8E1" BorderBrush="#E0C97A"
-                                    BorderThickness="1" CornerRadius="3" Margin="6,4,6,6" Padding="8,5">
-                                <TextBlock x:Name="DiffCaveatText" Foreground="#5C4A00" TextWrapping="Wrap"
-                                           FontSize="11.5"
-                                           Text="Load a run and pick a view for its interpretation notes." />
-                            </Border>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="360" />
                                 </Grid.ColumnDefinitions>
                                 <sp:WpfPlot Grid.Column="0" x:Name="DiffPlot"
-                                            MouseLeftButtonDown="OnDiffPlotMouseDown" />
+                                            MouseLeftButtonDown="OnDiffPlotMouseDown"
+                                            MouseMove="OnDiffPlotMouseMove" />
                                 <DataGrid Grid.Column="1" x:Name="DiffGrid" AutoGenerateColumns="True"
                                           AutoGeneratingColumn="OnDiffGridAutoGeneratingColumn"
                                           SelectionChanged="OnDiffGridSelectionChanged"

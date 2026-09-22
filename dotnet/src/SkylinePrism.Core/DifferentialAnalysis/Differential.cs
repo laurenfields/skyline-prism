@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -165,7 +165,32 @@ public static class Differential
         int minPerGroup = 2,
         IReadOnlyList<Covariate>? covariates = null,
         bool trend = false)
+        => Run(exprLog2FeaturesBySamples, featureIds, groupAColumns, groupBColumns,
+            new DifferentialOptions
+            {
+                MinPerGroup = minPerGroup,
+                Covariates = covariates,
+                // The historical meaning of this flag: limma's trend, not the toolkit's. Callers that
+                // want the lab's default prior pass DifferentialOptions instead.
+                Prior = trend ? VariancePrior.LimmaTrend : VariancePrior.Global,
+            });
+
+    /// <summary>
+    /// The moderated-t contrast under an explicit <see cref="DifferentialOptions"/>.
+    /// </summary>
+    public static DifferentialResult Run(
+        double[,] exprLog2FeaturesBySamples,
+        IReadOnlyList<string> featureIds,
+        IReadOnlyList<int> groupAColumns,
+        IReadOnlyList<int> groupBColumns,
+        DifferentialOptions options)
     {
+        var minPerGroup = options.MinPerGroup;
+        var covariates = options.Covariates;
+
+        if (options.Test != DifferentialTest.ModeratedT)
+            return RunSimple(exprLog2FeaturesBySamples, featureIds, groupAColumns, groupBColumns,
+                options);
         var nFeatures = exprLog2FeaturesBySamples.GetLength(0);
         var nColumns = exprLog2FeaturesBySamples.GetLength(1);
         if (featureIds.Count != nFeatures)
@@ -237,21 +262,7 @@ public static class Differential
         for (var i = 0; i < nTested; i++)
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
 
-        SqueezeVarResult squeezed;
-        string variancePrior;
-        if (trend && fit.Amean.All(double.IsFinite))
-        {
-            squeezed = EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean);
-            variancePrior = "intensity-trend";
-        }
-        else
-        {
-            if (trend)
-                messages.Add("Mean expression has non-finite values - intensity-trend prior "
-                    + "unavailable, fell back to the global prior.");
-            squeezed = EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual);
-            variancePrior = "global";
-        }
+        var (squeezed, variancePrior) = FitPrior(options, mk, nA, nB, variances, fit, messages);
 
         var dfTotal = fit.DfResidual + squeezed.DfPrior;
         var stdevUnscaled = fit.StdevUnscaled[coefIdx];
@@ -277,7 +288,7 @@ public static class Differential
                 double.NaN, NumpyMath.Mean(groupA), NumpyMath.Mean(groupB));
         }
 
-        var adj = Fdr.BenjaminiHochberg(pValues);
+        var adj = Fdr.Adjust(pValues, options.Correction);
         for (var i = 0; i < nTested; i++)
             rows[i] = rows[i] with { AdjPValue = adj[i] };
 
@@ -426,11 +437,86 @@ public static class Differential
     /// freedom. An infinite prior gives an infinite total df, where the t-distribution is the standard
     /// normal (matching scipy's <c>t.cdf(df=inf)</c>).
     /// </summary>
+    /// <summary>
+    /// The non-moderated tests, which share this entry point but none of the linear-model machinery.
+    /// </summary>
+    /// <remarks>
+    /// Covariates are reported as ignored rather than dropped in silence: a t-test has no design
+    /// matrix to hold one, so a ticked covariate simply cannot be honored, and a reader who ticked
+    /// one is entitled to know the contrast in front of them is unadjusted.
+    /// </remarks>
+    private static DifferentialResult RunSimple(
+        double[,] exprLog2FeaturesBySamples,
+        IReadOnlyList<string> featureIds,
+        IReadOnlyList<int> groupAColumns,
+        IReadOnlyList<int> groupBColumns,
+        DifferentialOptions options)
+    {
+        var messages = new List<string>();
+        if (options.Covariates is { Count: > 0 } cov)
+            messages.Add($"{options.Describe()} cannot adjust for covariates "
+                + $"({string.Join(", ", cov.Select(c => c.Name))}) - it has no design matrix to put "
+                + "them in. Use the moderated t for an adjusted contrast.");
+
+        return SimpleTests.Run(exprLog2FeaturesBySamples, featureIds, groupAColumns, groupBColumns,
+            options.Test, options.Correction, options.MinPerGroup, messages);
+    }
+
+    /// <summary>
+    /// The variance prior the options asked for, with the name to report it under. Falls back to the
+    /// global prior - saying so in <paramref name="messages"/> - whenever the requested one cannot be
+    /// fitted, because a silently substituted prior is a silently different p-value.
+    /// </summary>
+    private static (SqueezeVarResult Squeezed, string Name) FitPrior(
+        DifferentialOptions options, double[,] mk, int nA, int nB, double[] variances,
+        LinearModelFit fit, List<string> messages)
+    {
+        switch (options.Prior)
+        {
+            case VariancePrior.LimmaTrend when fit.Amean.All(double.IsFinite):
+                return (EmpiricalBayes.SqueezeVarTrend(variances, fit.DfResidual, fit.Amean),
+                    "limma-trend");
+
+            case VariancePrior.LimmaTrend:
+                messages.Add("Mean expression has non-finite values - the limma-trend prior is "
+                    + "unavailable, so the global prior was used.");
+                break;
+
+            case VariancePrior.IntensityTrend:
+            {
+                // Prior groups default to the two contrast arms. mk's columns are [A..., B...] by
+                // construction, so the arms are the two leading runs of indices.
+                var groups = options.PriorGroupColumns is null
+                    ? new IReadOnlyList<int>[]
+                    {
+                        Enumerable.Range(0, nA).ToArray(),
+                        Enumerable.Range(nA, nB).ToArray(),
+                    }
+                    : new IReadOnlyList<int>[] { options.PriorGroupColumns };
+
+                var prior = VariancePriors.IntensityTrend(mk, groups);
+                if (prior is not null)
+                {
+                    // The prior DEGREES OF FREEDOM stay global and only the scale is replaced - that
+                    // is what makes this the toolkit's estimator rather than limma's, which
+                    // re-estimates both.
+                    var global = EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual);
+                    return (EmpiricalBayes.SqueezeVarWithScale(
+                        variances, fit.DfResidual, prior, global.DfPrior, global.Warnings),
+                        "intensity-trend");
+                }
+
+                messages.Add("Too few usable (feature, group) points to fit the intensity trend - "
+                    + "the global prior was used instead.");
+                break;
+            }
+        }
+
+        return (EmpiricalBayes.SqueezeVarGlobal(variances, fit.DfResidual), "global");
+    }
+
     private static double ModeratedPValue(double t, double dfTotal)
     {
-        var absT = Math.Abs(t);
-        return double.IsInfinity(dfTotal)
-            ? 2.0 * Normal.CDF(0.0, 1.0, -absT)
-            : 2.0 * new StudentT(0.0, 1.0, dfTotal).CumulativeDistribution(-absT);
+        return Distributions.TwoSidedT(t, dfTotal);
     }
 }

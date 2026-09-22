@@ -115,7 +115,12 @@ public class DifferentialTests
     {
         var res = Differential.Run(BuildMatrix(hetero: true), Ids, GroupA, GroupB, trend: true);
 
-        Assert.Equal("intensity-trend", res.VariancePrior);
+        // "limma-trend", not "intensity-trend". The estimator is unchanged - every number below is
+        // what it always was - but the name was wrong: this is limma's trend=TRUE (a spline of
+        // log(variance) on mean LOG2 expression, re-estimating the prior df), and "intensity trend"
+        // is the lab's toolkit's DIFFERENT estimator, which now has that name. The two disagree by a
+        // median 3-7% on p-values, so one name for both was a trap.
+        Assert.Equal("limma-trend", res.VariancePrior);
         Assert.True(double.IsPositiveInfinity(res.DfPrior));
 
         var byId = res.Rows.ToDictionary(r => r.FeatureId);

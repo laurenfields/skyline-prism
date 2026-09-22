@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1331,6 +1331,9 @@ public partial class MainWindow : Window
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
             InvalidateIonAccounting(); // and a new ion_accounting.parquet for the Ion accounting pane
             InvalidateDifferential(); // and new corrected matrices + merged_data for the Differential pane
+            InvalidateMarkers();      // and the Markers pane, whose cache is keyed on (dir, level) -
+                                      // a re-run into the same directory matches it and would redraw
+                                      // the PREVIOUS run's matrix under the new run's caption
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
             ShowVisualization(VizPane.Qc); // land on the plots when the run finishes
@@ -2179,19 +2182,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// A QC sample's value in a Group-by column, from the QC pane's own annotation snapshot; the
-    /// synthetic Sample Type column falls back to sample_metadata.csv when no Replicates report is available.
-    /// </summary>
-    /// <summary>
     /// The zero-based component a PC dropdown is pointing at, or <paramref name="fallback"/> before
     /// the combo has been populated (the first render happens during window construction).
     /// </summary>
-    private static int SelectedPcIndex(ComboBox combo, int fallback)
+    private static int SelectedPcIndex(System.Windows.Controls.ComboBox combo, int fallback)
     {
-        var text = (combo?.SelectedItem as ComboBoxItem)?.Content as string;
+        var text = (combo?.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Content as string;
         return int.TryParse(text, out var n) && n >= 1 ? n - 1 : fallback;
     }
 
+    /// <summary>
+    /// A QC sample's value in a Group-by column, from the QC pane's own annotation snapshot; the
+    /// synthetic Sample Type column falls back to sample_metadata.csv when no Replicates report is available.
+    /// </summary>
     // Source order is deliberate: the document's own Replicates report first (it is what the
     // person analysing the data curated in Skyline), then the run's sample_metadata.csv and any
     // joined clinical table, then the sample type. Each step only runs when the one before it had
@@ -2213,20 +2216,14 @@ public partial class MainWindow : Window
     private void PopulateGroupCombos()
     {
         _suppressQcRender = true;
-        // Every source's columns, de-duplicated, with Sample Type always available - it is the
-        // fallback the pane is documented to default to, and it must not disappear just because a
-        // directory happened to carry richer annotations.
-        var columns = new List<string>();
-        foreach (var c in _qcAnnotations.Columns.Concat(_qcExtraAnnotations.Columns))
-            if (!columns.Contains(c, StringComparer.Ordinal))
-                columns.Add(c);
-        if (!columns.Any(c => c.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase)))
-            columns.Insert(0, "Sample Type");
+        // QcGroupColumns, not inline: which columns this offers is the whole point of reading
+        // sample_metadata.csv and of publishing a clinical join here, and both are silent when
+        // wrong. See QcGroupColumnsTests.
+        var columns = QcGroupColumns.Offer(_qcAnnotations.Columns, _qcExtraAnnotations.Columns);
         QcGroupByCombo.Items.Clear();
         foreach (var c in columns)
             QcGroupByCombo.Items.Add(c);
-        var def = columns.FindIndex(c => c.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase));
-        QcGroupByCombo.SelectedIndex = def >= 0 ? def : 0;
+        QcGroupByCombo.SelectedIndex = QcGroupColumns.DefaultIndex(columns);
         PopulateValueCombo();
         _suppressQcRender = false;
     }
@@ -2347,8 +2344,15 @@ public partial class MainWindow : Window
 
     private void OnQcChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (!_suppressQcRender)
-            RenderQc();
+        // IsInitialized, not just the suppress flag: the PC pickers preselect a component in XAML
+        // (<ComboBoxItem IsSelected="True">), so WPF raises SelectionChanged from that ComboBox's
+        // EndInit - part way through InitializeComponent, when QcPlot and QcImage are declared below
+        // it and their fields are still null. RenderQc reaches them through ShowQcMessage on an empty
+        // run, which threw an NRE out of the window's constructor: a startup crash, not a handler
+        // error. See XamlInitializationOrderTests.
+        if (!IsInitialized || _suppressQcRender)
+            return;
+        RenderQc();
     }
 
     // PCA / CV / Intensity are live ScottPlot; the rest are the qc_report.html plots rendered as
