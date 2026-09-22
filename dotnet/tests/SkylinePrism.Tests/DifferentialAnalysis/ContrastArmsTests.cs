@@ -243,3 +243,107 @@ public class TrendDesignRoutingTests
         Assert.Contains("subject column", ex.Message);
     }
 }
+
+/// <summary>
+/// Where the intensity-trend prior takes its groups from, and why it matters.
+/// </summary>
+/// <remarks>
+/// The prior's per-feature scale should describe MEASUREMENT variance. Fitted on the design groups
+/// of a real study it describes measurement variance plus the biology those groups contain, and the
+/// moderation then shrinks the very effects the analysis is looking for. These pin that the two
+/// sources genuinely produce different numbers, and that the result records which one ran - two
+/// results are not comparable unless they used the same source.
+/// </remarks>
+public class VariancePriorSourceTests
+{
+    // Two arms whose WITHIN-arm spread is large (biological heterogeneity), plus a set of control
+    // replicates whose spread is small (technical only). The two prior sources must disagree.
+    private static (double[,] Expr, string[] Ids, int[] A, int[] B, IReadOnlyList<IReadOnlyList<int>> Controls)
+        Cohort()
+    {
+        const int nFeatures = 40, nPerArm = 8, nControls = 6;
+        var rng = new Random(4242);
+        var total = 2 * nPerArm + nControls;
+        var expr = new double[nFeatures, total];
+        for (var f = 0; f < nFeatures; f++)
+        {
+            var level = 10 + f * 0.25;
+            for (var s = 0; s < nPerArm; s++)
+            {
+                // Wide within-arm spread: this is the biology the prior must not absorb.
+                expr[f, s] = level + 1.2 * (rng.NextDouble() - 0.5) * 2;
+                expr[f, nPerArm + s] = level + 0.8 + 1.2 * (rng.NextDouble() - 0.5) * 2;
+            }
+
+            for (var s = 0; s < nControls; s++)
+                // Tight replicate spread: this is the measurement variance.
+                expr[f, 2 * nPerArm + s] = level + 0.12 * (rng.NextDouble() - 0.5) * 2;
+        }
+
+        var controls = new IReadOnlyList<int>[]
+        {
+            Enumerable.Range(2 * nPerArm, nControls).ToArray(),
+        };
+        return (expr, Enumerable.Range(0, nFeatures).Select(i => $"f{i}").ToArray(),
+            Enumerable.Range(0, nPerArm).ToArray(), Enumerable.Range(nPerArm, nPerArm).ToArray(),
+            controls);
+    }
+
+    private static DifferentialResult Run(IReadOnlyList<IReadOnlyList<int>>? priorGroups)
+    {
+        var (expr, ids, a, b, _) = Cohort();
+        var (_, _, _, _, controls) = Cohort();
+        return Differential.Run(expr, ids, a, b, new DifferentialOptions
+        {
+            Prior = VariancePrior.IntensityTrend,
+            Correction = MultipleTesting.None,
+            PriorGroupColumns = priorGroups is null ? null : controls,
+        });
+    }
+
+    [Fact]
+    public void TheResultRecordsWhichSourceTheScaleCameFrom()
+    {
+        var (_, _, _, _, controls) = Cohort();
+
+        Assert.Equal("intensity-trend from design groups", Run(null).VariancePrior);
+        Assert.Equal("intensity-trend from controls", Run(controls).VariancePrior);
+    }
+
+    [Fact]
+    public void ControlsAndDesignGroups_GiveDifferentNumbers()
+    {
+        var (_, _, _, _, controls) = Cohort();
+        var fromGroups = Run(null);
+        var fromControls = Run(controls);
+
+        // The prior degrees of freedom are estimated from the study residuals either way, so the
+        // AMOUNT of shrinkage is unchanged - only the target moves.
+        Assert.Equal(fromGroups.DfResidual, fromControls.DfResidual, 12);
+
+        var g = fromGroups.Rows.ToDictionary(r => r.FeatureId);
+        var c = fromControls.Rows.ToDictionary(r => r.FeatureId);
+
+        // The effect sizes come from the same OLS fit and must not move at all...
+        foreach (var id in g.Keys)
+            Assert.Equal(g[id].LogFc, c[id].LogFc, 12);
+
+        // ...while the moderated statistics must, or the option is doing nothing.
+        Assert.Contains(g.Keys, id => Math.Abs(g[id].T - c[id].T) > 1e-6);
+    }
+
+    [Fact]
+    public void ATighterControlPrior_ShrinksTowardSmallerVariance_SoTIsLarger()
+    {
+        // The direction the lab's practice exists to produce: a prior taken from nominal replicates
+        // is smaller than one taken from groups carrying biology, so genuine effects survive
+        // moderation instead of being shrunk toward nothing.
+        var (_, _, _, _, controls) = Cohort();
+        var g = Run(null).Rows.ToDictionary(r => r.FeatureId);
+        var c = Run(controls).Rows.ToDictionary(r => r.FeatureId);
+
+        var larger = g.Keys.Count(id => Math.Abs(c[id].T) > Math.Abs(g[id].T));
+        Assert.True(larger > g.Count / 2,
+            $"expected the control prior to raise |t| for most features; it raised {larger}/{g.Count}");
+    }
+}

@@ -217,6 +217,8 @@ public sealed record DifferentialOptions
             },
             "global" => "global prior",
             "intensity-trend" => "intensity-trend prior",
+            "intensity-trend from controls" => "intensity-trend prior from controls",
+            "intensity-trend from design groups" => "intensity-trend prior from design groups",
             "limma-trend" => "limma-trend prior",
             "peptide-count" => "peptide-count prior",
             var other => other + " prior",

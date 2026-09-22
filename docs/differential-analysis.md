@@ -100,13 +100,43 @@ counted in the status line. Covariates constant within every subject (sex, genot
 dropped for the same reason they are under a paired design: a within-subject slope cannot estimate a
 between-subject effect.
 
-### The intensity-trend prior is unavailable on a trend
+### The variance prior is fitted on the CONTROLS by default
 
-It fits a LOWESS of within-**group** variance, and a trend design has no groups. Pooling every sample
-into one would fold the trend itself into the "noise" it is meant to describe, inflating the prior
-for exactly the features with a real slope. PRISM falls back to the global prior and says so in the
-status line - which names the prior that actually ran, not the one requested. Ticking **Fit prior on
-controls** gives a well-defined group structure back and the intensity trend becomes available again.
+This is the single most consequential default in the pane, and it is the lab's long-standing
+practice rather than a new idea.
+
+The intensity-trend prior needs groups to take a within-group SD from. Take them from the **design
+groups** of a real study and that SD contains the inter-subject biological variation the analysis
+exists to find - so the prior describes measurement noise *plus* that biology, and the moderation
+shrinks genuine effects toward nothing. Take them from the run's **QC and reference injections**,
+which are nominal replicates, and the SD is the measurement variance the prior is actually supposed
+to describe.
+
+PRISM therefore fits the prior on the control replicates whenever the run has two or more of any
+control type, and says which source it used in the status line and in the CLI's header. **Fit prior
+on controls** in the pane, `--prior-from-controls` / `--prior-from-groups` on the command line.
+
+Two things make this defensible rather than merely looser:
+
+- **Only the per-feature scale comes from the controls.** The prior degrees of freedom stay global,
+  estimated from the study samples' own residual variances, so the *amount* of shrinkage is still
+  calibrated to the data being analyzed. This matches `proteomics-toolkit`, which passes
+  `fit["d0"]` through unchanged when `variance_prior_group_column` is set.
+- **The controls need not be in the design fit.** They are selected from the full matrix, so QC
+  injections with no timepoint are dropped from a trend's design and still feed its prior - the
+  toolkit's rule, in its words, that "the prior fit sees those samples via its own metadata pool;
+  the design fit must not."
+
+It is worth knowing that this moves results in one direction. On the committed cohort, switching
+from design groups to controls lowered the p-value of **all 51** proteins - median ratio 0.969,
+minimum 0.847, none raised. That is over-shrinkage being removed, and it is modest here only because
+n = 160 vs 16 makes the residual degrees of freedom dominate the prior; at the small n proteomics
+usually has, the prior carries much more weight. Two results are not comparable unless they used the
+same prior source, which is why the source is named everywhere the prior is.
+
+A trend design has no design groups at all, so forcing `--prior-from-groups` there falls back to the
+global prior with a message. With controls present - the ordinary case - the intensity trend is
+available on a trend design like any other.
 
 ### Paired is a fixed-effect subject block
 

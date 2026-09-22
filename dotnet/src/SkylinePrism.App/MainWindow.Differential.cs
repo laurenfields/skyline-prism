@@ -143,6 +143,10 @@ public partial class MainWindow
         _diffLoaded = false;
         _diffLoadedDir = null;
         _diffDataset = null;
+        // A new directory is a new run with its own controls, so the prior-source default applies
+        // again. Without this, opening a run WITHOUT controls and then one WITH them would leave
+        // the second fitting its prior on design groups with nothing said.
+        _diffPriorSourceDefaulted = false;
         _detectionData = null;
         _detectionDir = null;
     }
@@ -437,6 +441,15 @@ public partial class MainWindow
     /// <summary>The trend column's observed span in the last run, for the axis label.</summary>
     private (double Min, double Max)? _diffTrendRange;
 
+    /// <summary>
+    /// Whether the "fit prior on controls" default has been applied to the loaded dataset yet.
+    /// </summary>
+    /// <remarks>
+    /// A default, not a lock: it is applied once when a dataset with controls is loaded, and never
+    /// re-applied, so unticking it stays unticked.
+    /// </remarks>
+    private bool _diffPriorSourceDefaulted;
+
     /// <summary>What the contrast views should run: the current selections, as Core sees them.</summary>
     private DifferentialOptions DiffOptions(IReadOnlyList<Covariate>? covariates) =>
         new()
@@ -569,6 +582,25 @@ public partial class MainWindow
         DiffPriorFromControlsCheck.IsEnabled = controls is not null;
         if (controls is null && DiffPriorFromControlsCheck.IsChecked == true)
             DiffPriorFromControlsCheck.IsChecked = false;
+
+        // DEFAULT ON wherever the run has controls to fit on, because that is what the lab does and
+        // the reason is statistical, not habit: the design groups of a real study contain the
+        // biological variation the analysis exists to find, so a prior fitted on them describes
+        // measurement noise PLUS that biology and shrinks genuine effects toward nothing. QC and
+        // reference injections are nominal replicates, so their spread is the measurement variance
+        // the prior is supposed to describe. Only the per-feature scale comes from them; the prior
+        // degrees of freedom stay global, estimated from the study samples, so the AMOUNT of
+        // shrinkage is still calibrated to the data being analysed - which is what makes this
+        // defensible rather than simply looser. Matches proteomics-toolkit's
+        // variance_prior_group_column, which passes fit["d0"] through the same way.
+        //
+        // Set once per loaded dataset, not on every control change, or unticking it would be
+        // undone by the next keystroke elsewhere in the toolbar.
+        if (!_diffPriorSourceDefaulted && controls is not null)
+        {
+            _diffPriorSourceDefaulted = true;
+            DiffPriorFromControlsCheck.IsChecked = true;
+        }
 
         DiffCovariatesLabel.IsEnabled = moderated;
         DiffCovariatesCombo.IsEnabled = moderated;

@@ -950,7 +950,15 @@ public static class Differential
             {
                 var prior = VariancePriors.IntensityTrend(expr, tested, priorGroups);
                 if (prior is not null)
-                    return (WithGlobalDf(variances, fit.DfResidual, prior), "intensity-trend");
+                    // The SOURCE is part of the answer, not a detail: a prior fitted on control
+                    // replicates describes measurement variance, one fitted on design groups
+                    // describes measurement variance PLUS whatever biology those groups contain,
+                    // and the second systematically over-shrinks the effects being looked for. Two
+                    // results are not comparable unless they used the same source.
+                    return (WithGlobalDf(variances, fit.DfResidual, prior),
+                        options.PriorGroupColumns is not null
+                            ? "intensity-trend from controls"
+                            : "intensity-trend from design groups");
 
                 messages.Add("Too few usable (feature, group) points to fit the intensity trend - "
                     + "the global prior was used instead.");

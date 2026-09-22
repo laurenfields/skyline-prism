@@ -266,7 +266,10 @@ public class CliIntegrationTests
 
             // The status line names the method that produced the numbers - with a menu this size it
             // is the only thing that makes a saved console log interpretable.
-            Assert.Contains("moderated t (intensity-trend prior), unpaired", output, StringComparison.Ordinal);
+            // The prior's SOURCE is part of the headline, and the mini fixture has QC and reference
+            // replicates, so the default is to fit on them rather than on the contrast groups.
+            Assert.Contains("moderated t (intensity-trend prior from controls), unpaired", output,
+                StringComparison.Ordinal);
             Assert.Contains("sample_type = experimental vs qc", output, StringComparison.Ordinal);
             Assert.Contains("Benjamini-Hochberg", output, StringComparison.Ordinal);
 
@@ -400,6 +403,48 @@ public class CliIntegrationTests
             Assert.Contains(expected, output, StringComparison.Ordinal);
             Assert.False(File.Exists(Path.Combine(outDir, "differential.csv")),
                 "a refused contrast must not leave a results file behind");
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// The variance prior is fitted on the control replicates by default, and says so - and
+    /// --prior-from-groups restores the older behavior for reproducing an earlier result.
+    /// </summary>
+    /// <remarks>
+    /// The default matters: a prior taken from the contrast groups of a real study describes
+    /// measurement noise plus the biology those groups carry, and shrinks the effects being looked
+    /// for. This pins that the default is the control-based one and that the two are distinguishable
+    /// from the output alone.
+    /// </remarks>
+    [Fact]
+    public void Differential_FitsThePriorOnControlsByDefault_AndNamesTheSource()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            string[] Args(params string[] extra) => new[]
+            {
+                "differential", "-d", outDir, "-g", "sample_type", "-a", "qc", "-b", "experimental",
+                "-o", Path.Combine(outDir, "d.csv"),
+            }.Concat(extra).ToArray();
+
+            var byDefault = Invoke(Args()).Output;
+            var byGroups = Invoke(Args("--prior-from-groups")).Output;
+            var byControls = Invoke(Args("--prior-from-controls")).Output;
+
+            Assert.Contains("intensity-trend prior from controls", byDefault, StringComparison.Ordinal);
+            Assert.Contains("intensity-trend prior from controls", byControls, StringComparison.Ordinal);
+            Assert.Contains("intensity-trend prior from design groups", byGroups, StringComparison.Ordinal);
+
+            // Asking for both at once is a contradiction, not a precedence puzzle.
+            var both = Invoke(Args("--prior-from-controls", "--prior-from-groups"));
+            Assert.NotEqual(0, both.Code);
+            Assert.Contains("opposite things", both.Output, StringComparison.Ordinal);
         }
         finally
         {

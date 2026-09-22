@@ -466,15 +466,27 @@ public static class Program
             throw new ArgumentException("--trend-over needs --design trend or --design trend-within-subject.");
         }
 
+        // The prior's per-feature SCALE comes from the run's QC and reference replicates whenever
+        // it has any. That is the default, not an option, because the design groups of a real study
+        // contain the biology the analysis exists to find: a prior fitted on them describes
+        // measurement noise plus that biology, and shrinks genuine effects toward nothing. Control
+        // injections are nominal replicates, so their spread IS the measurement variance the prior
+        // is meant to describe. The prior degrees of freedom stay global either way, so the amount
+        // of shrinkage remains calibrated to the study samples.
         IReadOnlyList<IReadOnlyList<int>>? priorGroups = null;
-        if (opts.GetSingleOrNull("--prior-from-controls") is not null)
-        {
-            if (!dataset.MetadataColumns.Contains("sample_type"))
-                throw new ArgumentException("--prior-from-controls needs a sample_type column.");
-            priorGroups = ControlSampleTypes.PriorGroups(dataset.MetadataValues("sample_type"))
-                ?? throw new ArgumentException(
-                    "--prior-from-controls found no control type with two or more replicates.");
-        }
+        var fromGroups = opts.GetSingleOrNull("--prior-from-groups") is not null;
+        var fromControls = opts.GetSingleOrNull("--prior-from-controls") is not null;
+        if (fromGroups && fromControls)
+            throw new ArgumentException(
+                "--prior-from-controls and --prior-from-groups ask for opposite things.");
+
+        if (!fromGroups && dataset.MetadataColumns.Contains("sample_type"))
+            priorGroups = ControlSampleTypes.PriorGroups(dataset.MetadataValues("sample_type"));
+
+        // Asked for explicitly, an absent source is an error rather than a silent fallback.
+        if (fromControls && priorGroups is null)
+            throw new ArgumentException(
+                "--prior-from-controls found no control type with two or more replicates.");
 
         return new DifferentialOptions
         {
@@ -1024,8 +1036,15 @@ public static class Program
             --prior PRIOR          Variance prior for the moderated t: intensity-trend
                                    (default, matches the lab's proteomics-toolkit),
                                    global, limma-trend, peptide-count
-            --prior-from-controls  Fit the variance prior on the QC and reference
-                                   replicates instead of on the contrast groups
+            --prior-from-controls  Fit the variance prior on the QC and reference replicates.
+                                   This is the DEFAULT whenever the run has two or more replicates
+                                   of a control type; passing it makes that explicit and turns a
+                                   missing control set into an error rather than a fallback
+            --prior-from-groups    Fit the variance prior on the contrast groups instead. Their
+                                   spread includes the biological variation the analysis is looking
+                                   for, so the prior describes measurement noise plus that biology
+                                   and shrinks genuine effects toward nothing - use only to
+                                   reproduce an older result
             --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
             --correction METHOD    bh (default), by, holm, bonferroni, none
             --alpha A              p-value threshold for the printed hit count (default 0.05)

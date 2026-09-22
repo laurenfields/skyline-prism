@@ -46,6 +46,21 @@ as the GitHub Release description and fails if it is missing.
   is offered separately as limma-trend: the two share a name in the literature but are different
   estimators and disagree by a median 3-7% on p-values, so the status line and the tooltip both name
   which one produced a result.
+- **The variance prior is now fitted on the QC and reference replicates by default.** This is the
+  single most consequential default in the pane, and it matches what the lab has done in practice
+  for years. The intensity-trend prior needs groups to take a within-group SD from; taken from the
+  **design groups** of a real study, that SD contains the inter-subject biological variation the
+  analysis exists to find, so the prior describes measurement noise *plus* that biology and the
+  moderation shrinks genuine effects toward nothing. Control injections are nominal replicates, so
+  their spread is the measurement variance the prior is meant to describe. PRISM now uses them
+  whenever a run has two or more replicates of any control type. Only the per-feature **scale**
+  comes from the controls - the prior degrees of freedom stay global, estimated from the study
+  samples, so the amount of shrinkage is still calibrated to the data being analyzed, matching
+  `proteomics-toolkit`'s `variance_prior_group_column`. The source is named everywhere the prior
+  is (`intensity-trend prior from controls` / `from design groups`), because two results are not
+  comparable unless they used the same one. On the committed cohort the switch lowered the p-value
+  of **all 51** proteins - median ratio 0.969, minimum 0.847, none raised. `--prior-from-groups`
+  restores the old behavior for reproducing an earlier result.
 - **Linear-trend designs: fit a slope against time or dose.** Two new entries in **Design** -
   **Trend, independent** and **Trend, within subject** - replace the A/B arms with a single
   **Trend over** picker naming a numeric metadata column. The split is deliberate rather than a
@@ -62,8 +77,9 @@ as the GitHub Release description and fails if it is missing.
   hidden and disabled, and **Detection** is hidden under a trend because it compares two groups and
   a trend has none. Clicking a point opens the feature's **trajectory** - abundance against the
   trend column with the fitted line, plus one faint line per subject. The intensity-trend prior
-  needs groups and so is unavailable here; it falls back to the global prior and says so, and
-  **Fit prior on controls** brings it back. `prism differential` takes `--design trend` /
+  takes its groups from the controls, as everywhere else, so it is available on a trend design
+  whenever the run has them; forcing `--prior-from-groups` on a trend falls back to the global
+  prior, since a trend has no design groups. `prism differential` takes `--design trend` /
   `--design trend-within-subject` with `--trend-over` and `--subject`.
 - **The status line and the CSV now name the prior that actually ran**, not the one requested. A
   requested prior can fall back - a trend design has no groups for the intensity trend, a peptide
