@@ -46,6 +46,29 @@ as the GitHub Release description and fails if it is missing.
   is offered separately as limma-trend: the two share a name in the literature but are different
   estimators and disagree by a median 3-7% on p-values, so the status line and the tooltip both name
   which one produced a result.
+- **Linear-trend designs: fit a slope against time or dose.** Two new entries in **Design** -
+  **Trend, independent** and **Trend, within subject** - replace the A/B arms with a single
+  **Trend over** picker naming a numeric metadata column. The split is deliberate rather than a
+  checkbox, because the independence assumption is the whole statistical question: if the same
+  subjects are followed across that column, treating their samples as independent understates the
+  standard error and reports more hits than the data support. The within-subject form fits
+  `[1, x, subject dummies]`, the paired design generalized from a two-level column to a numeric one.
+  On the committed fixture the leading feature fits to **t = 9.51, p = 1.8e-21** with the subject
+  block and **t = 0.86, p = 0.39** without it.
+  The reported effect is the modeled **change across the observed range**, not the raw slope, so the
+  effect-size cut means the same thing whatever units the column is in - and coding a two-level
+  grouping as 0/1 reproduces the two-arm contrast exactly, which is pinned by a test. Only columns
+  whose every value parses as a number are offered; with none in the run both trend entries are
+  hidden and disabled, and **Detection** is hidden under a trend because it compares two groups and
+  a trend has none. Clicking a point opens the feature's **trajectory** - abundance against the
+  trend column with the fitted line, plus one faint line per subject. The intensity-trend prior
+  needs groups and so is unavailable here; it falls back to the global prior and says so, and
+  **Fit prior on controls** brings it back. `prism differential` takes `--design trend` /
+  `--design trend-within-subject` with `--trend-over` and `--subject`.
+- **The status line and the CSV now name the prior that actually ran**, not the one requested. A
+  requested prior can fall back - a trend design has no groups for the intensity trend, a peptide
+  matrix has no peptide counts - and the headline used to keep naming the request while a message
+  underneath corrected it.
 - **The hit rule is adjustable, and it is always stated.** The Volcano's cut-offs used to be fixed
   at `adj.P < 0.05` and `|log2FC| >= 1`. Both are now controls - **Hits: [Adjusted p | Raw p] < [cut],
   |log2FC| >= [cut]** - with the usual values one click away and any value typeable. The threshold

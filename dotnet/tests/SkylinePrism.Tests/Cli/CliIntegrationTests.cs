@@ -363,10 +363,20 @@ public class CliIntegrationTests
     // A column that is not in the metadata at all.
     [InlineData("No metadata column", "-g", "nosuchcolumn", "-a", "qc", "-b", "experimental")]
     // Paired without the column that says which samples are a pair.
-    [InlineData("needs --pair-by", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--design", "paired")]
+    [InlineData("needs --subject", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--design", "paired")]
     // ... and the reverse, which would otherwise report an unpaired result for a paired-looking command.
-    [InlineData("--pair-by needs --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+    [InlineData("--subject needs --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--subject", "batch")]
+    // --pair-by is kept as an alias, so it must reach the same refusal rather than being ignored.
+    [InlineData("--subject needs --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--pair-by", "batch")]
+    // A trend needs its numeric column...
+    [InlineData("needs --trend-over", "--design", "trend")]
+    // ...and a within-subject trend needs a subject column as well.
+    [InlineData("needs --subject", "--design", "trend-within-subject", "--trend-over", "batch")]
+    // A trend column without a trend design would otherwise be silently ignored.
+    [InlineData("--trend-over needs --design trend", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--trend-over", "batch")]
     // A covariate handed to a test with no design matrix to put it in.
     [InlineData("--adjust-for needs --test moderated", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--test", "welch", "--adjust-for", "batch")]

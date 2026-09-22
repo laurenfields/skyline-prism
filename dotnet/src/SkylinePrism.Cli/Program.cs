@@ -211,10 +211,13 @@ public static class Program
         // are several, and a comma-separated list is what a reader reaches for first.
         var aLevels = SplitLevels(opts.GetList("-a", "--group-a"));
         var bLevels = SplitLevels(opts.GetList("-b", "--group-b"));
-        if (dir is null || groupBy is null || aLevels.Count == 0 || bLevels.Count == 0)
+        var trendRequested = IsTrendRequested(opts);
+        if (dir is null || (!trendRequested && (groupBy is null || aLevels.Count == 0 || bLevels.Count == 0)))
         {
             Console.Error.WriteLine(
                 "Usage: prism differential -d <output-dir> --group-by <column> -a <level...> -b <level...>");
+            Console.Error.WriteLine(
+                "   or: prism differential -d <output-dir> --design trend --trend-over <column>");
             Console.Error.WriteLine("Run 'prism differential --help' for the full option list.");
             return 2;
         }
@@ -227,27 +230,29 @@ public static class Program
         };
 
         var dataset = DifferentialDataset.Load(dir, level);
-        if (!dataset.MetadataColumns.Contains(groupBy))
+        if (trendRequested)
+            return RunDifferentialTrend(opts, dataset, level, dir);
+        if (!dataset.MetadataColumns.Contains(groupBy!))
             throw new ArgumentException(
                 $"No metadata column '{groupBy}'. Available: {string.Join(", ", dataset.MetadataColumns)}");
 
-        var arms = ContrastArms.Resolve(dataset.MetadataValues(groupBy), aLevels, bLevels);
+        var arms = ContrastArms.Resolve(dataset.MetadataValues(groupBy!), aLevels, bLevels);
         if (!arms.Ok)
         {
             Console.Error.WriteLine($"Error: {arms.Error}");
-            var present = dataset.MetadataValues(groupBy)
+            var present = dataset.MetadataValues(groupBy!)
                 .Where(v => !string.IsNullOrEmpty(v)).Distinct(StringComparer.Ordinal)
                 .OrderBy(v => v, StringComparer.Ordinal);
             Console.Error.WriteLine($"Values of '{groupBy}': {string.Join(", ", present)}");
             return 2;
         }
 
-        var options = DifferentialOptionsFrom(opts, dataset, groupBy);
+        var options = DifferentialOptionsFrom(opts, dataset, groupBy!);
         var result = Differential.Run(dataset.ExprLog2, dataset.FeatureIds, arms.A, arms.B, options);
 
         var aLabel = ContrastArms.Describe(aLevels);
         var bLabel = ContrastArms.Describe(bLevels);
-        Console.WriteLine($"{options.Describe()}: {groupBy} = {bLabel} vs {aLabel}");
+        Console.WriteLine($"{options.Describe(result.VariancePrior)}: {groupBy} = {bLabel} vs {aLabel}");
         Console.WriteLine(
             $"  n = {result.NA} vs {result.NB}; {result.NFeaturesTested} of {result.NFeaturesTotal} "
             + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
@@ -262,7 +267,65 @@ public static class Program
             $"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe()}, {CorrectionName(options.Correction)})");
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
-        WriteDifferentialCsv(outPath, result, dataset, options, rule, groupBy, aLabel, bLabel);
+        WriteDifferentialCsv(outPath, result, dataset, options, rule, groupBy!, aLabel, bLabel);
+        Console.WriteLine($"Results written to: {outPath}");
+        return 0;
+    }
+
+    /// <summary>Whether the flags ask for a trend design.</summary>
+    private static bool IsTrendRequested(ParsedOptions opts) =>
+        (opts.GetSingleOrNull("--design") ?? string.Empty).ToLowerInvariant()
+            is "trend" or "trend-within-subject" or "trend-repeated";
+
+    /// <summary>
+    /// <c>prism differential --design trend</c>: fit a slope against a numeric column.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the two-arm path for the same reason the pane's is - there are no arms to
+    /// resolve or name - while sharing the options builder, the hit rule and the CSV writer, so a
+    /// trend result is the same file shape as any other.
+    /// </remarks>
+    private static int RunDifferentialTrend(
+        ParsedOptions opts, DifferentialDataset dataset, FeatureLevel level, string dir)
+    {
+        var options = DifferentialOptionsFrom(opts, dataset, groupBy: string.Empty);
+        var trendOver = options.TrendColumn!;
+        var raw = dataset.MetadataValues(trendOver);
+        var x = new double[raw.Length];
+        for (var i = 0; i < raw.Length; i++)
+            x[i] = raw[i] is { } v
+                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+                ? d
+                : double.NaN;
+
+        var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
+        var result = Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, x, options);
+        var rule = SignificanceRuleFrom(opts);
+
+        var used = x.Where(double.IsFinite).ToList();
+        var span = used.Count > 0
+            ? $"{used.Min().ToString("0.###", CultureInfo.InvariantCulture)} to "
+              + used.Max().ToString("0.###", CultureInfo.InvariantCulture)
+            : "(none)";
+        var n = result.NSubjects > 0
+            ? $"{result.NA} samples in {result.NSubjects} subjects"
+            : $"{result.NA} samples";
+
+        Console.WriteLine($"{options.Describe(result.VariancePrior)}: {trendOver} {span}");
+        Console.WriteLine(
+            $"  n = {n}; {result.NFeaturesTested} of {result.NFeaturesTotal} "
+            + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
+        foreach (var m in result.Messages.Concat(result.Warnings))
+            Console.WriteLine($"  {m}");
+
+        var effectName = $"log2 change across {trendOver}";
+        var hits = result.Rows.Count(rule.IsSignificant);
+        Console.WriteLine($"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe(effectName)}, "
+            + $"{CorrectionName(options.Correction)})");
+
+        var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
+        WriteDifferentialCsv(outPath, result, dataset, options, rule, trendOver,
+            aLabel: span.Split(" to ")[0], bLabel: span.Split(" to ")[^1], effectName: effectName);
         Console.WriteLine($"Results written to: {outPath}");
         return 0;
     }
@@ -275,6 +338,14 @@ public static class Program
     private static double ParseDouble(string? text, double fallback) =>
         text is not null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
             ? v : fallback;
+
+    private static string DesignName(DifferentialDesign design) => design switch
+    {
+        DifferentialDesign.Paired => "paired",
+        DifferentialDesign.LinearTrend => "trend",
+        DifferentialDesign.LinearTrendWithinSubject => "trend-within-subject",
+        _ => "unpaired",
+    };
 
     private static string CorrectionName(MultipleTesting correction) => correction switch
     {
@@ -308,7 +379,10 @@ public static class Program
         {
             "unpaired" => DifferentialDesign.Unpaired,
             "paired" => DifferentialDesign.Paired,
-            var other => throw new ArgumentException($"--design must be unpaired or paired, not '{other}'"),
+            "trend" => DifferentialDesign.LinearTrend,
+            "trend-within-subject" or "trend-repeated" => DifferentialDesign.LinearTrendWithinSubject,
+            var other => throw new ArgumentException(
+                $"--design must be unpaired, paired, trend or trend-within-subject, not '{other}'"),
         };
         var test = (opts.GetSingleOrNull("--test") ?? "moderated").ToLowerInvariant() switch
         {
@@ -339,19 +413,26 @@ public static class Program
         };
 
         string?[]? subjects = null;
-        var pairBy = opts.GetSingleOrNull("--pair-by");
-        if (design == DifferentialDesign.Paired)
+        // One column, two designs: it matches each subject's two samples under --design paired, and
+        // gives each subject its own level under --design trend-within-subject. --subject is the
+        // name that reads correctly for both; --pair-by stays as its alias.
+        var pairBy = opts.GetSingleOrNull("--subject", "--pair-by");
+        var needsSubject = design is DifferentialDesign.Paired
+            or DifferentialDesign.LinearTrendWithinSubject;
+        if (needsSubject)
         {
             if (pairBy is null)
-                throw new ArgumentException("--design paired needs --pair-by <column> to match samples on.");
+                throw new ArgumentException(
+                    $"--design {DesignName(design)} needs --subject <column> to group samples by.");
             if (!dataset.MetadataColumns.Contains(pairBy))
-                throw new ArgumentException($"No metadata column '{pairBy}' to pair by.");
+                throw new ArgumentException($"No metadata column '{pairBy}' to group subjects by.");
             subjects = dataset.MetadataValues(pairBy);
         }
         else if (pairBy is not null)
         {
             // Silently ignoring it would report an unpaired result for a command that reads paired.
-            throw new ArgumentException("--pair-by needs --design paired.");
+            throw new ArgumentException(
+                "--subject needs --design paired or --design trend-within-subject.");
         }
 
         var covariates = new List<Covariate>();
@@ -368,6 +449,22 @@ public static class Program
             throw new ArgumentException(
                 "--adjust-for needs --test moderated; the other tests have no design matrix to put a "
                 + "covariate in.");
+
+        var isTrend = design is DifferentialDesign.LinearTrend
+            or DifferentialDesign.LinearTrendWithinSubject;
+        var trendOver = opts.GetSingleOrNull("--trend-over");
+        if (isTrend)
+        {
+            if (trendOver is null)
+                throw new ArgumentException(
+                    "A trend design needs --trend-over <column>, the numeric column to fit against.");
+            if (!dataset.MetadataColumns.Contains(trendOver))
+                throw new ArgumentException($"No metadata column '{trendOver}' to fit a trend against.");
+        }
+        else if (trendOver is not null)
+        {
+            throw new ArgumentException("--trend-over needs --design trend or --design trend-within-subject.");
+        }
 
         IReadOnlyList<IReadOnlyList<int>>? priorGroups = null;
         if (opts.GetSingleOrNull("--prior-from-controls") is not null)
@@ -386,6 +483,7 @@ public static class Program
             Prior = prior,
             Correction = correction,
             SubjectLabels = subjects,
+            TrendColumn = trendOver,
             PeptideCounts = dataset.PeptideCounts,
             PriorGroupColumns = priorGroups,
             Covariates = covariates.Count > 0 ? covariates : null,
@@ -404,19 +502,27 @@ public static class Program
     /// </remarks>
     private static void WriteDifferentialCsv(
         string path, DifferentialResult result, DifferentialDataset dataset,
-        DifferentialOptions options, SignificanceRule rule, string groupBy, string aLabel, string bLabel)
+        DifferentialOptions options, SignificanceRule rule, string groupBy, string aLabel, string bLabel,
+        string effectName = "log2FC")
     {
         var dirName = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dirName))
             Directory.CreateDirectory(dirName);
 
         using var w = new StreamWriter(path);
-        w.WriteLine($"# contrast: {groupBy} = {bLabel} vs {aLabel} (positive log2FC is higher in {bLabel})");
-        w.WriteLine($"# method: {options.Describe()}, {CorrectionName(options.Correction)}");
-        w.WriteLine($"# n: {result.NA} vs {result.NB}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
+        w.WriteLine(result.IsTrend
+            ? $"# trend: {groupBy} from {aLabel} to {bLabel} (span {result.TrendRange.ToString("0.####", CultureInfo.InvariantCulture)}); "
+              + "log2fc is the modeled change ACROSS that span, slope = log2fc / span"
+            : $"# contrast: {groupBy} = {bLabel} vs {aLabel} (positive log2FC is higher in {bLabel})");
+        w.WriteLine($"# method: {options.Describe(result.VariancePrior)}, {CorrectionName(options.Correction)}");
+        w.WriteLine(result.IsTrend
+            ? $"# n: {result.NA} samples"
+              + (result.NSubjects > 0 ? $" in {result.NSubjects} subjects" : string.Empty)
+              + $"; tested {result.NFeaturesTested} of {result.NFeaturesTotal}"
+            : $"# n: {result.NA} vs {result.NB}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
         // EVERY tested feature is in this file, not just the hits - so the rule is recorded as the
         // one the run reported against, not as a filter that was applied to the rows below.
-        w.WriteLine($"# hit rule (rows are NOT filtered by it): {rule.Describe()}");
+        w.WriteLine($"# hit rule (rows are NOT filtered by it): {rule.Describe(effectName)}");
         w.WriteLine("feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
             + "p_value,adj_p_value,mean_a,mean_b");
         foreach (var r in result.Rows)
@@ -897,11 +1003,22 @@ public static class Program
         comma-separate them - and the arm is their union. A level cannot be in both arms.
         A positive log2FC means higher in B.
 
+        A TREND design has no arms: it fits a slope against --trend-over instead, and
+        reports the modeled change across that column's observed range rather than the
+        raw slope, so --min-log2fc means the same thing as it does on a two-arm contrast
+        whatever units the column is in. Use trend-within-subject whenever the same
+        subjects are followed across that column - treating one subject's repeated
+        samples as independent understates the standard error.
+
         Options:
             --level LEVEL          protein (default) or peptide
-            --design DESIGN        unpaired (default) or paired
-            --pair-by COL          Metadata column matching each subject's two samples;
-                                   required by, and only valid with, --design paired
+            --design DESIGN        unpaired (default), paired, trend, trend-within-subject
+            --subject COL          Metadata column identifying the subject (alias: --pair-by).
+                                   Required by --design paired, which matches each subject's two
+                                   samples, and by --design trend-within-subject, which gives each
+                                   subject its own level
+            --trend-over COL       The NUMERIC column to fit a slope against; required by, and only
+                                   valid with, a trend design
             --test TEST            moderated (default), welch, student, paired-t,
                                    wilcoxon, mann-whitney
             --prior PRIOR          Variance prior for the moderated t: intensity-trend
@@ -931,6 +1048,12 @@ public static class Program
             # A within-subject design: each subject's pre and post sample
             prism differential -d output/ --group-by timepoint -a Pre -b Post \
                 --design paired --pair-by subject --test paired-t
+
+            # A dose-response, one sample per subject
+            prism differential -d output/ --design trend --trend-over dose_mg
+
+            # A time course following the same subjects
+            prism differential -d output/ --design trend-within-subject                 --trend-over week --subject patient_id
 
             # Peptide level, where BY is the correction to reach for
             prism differential -d output/ --level peptide --group-by condition \

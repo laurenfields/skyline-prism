@@ -331,7 +331,7 @@
                                     <ComboBoxItem>Peptide</ComboBoxItem>
                                     <ComboBoxItem>Protein</ComboBoxItem>
                                 </ComboBox>
-                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <TextBlock x:Name="DiffGroupByLabel" Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
                                           ToolTip="Column to group samples by: from the Replicates report if the run exported one, plus the run's own sample_metadata.csv (which supplies batch) and any clinical CSV attached in the Differential pane. Defaults to Sample Type." />
                                 <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
@@ -562,7 +562,9 @@
                                 <ComboBox x:Name="DiffViewCombo" Width="110" SelectionChanged="OnDiffViewChanged"
                                           ToolTip="Volcano (moderated-t), peptide detection frequency, or g:Profiler enrichment of the significant hits. For a sample PCA use the QC pane, which draws the same decomposition and can group by the same columns.">
                                     <ComboBoxItem>Volcano</ComboBoxItem>
-                                    <ComboBoxItem>Detection</ComboBoxItem>
+                                    <!-- Collapsed and disabled under a trend design: Detection
+                                         compares two GROUPS, and a trend has none. -->
+                                    <ComboBoxItem x:Name="DiffViewDetectionItem">Detection</ComboBoxItem>
                                     <ComboBoxItem>Enrichment</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
@@ -572,15 +574,28 @@
                                     <ComboBoxItem>Peptide</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="Design:" VerticalAlignment="Center" Margin="16,0,4,0" />
-                                <ComboBox x:Name="DiffDesignCombo" Width="100" SelectionChanged="OnDiffDesignChanged"
-                                          ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a pairing column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. Subjects present in only one arm, or with more than one sample in an arm, are left out and reported.">
+                                <ComboBox x:Name="DiffDesignCombo" Width="165" SelectionChanged="OnDiffDesignChanged"
+                                          ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a subject column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. The two 'Trend' designs fit a slope against a NUMERIC column (time, dose, a numeric stage) instead of contrasting two arms; pick 'within subject' when the same subjects are followed across that column, because treating one subject's repeated samples as independent understates the standard error and reports more hits than the data support.">
                                     <ComboBoxItem Tag="Unpaired">Unpaired</ComboBoxItem>
                                     <ComboBoxItem Tag="Paired">Paired</ComboBoxItem>
+                                    <!-- Collapsed AND disabled when the run carries no numeric
+                                         metadata column, by UpdateDiffControls: WPF's arrow-key and
+                                         type-ahead selection skip disabled items but not collapsed
+                                         ones, so hiding alone leaves them a keypress away. -->
+                                    <ComboBoxItem x:Name="DiffDesignTrendItem" Tag="LinearTrend">Trend, independent</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffDesignTrendSubjectItem" Tag="LinearTrendWithinSubject">Trend, within subject</ComboBoxItem>
                                 </ComboBox>
-                                <TextBlock x:Name="DiffPairByLabel" Text="Pair by:" VerticalAlignment="Center"
+                                <!-- One control, two designs: it is the subject column in both the
+                                     paired case (match each subject's two samples) and the
+                                     within-subject trend (absorb each subject's level). -->
+                                <TextBlock x:Name="DiffPairByLabel" Text="Subject:" VerticalAlignment="Center"
                                            Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffPairByCombo" Width="140" SelectionChanged="OnDiffPairByChanged"
-                                          ToolTip="The metadata column identifying the subject, so each subject's two samples can be matched. Usually a patient or donor id." />
+                                          ToolTip="The metadata column identifying the subject - usually a patient or donor id. Under a paired design it matches each subject's two samples; under a within-subject trend it gives each subject its own level, so the slope is estimated within subject rather than across people." />
+                                <TextBlock x:Name="DiffTrendOverLabel" Text="Trend over:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffTrendOverCombo" Width="140" SelectionChanged="OnDiffTrendOverChanged"
+                                          ToolTip="The NUMERIC metadata column to fit the slope against - a timepoint, a dose, a numeric stage. Only columns whose every value parses as a number are offered, because a slope needs one. The reported effect is the modeled change across this column's observed range, so the effect-size cut means the same thing as a fold change does on a two-arm contrast." />
                                 <TextBlock Text="Test:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffTestCombo" Width="130" SelectionChanged="OnDiffTestChanged"
                                           ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
@@ -599,7 +614,7 @@
                                 <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="DiffGroupByCombo" Width="150" SelectionChanged="OnDiffGroupByChanged"
                                           ToolTip="Metadata column to split samples by (from sample_metadata.csv)." />
-                                <TextBlock Text="A =" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <TextBlock x:Name="DiffALabel" Text="A =" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <!-- Tick lists, not single pickers: an arm is often the UNION of
                                      several values - two control classes against the rest, say - and
                                      no single value expresses that. Same idiom as the QC pane's
@@ -615,7 +630,7 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <TextBlock Text="vs B =" VerticalAlignment="Center" Margin="12,0,4,0" />
+                                <TextBlock x:Name="DiffBLabel" Text="vs B =" VerticalAlignment="Center" Margin="12,0,4,0" />
                                 <ComboBox x:Name="DiffBCombo" DropDownClosed="OnDiffTickListClosed" Width="150" IsEditable="True" IsReadOnly="True"
                                           Text="(pick one or more)"
                                           ToolTip="Group B, the treatment arm; a positive log2 fold change means higher in B. Tick more than one value to contrast their union.">

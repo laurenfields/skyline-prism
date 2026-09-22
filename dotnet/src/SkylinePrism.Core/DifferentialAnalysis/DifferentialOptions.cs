@@ -197,18 +197,33 @@ public sealed record DifferentialOptions
     public IReadOnlyList<Covariate>? Covariates { get; init; }
 
     /// <summary>A short human-readable name for what this asks for, for the status line and provenance.</summary>
-    public string Describe()
+    /// <param name="actualPrior">
+    /// The prior that was actually fitted (<see cref="DifferentialResult.VariancePrior"/>), when the
+    /// result is in hand. A requested prior can fall back - a trend design has no groups for the
+    /// intensity trend, a peptide matrix has no peptide counts - and naming the requested one then
+    /// would put a prior in the headline that did not produce the numbers underneath it.
+    /// </param>
+    public string Describe(string? actualPrior = null)
     {
-        var test = Test switch
+        var priorName = actualPrior switch
         {
-            DifferentialTest.ModeratedT => "moderated t (" + Prior switch
+            null => Prior switch
             {
                 VariancePrior.Global => "global prior",
                 VariancePrior.IntensityTrend => "intensity-trend prior",
                 VariancePrior.LimmaTrend => "limma-trend prior",
                 VariancePrior.PeptideCount => "peptide-count prior",
                 _ => "intensity-trend prior",
-            } + ")",
+            },
+            "global" => "global prior",
+            "intensity-trend" => "intensity-trend prior",
+            "limma-trend" => "limma-trend prior",
+            "peptide-count" => "peptide-count prior",
+            var other => other + " prior",
+        };
+        var test = Test switch
+        {
+            DifferentialTest.ModeratedT => $"moderated t ({priorName})",
             DifferentialTest.WelchT => "Welch t",
             DifferentialTest.StudentT => "Student t",
             DifferentialTest.PairedT => "paired t",

@@ -167,12 +167,16 @@ public partial class MainWindow
 
     /// <summary>The design the Design combo is pointing at.</summary>
     private DifferentialDesign DiffSelectedDesign() =>
-        ((DiffDesignCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "Paired"
-            ? DifferentialDesign.Paired
-            : DifferentialDesign.Unpaired;
+        ((DiffDesignCombo.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "Paired" => DifferentialDesign.Paired,
+            "LinearTrend" => DifferentialDesign.LinearTrend,
+            "LinearTrendWithinSubject" => DifferentialDesign.LinearTrendWithinSubject,
+            _ => DifferentialDesign.Unpaired,
+        };
 
     /// <summary>
-    /// The pairing key per sample, aligned to the dataset's sample order, or null when no pairing
+    /// The subject key per sample, aligned to the dataset's sample order, or null when no subject
     /// column is chosen.
     /// </summary>
     private string?[]? DiffSubjectLabels()
@@ -193,6 +197,119 @@ public partial class MainWindow
             "Wilcoxon" => DifferentialTest.Wilcoxon,
             _ => DifferentialTest.ModeratedT,
         };
+
+    /// <summary>
+    /// Keep the trend-column picker in step with the run's numeric columns.
+    /// </summary>
+    /// <remarks>
+    /// Rewritten only when the list actually changes, because this is called from
+    /// <c>UpdateDiffControls</c> - which runs on every control change - and reassigning ItemsSource
+    /// clears the selection. Attaching a clinical CSV is what makes the list grow mid-session, and
+    /// losing the user's pick every time they touched an unrelated combo would be worse than the
+    /// comparison costs.
+    /// </remarks>
+    private void PopulateTrendColumns(List<string> numeric)
+    {
+        if (DiffTrendOverCombo.ItemsSource is IEnumerable<string> current
+            && current.SequenceEqual(numeric, StringComparer.Ordinal))
+            return;
+
+        var keep = DiffTrendOverCombo.SelectedItem as string;
+        _diffSuppress = true;
+        try
+        {
+            DiffTrendOverCombo.ItemsSource = numeric;
+            DiffTrendOverCombo.SelectedItem = keep is not null && numeric.Contains(keep, StringComparer.Ordinal)
+                ? keep
+                : numeric.FirstOrDefault();
+        }
+        finally
+        {
+            _diffSuppress = false;
+        }
+    }
+
+    private async void OnDiffTrendOverChanged(object sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (!IsInitialized || _diffSuppress || _diffDataset is null)
+                return;
+            if (!DiffIsTrend())
+                return; // the column is only consulted by a trend design
+            await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffTrendOverChanged), ex);
+        }
+    }
+
+    /// <summary>Whether the current design fits a slope rather than contrasting two arms.</summary>
+    private bool DiffIsTrend() => DiffSelectedDesign()
+        is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject;
+
+    /// <summary>The trend column's name, or null when none is picked.</summary>
+    private string? DiffTrendColumn() => DiffTrendOverCombo.SelectedItem as string;
+
+    /// <summary>
+    /// The trend column's value per sample, NaN where the sample has none.
+    /// </summary>
+    private double[]? DiffTrendValues()
+    {
+        if (_diffDataset is null || DiffTrendColumn() is not { } col
+            || !_diffDataset.MetadataColumns.Contains(col))
+            return null;
+
+        var raw = _diffDataset.MetadataValues(col);
+        var values = new double[raw.Length];
+        for (var i = 0; i < raw.Length; i++)
+            values[i] = raw[i] is { } v
+                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+                ? d
+                : double.NaN;
+        return values;
+    }
+
+    /// <summary>
+    /// The metadata columns a trend can be fitted against: those whose every non-empty value parses
+    /// as a number.
+    /// </summary>
+    /// <remarks>
+    /// The same dtype inference <see cref="Covariate.FromMetadata"/> uses, and for the same reason -
+    /// offering a categorical column here would put a rank-deficient design one click away and fail
+    /// at run time instead of at the picker. A column needs two DISTINCT values to carry a slope,
+    /// so a constant numeric column is left out too.
+    /// </remarks>
+    private List<string> DiffNumericColumns()
+    {
+        var result = new List<string>();
+        if (_diffDataset is null)
+            return result;
+
+        foreach (var col in _diffDataset.MetadataColumns)
+        {
+            var seen = new HashSet<double>();
+            var allNumeric = true;
+            foreach (var v in _diffDataset.MetadataValues(col))
+            {
+                if (string.IsNullOrEmpty(v))
+                    continue;
+                if (!double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                {
+                    allNumeric = false;
+                    break;
+                }
+
+                seen.Add(d);
+            }
+
+            if (allNumeric && seen.Count >= 2)
+                result.Add(col);
+        }
+
+        return result;
+    }
 
     /// <summary>The multiple-testing correction the Correct combo is pointing at.</summary>
     private MultipleTesting DiffSelectedCorrection() =>
@@ -295,10 +412,30 @@ public partial class MainWindow
     /// <summary>
     /// What the effect on the volcano's x-axis is called, for the status line and the hit rule.
     /// </summary>
-    private string DiffEffectName() => "log2FC";
+    /// <remarks>
+    /// A trend does not report a fold change between arms - it reports the modeled change across
+    /// the trend column's observed range - so calling it log2FC would name the wrong quantity in
+    /// the one place a reader checks what a threshold meant.
+    /// </remarks>
+    private string DiffEffectName() => DiffIsTrend()
+        ? $"log2 change across {DiffTrendColumn() ?? "the trend"}"
+        : "log2FC";
 
     /// <summary>The volcano's x-axis name.</summary>
-    private string DiffXAxisLabel() => "log2 fold change (B / A)";
+    private string DiffXAxisLabel()
+    {
+        if (!DiffIsTrend())
+            return "log2 fold change (B / A)";
+        var col = DiffTrendColumn() ?? "trend";
+        // The observed span is in the label, because the axis is a change ACROSS it and the number
+        // is meaningless without knowing across what.
+        return _diffTrendRange is { } r
+            ? $"log2 change across {col} ({r.Min:0.###} to {r.Max:0.###})"
+            : $"log2 change across {col}";
+    }
+
+    /// <summary>The trend column's observed span in the last run, for the axis label.</summary>
+    private (double Min, double Max)? _diffTrendRange;
 
     /// <summary>What the contrast views should run: the current selections, as Core sees them.</summary>
     private DifferentialOptions DiffOptions(IReadOnlyList<Covariate>? covariates) =>
@@ -310,6 +447,8 @@ public partial class MainWindow
             Prior = DiffSelectedPrior(),
             Correction = DiffSelectedCorrection(),
             SubjectLabels = DiffSubjectLabels(),
+            TrendColumn = DiffIsTrend() ? DiffTrendColumn() : null,
+            TimeValues = DiffIsTrend() ? DiffTrendValues() : null,
             PeptideCounts = _diffDataset?.PeptideCounts,
             PriorGroupColumns = DiffPriorFromControlsCheck.IsChecked == true
                 ? DiffControlColumns()
@@ -331,21 +470,70 @@ public partial class MainWindow
     /// </remarks>
     private void UpdateDiffControls()
     {
-        var paired = DiffSelectedDesign() == DifferentialDesign.Paired;
+        var design = DiffSelectedDesign();
+        var paired = design == DifferentialDesign.Paired;
+        var trend = design is DifferentialDesign.LinearTrend
+            or DifferentialDesign.LinearTrendWithinSubject;
+        var withinSubject = design == DifferentialDesign.LinearTrendWithinSubject;
 
-        // The pairing column only means something under the paired design.
-        var pairVisibility = paired ? Visibility.Visible : Visibility.Collapsed;
+        // A trend design needs a numeric column to fit against. With none in the run, both trend
+        // entries are collapsed AND disabled - and if one was already selected (a clinical CSV was
+        // detached, say) the design falls back rather than leaving an invisible selection.
+        var numeric = DiffNumericColumns();
+        PopulateTrendColumns(numeric);
+        ShowTest(DiffDesignTrendItem, numeric.Count > 0);
+        ShowTest(DiffDesignTrendSubjectItem, numeric.Count > 0);
+        if (DiffDesignCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
+        {
+            _diffSuppress = true;
+            DiffDesignCombo.SelectedIndex = 0; // Unpaired
+            _diffSuppress = false;
+            UpdateDiffControls();
+            return;
+        }
+
+        // The subject column is meaningful under a paired design and a within-subject trend, and
+        // nowhere else.
+        var pairVisibility = paired || withinSubject ? Visibility.Visible : Visibility.Collapsed;
         DiffPairByLabel.Visibility = pairVisibility;
         DiffPairByCombo.Visibility = pairVisibility;
 
+        // "Trend over" replaces the whole Group by / A / B triple: a trend has no arms, so leaving
+        // them on screen would invite a selection that takes no part in the result.
+        var trendVisibility = trend ? Visibility.Visible : Visibility.Collapsed;
+        var armVisibility = trend ? Visibility.Collapsed : Visibility.Visible;
+        DiffTrendOverLabel.Visibility = trendVisibility;
+        DiffTrendOverCombo.Visibility = trendVisibility;
+        DiffGroupByLabel.Visibility = armVisibility;
+        DiffGroupByCombo.Visibility = armVisibility;
+        DiffALabel.Visibility = armVisibility;
+        DiffACombo.Visibility = armVisibility;
+        DiffBLabel.Visibility = armVisibility;
+        DiffBCombo.Visibility = armVisibility;
+
+        // The effect on a trend is a change across a range, not a fold change between arms.
+        DiffEffectLabel.Text = trend ? "|log2 change| >=" : "|log2FC| >=";
+
         // A test belongs to one design or the other. Collapsed AND disabled, because WPF's
         // arrow-key and type-ahead selection skip only disabled items, so hiding alone would leave
-        // an inapplicable test one keypress away.
-        ShowTest(DiffTestWelchItem, !paired);
-        ShowTest(DiffTestStudentItem, !paired);
-        ShowTest(DiffTestMannWhitneyItem, !paired);
+        // an inapplicable test one keypress away. Every two-sample test is meaningless on a trend:
+        // there are no two samples to compare, only a slope.
+        ShowTest(DiffTestWelchItem, !paired && !trend);
+        ShowTest(DiffTestStudentItem, !paired && !trend);
+        ShowTest(DiffTestMannWhitneyItem, !paired && !trend);
         ShowTest(DiffTestPairedTItem, paired);
         ShowTest(DiffTestWilcoxonItem, paired);
+
+        // Detection tests observed-versus-not between two GROUPS (Fisher, or McNemar when paired).
+        // Its trend equivalent is a logistic regression of detection on x, which is not
+        // implemented - so the view goes rather than running the wrong test under its name.
+        ShowTest(DiffViewDetectionItem, !trend);
+        if (DiffViewCombo.SelectedItem is ComboBoxItem { IsEnabled: false })
+        {
+            _diffSuppress = true;
+            DiffViewCombo.SelectedIndex = 0; // Volcano
+            _diffSuppress = false;
+        }
 
         // Changing the design can strand the selection on a test that no longer applies. Fall back
         // to the moderated t, which is valid under both, rather than leaving an invisible selection.
@@ -886,8 +1074,104 @@ public partial class MainWindow
             : (pairs.Select(p => p.AColumn).ToList(), pairs.Select(p => p.BColumn).ToList());
     }
 
+    /// <summary>
+    /// The Volcano under a trend design: a slope against a numeric column, plotted as the modeled
+    /// change across that column's observed range.
+    /// </summary>
+    /// <remarks>
+    /// Its own method rather than a branch threaded through the two-arm one, because almost nothing
+    /// is shared past the inputs - there are no arms to resolve, no arm names to print, and the
+    /// per-feature view is a scatter rather than two boxes. What IS shared is everything after the
+    /// result: the same rule, the same renderer, the same grid.
+    /// </remarks>
+    private async Task RunTrendVolcanoAsync(int request)
+    {
+        if (_diffDataset is null)
+            return;
+        if (DiffTrendColumn() is not { } trendColumn || DiffTrendValues() is not { } xValues)
+        {
+            DiffStatusText.Text = "Pick a numeric column to fit the trend against.";
+            return;
+        }
+
+        var dataset = _diffDataset;
+        var covariates = SelectedCovariatesFor(dataset.SampleIds);
+        var options = DiffOptions(covariates);
+        var rule = DiffRule();
+        var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
+
+        DifferentialResult res;
+        try
+        {
+            res = await Task.Run(() =>
+                Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, xValues, options));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            if (StillCurrent(request))
+                DiffStatusText.Text = "Cannot run this trend: " + ex.Message;
+            return;
+        }
+
+        if (!StillCurrent(request))
+            return;
+
+        // The span the effect is measured across, for the axis label. Taken from the samples the
+        // fit actually used, which is why it comes back from Core rather than from the raw column.
+        var used = xValues.Where(double.IsFinite).ToList();
+        _diffTrendRange = used.Count > 0 ? (used.Min(), used.Max()) : null;
+
+        // A trend has no arms, so the per-feature view has no two groups to box. The scatter reads
+        // the trend column instead; these are what it plots against.
+        _volcanoGroupA = columns.ToList();
+        _volcanoGroupB = new List<int>();
+        _volcanoAName = trendColumn;
+        _volcanoBName = string.Empty;
+        _volcanoTrendX = xValues;
+
+        RenderVolcano(res, rule);
+        DiffGrid.ItemsSource = res.Rows.Select(r => new VolcanoRow(
+            _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue,
+            r.FeatureId))
+            .ToList();
+
+        var nSig = res.Rows.Count(rule.IsSignificant);
+        var adj = res.CovariatesUsed.Count > 0
+            ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}"
+            : string.Empty;
+        var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
+        // Samples AND subjects, because under a within-subject design the second is what the test
+        // has to work with and the first alone would overstate it.
+        var n = res.NSubjects > 0
+            ? $"n={res.NA} samples in {res.NSubjects} subjects"
+            : $"n={res.NA} samples";
+        DiffStatusText.Text =
+            $"{options.Describe(res.VariancePrior)}: {n}, {trendColumn} {FormatRange(_diffTrendRange)} - "
+            + $"{res.NFeaturesTested} tested, {nSig} significant ({rule.Describe(DiffEffectName())})"
+            + $"{adj}.{note} "
+            + "Click a point (or a row) for its trajectory; it also selects in Skyline. Hover for the gene.";
+    }
+
+    private static string FormatRange((double Min, double Max)? range) =>
+        range is { } r
+            ? $"{r.Min.ToString("0.###", CultureInfo.InvariantCulture)} to "
+              + r.Max.ToString("0.###", CultureInfo.InvariantCulture)
+            : "(no range)";
+
+    /// <summary>
+    /// The trend column's value per sample from the last trend run, or null when the current view
+    /// is a two-arm contrast. The per-feature window plots against it.
+    /// </summary>
+    private double[]? _volcanoTrendX;
+
     private async Task RunVolcanoAsync(int request)
     {
+        if (DiffIsTrend())
+        {
+            await RunTrendVolcanoAsync(request);
+            return;
+        }
+
         if (!TryGetGroups(out _, out var a, out var b, out var aVal, out var bVal))
         {
             DiffStatusText.Text = "Pick a group-by column, then tick at least one value for each "
@@ -921,6 +1205,10 @@ public partial class MainWindow
         (_volcanoGroupA, _volcanoGroupB) = ContrastColumns(a, b);
         _volcanoAName = aVal;
         _volcanoBName = bVal;
+        // Cleared, not merely unset: left over from a previous trend run it would send the next
+        // per-feature click to the trajectory view against a column this contrast never used.
+        _volcanoTrendX = null;
+        _diffTrendRange = null;
         RenderVolcano(res, rule);
         DiffGrid.ItemsSource = res.Rows.Select(r => new VolcanoRow(
             _diffLabelById.GetValueOrDefault(r.FeatureId, r.FeatureId), r.LogFc, r.PValue, r.AdjPValue,
@@ -937,7 +1225,7 @@ public partial class MainWindow
         // test actually used can be smaller than the arms that were picked. Reporting the picked
         // sizes would credit the result with samples that took no part in it.
         DiffStatusText.Text =
-            $"{options.Describe()}: {aVal} (n={res.NA}) vs {bVal} (n={res.NB}) - "
+            $"{options.Describe(res.VariancePrior)}: {aVal} (n={res.NA}) vs {bVal} (n={res.NB}) - "
             + $"{res.NFeaturesTested} tested, {nSig} significant ({rule.Describe(DiffEffectName())})"
             + $"{adj}.{note} "
             + "Click a point (or a row) for its boxplot; it also selects in Skyline. Hover for the gene.";
@@ -1390,8 +1678,9 @@ public partial class MainWindow
         {
             if (!IsInitialized || _diffSuppress || _diffDataset is null)
                 return;
-            if (DiffSelectedDesign() != DifferentialDesign.Paired)
-                return; // the column is only consulted by the paired design
+            if (DiffSelectedDesign() is not (DifferentialDesign.Paired
+                or DifferentialDesign.LinearTrendWithinSubject))
+                return; // only those two designs consult the subject column
             await RunCurrentViewAsync();
         }
         catch (Exception ex)
@@ -1637,9 +1926,38 @@ public partial class MainWindow
             _featureDetailWindow.Closed += (_, _) => _featureDetailWindow = null;
         }
 
-        _featureDetailWindow.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
-            dr?.AdjPValue ?? double.NaN,
-            _volcanoAName, aVals, aReps, _volcanoBName, bVals, bReps);
+        // A trend has no arms to box, so it gets the trajectory instead: abundance against the
+        // trend column, the fitted line, and one faint line per subject where there are subjects.
+        if (_volcanoTrendX is { } trendX)
+        {
+            var xs = new List<double>();
+            var ys = new List<double>();
+            var reps = new List<string>();
+            var subs = new List<string>();
+            var subjectLabels = DiffSubjectLabels();
+            foreach (var s in _volcanoGroupA)
+            {
+                var v = _diffDataset.ExprLog2[row, s];
+                if (!double.IsFinite(v) || s >= trendX.Length || !double.IsFinite(trendX[s]))
+                    continue;
+                xs.Add(trendX[s]);
+                ys.Add(v);
+                reps.Add(_diffDataset.SampleIds[s]);
+                subs.Add(subjectLabels is not null && s < subjectLabels.Length
+                    ? subjectLabels[s] ?? string.Empty
+                    : string.Empty);
+            }
+
+            _featureDetailWindow.ShowTrendFeature(label, featureId, dr?.LogFc ?? double.NaN,
+                dr?.AdjPValue ?? double.NaN, _volcanoAName, xs, ys, reps,
+                DiffSelectedDesign() == DifferentialDesign.LinearTrendWithinSubject ? subs : null);
+        }
+        else
+        {
+            _featureDetailWindow.ShowFeature(label, featureId, dr?.LogFc ?? double.NaN,
+                dr?.AdjPValue ?? double.NaN,
+                _volcanoAName, aVals, aReps, _volcanoBName, bVals, bReps);
+        }
         _featureDetailWindow.Show();
         _featureDetailWindow.Activate();
     }

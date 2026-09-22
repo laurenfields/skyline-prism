@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Globalization;
 using System.Windows;
 using ScottPlot;
@@ -79,6 +80,121 @@ public partial class FeatureDetailWindow : Window
         plt.YLabel("log2 abundance");
         PlotRenderer.StyleQcPlot(plt);
         DetailPlot.Refresh();
+    }
+
+    /// <summary>
+    /// The per-feature view under a TREND design: log2 abundance against the trend column, with the
+    /// fitted line, and - when subjects are given - one faint line per subject.
+    /// </summary>
+    /// <remarks>
+    /// <para>A boxplot needs two groups to box, and a trend has none. The scatter is the honest
+    /// equivalent, and the per-subject lines are the point of a within-subject design made visible:
+    /// each subject sits at its own level while moving in a consistent direction, which is exactly
+    /// the pattern a fixed-effect subject block extracts and an independent fit cannot see.</para>
+    ///
+    /// <para>The fitted line is drawn from <paramref name="logFc"/>, the modeled change across the
+    /// observed range, rather than refitted here - so the line a reader sees is the one the
+    /// reported number came from, and the two cannot drift.</para>
+    /// </remarks>
+    public void ShowTrendFeature(string label, string featureId, double logFc, double q,
+        string trendColumn, IReadOnlyList<double> x, IReadOnlyList<double> values,
+        IReadOnlyList<string> replicates, IReadOnlyList<string>? subjects)
+    {
+        _points.Clear();
+        var inv = CultureInfo.InvariantCulture;
+        var fc = double.IsFinite(logFc) ? logFc.ToString("0.###", inv) : "n/a";
+        var qs = double.IsFinite(q) ? q.ToString("0.##e0", inv) : "n/a";
+        HeaderText.Text = label == featureId ? label : $"{label} ({featureId})";
+
+        var n = Math.Min(x.Count, values.Count);
+        var finite = new List<int>(n);
+        for (var i = 0; i < n; i++)
+            if (double.IsFinite(x[i]) && double.IsFinite(values[i]))
+                finite.Add(i);
+
+        var subjectCount = subjects is null
+            ? 0
+            : finite.Select(i => i < subjects.Count ? subjects[i] : null)
+                .Where(v => !string.IsNullOrEmpty(v))
+                .Distinct(StringComparer.Ordinal).Count();
+        var who = subjectCount > 0 ? $", {subjectCount} subjects" : string.Empty;
+        SubText.Text =
+            $"log2 change across {trendColumn} = {fc}   adj.P = {qs}   -   n={finite.Count}"
+            + $"{who} (non-missing values)";
+
+        var plt = DetailPlot.Plot;
+        plt.Clear();
+
+        // One faint line per subject, drawn first so the points sit on top of it.
+        if (subjects is not null && subjectCount > 0)
+        {
+            var bySubject = finite
+                .Where(i => i < subjects.Count && !string.IsNullOrEmpty(subjects[i]))
+                .GroupBy(i => subjects[i], StringComparer.Ordinal);
+            foreach (var group in bySubject)
+            {
+                var ordered = group.OrderBy(i => x[i]).ToList();
+                if (ordered.Count < 2)
+                    continue;
+                var line = plt.Add.ScatterLine(
+                    ordered.Select(i => x[i]).ToArray(),
+                    ordered.Select(i => values[i]).ToArray());
+                line.Color = ScottPlot.Color.FromHex("#b8c4d0").WithAlpha(0.55);
+                line.LineWidth = 1;
+                line.LegendText = string.Empty;
+            }
+        }
+
+        var xs = finite.Select(i => x[i]).ToArray();
+        var ys = finite.Select(i => values[i]).ToArray();
+        foreach (var i in finite)
+            _points.Add((new Coordinates(x[i], values[i]),
+                Describe(i, replicates, subjects, trendColumn, x)));
+
+        if (xs.Length > 0)
+        {
+            var markers = plt.Add.Markers(xs, ys);
+            markers.Color = ScottPlot.Color.FromHex(AColor);
+            markers.MarkerSize = 8;
+            markers.LegendText = string.Empty;
+
+            // The fitted line, reconstructed from the reported change so the drawing and the number
+            // agree by construction: it passes through the feature's mean at the mean of x, and
+            // rises by exactly logFc across the observed span.
+            var xMin = xs.Min();
+            var xMax = xs.Max();
+            var span = xMax - xMin;
+            if (span > 0 && double.IsFinite(logFc))
+            {
+                var xMean = xs.Average();
+                var yMean = ys.Average();
+                var slope = logFc / span;
+                var fitted = plt.Add.Line(
+                    xMin, yMean + slope * (xMin - xMean),
+                    xMax, yMean + slope * (xMax - xMean));
+                fitted.Color = ScottPlot.Color.FromHex(BColor);
+                fitted.LineWidth = 2;
+            }
+        }
+
+        AddHoverOverlay(plt);
+        plt.XLabel(trendColumn);
+        plt.YLabel("log2 abundance");
+        PlotRenderer.StyleQcPlot(plt);
+        DetailPlot.Refresh();
+    }
+
+    /// <summary>The hover readout for one trend point: which replicate, which subject, which x.</summary>
+    private static string Describe(int i, IReadOnlyList<string> replicates,
+        IReadOnlyList<string>? subjects, string trendColumn, IReadOnlyList<double> x)
+    {
+        var parts = new List<string>();
+        if (i < replicates.Count && !string.IsNullOrEmpty(replicates[i]))
+            parts.Add(replicates[i]);
+        if (subjects is not null && i < subjects.Count && !string.IsNullOrEmpty(subjects[i]))
+            parts.Add(subjects[i]);
+        parts.Add($"{trendColumn} = {x[i].ToString("0.###", CultureInfo.InvariantCulture)}");
+        return string.Join("  -  ", parts);
     }
 
     private static void AddBox(List<ScottPlot.Box> boxes, double position, IReadOnlyList<double> values,

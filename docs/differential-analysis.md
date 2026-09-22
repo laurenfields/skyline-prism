@@ -34,6 +34,8 @@ prior** - which is how `proteomics-toolkit` models it too.
 | paired | moderated t | the same composition over `[1, group, subject dummies]` |
 | paired | paired t | `scipy.stats.ttest_rel` |
 | paired | Wilcoxon signed-rank | `scipy.stats.wilcoxon(method="asymptotic")` |
+| trend, independent | moderated t | the same composition over `[1, x]` |
+| trend, within subject | moderated t | the same composition over `[1, x, subject dummies]` |
 
 Detection (the peptide on/off view) follows the design too: Fisher exact unpaired, McNemar's exact
 test paired (`statsmodels.stats.contingency_tables.mcnemar(exact=True)`), and the Firth-penalized LRT
@@ -61,6 +63,51 @@ correction, so on a small group its p-value differs from a default-argument scip
 default, `wilcoxon` does not - and PRISM follows each one's own convention. Copying either to the other
 shifts every p-value in that test by 10-20%, which is how this was found.
 
+### A trend reports a change across a range, not a slope
+
+The slope coefficient is in log2 **per unit of x**, so a threshold on it would mean something
+different for a column measured in days than for the same column in hours. PRISM therefore reports
+`slope x (x_max - x_min)` - the modeled change across the range actually measured - and the volcano's
+x-axis is that quantity, labelled with the span. The raw slope is `log2fc / span`, and the span is in
+`DifferentialResult.TrendRange` and in the CLI's CSV header.
+
+This is a strict generalization, not a separate convention: code a two-level grouping as `x = 0` and
+`x = 1` and the span is 1, so the reported change **is** the log2 fold change and the moderated t is
+the same test. `TrendGeneralizesTheTwoArmContrastTests` pins both halves - the reduction to the
+two-arm contrast, and the fact that rescaling the column (weeks to days) moves neither the reported
+effect nor any p-value.
+
+### Repeated measures need the subject block
+
+**Trend, independent** treats every sample as its own observation. If the same subject contributes
+several samples that is wrong: samples within a subject are correlated, the standard error is
+understated, and the test reports more hits than the data support. Use **Trend, within subject** and
+give it the subject column.
+
+How much it matters is not a rounding difference. On the committed `trend.json` fixture - subjects
+about two log2 units apart, a real slope of 0.09 per unit - the leading feature fits to
+**t = 9.51, p = 1.8e-21** with the subject block and **t = 0.86, p = 0.39** without it. The naive fit
+is stored in the fixture beside the correct one so the two designs cannot quietly become the same.
+
+Like the paired design this is a **fixed** subject effect, not a random intercept. On a balanced
+design the two give very similar slopes; they diverge on unbalanced designs, on missing timepoints,
+and when a random *slope* per subject is wanted. A mixed model is a different estimator and is not
+implemented.
+
+A subject with fewer than two **distinct** trend values - one sample, or several all at the same
+timepoint - carries no within-subject slope while still costing a parameter, so it is excluded and
+counted in the status line. Covariates constant within every subject (sex, genotype, birth year) are
+dropped for the same reason they are under a paired design: a within-subject slope cannot estimate a
+between-subject effect.
+
+### The intensity-trend prior is unavailable on a trend
+
+It fits a LOWESS of within-**group** variance, and a trend design has no groups. Pooling every sample
+into one would fold the trend itself into the "noise" it is meant to describe, inflating the prior
+for exactly the features with a real slope. PRISM falls back to the global prior and says so in the
+status line - which names the prior that actually ran, not the one requested. Ticking **Fit prior on
+controls** gives a well-defined group structure back and the intensity trend becomes available again.
+
 ### Paired is a fixed-effect subject block
 
 `[1, group, subject dummies]`, matching `statistical_analysis.py:1321`. It is not a random intercept
@@ -76,8 +123,9 @@ The same analysis, against the same output directory, without Skyline or Windows
 prism differential -d output/ --group-by condition -a Control -b Disease
 ```
 
-`prism differential` takes the whole menu above as flags - `--level`, `--design`, `--pair-by`,
-`--test`, `--prior`, `--prior-from-controls`, `--adjust-for`, `--correction` - and writes a results
+`prism differential` takes the whole menu above as flags - `--level`, `--design`, `--subject`,
+`--trend-over`, `--test`, `--prior`, `--prior-from-controls`, `--adjust-for`, `--correction`,
+`--alpha`, `--raw-p`, `--min-log2fc` - and writes a results
 CSV (`differential.csv` in the output directory unless `-o` says otherwise) whose header records the
 contrast, its direction and the method that produced it. `prism differential --help` lists every
 flag with its default.
@@ -91,6 +139,14 @@ prism differential -d output/ --group-by stage -a Control Mild -b Severe --adjus
 
 A level named on both sides is refused rather than dropped from one, because which side it was
 dropped from would change the answer and nothing in the output would record the choice.
+
+A trend takes `--trend-over` in place of the arms, and the within-subject form also takes
+`--subject`:
+
+```bash
+prism differential -d output/ --design trend --trend-over dose_mg
+prism differential -d output/ --design trend-within-subject --trend-over week --subject patient_id
+```
 
 The pane and the command resolve their arms through the same `ContrastArms` in Core, and run the
 same `Differential.Run`, so a contrast set up by clicking and one typed out mean the same samples
