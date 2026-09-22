@@ -190,6 +190,17 @@ public static class Differential
         IReadOnlyList<int> groupBColumns,
         DifferentialOptions options)
     {
+        // Refused rather than fallen through. Only Paired is handled below, so a LinearTrend request
+        // would run an ordinary two-arm contrast while Describe() reported "linear trend" - a
+        // plausible answer to a question nobody asked. Neither the pane nor the CLI offers it, but
+        // DifferentialOptions is public, so the guard belongs here and not in the callers.
+        if (options.Design == DifferentialDesign.LinearTrend)
+            throw new NotImplementedException(
+                "The linear-trend design is not implemented. It fits a slope against a numeric "
+                + "covariate instead of contrasting two arms, so it is a different mean model, not a "
+                + "variant of this one. (The intensity-TREND variance prior is a separate axis and is "
+                + "available: DifferentialOptions.Prior = VariancePrior.IntensityTrend, the default.)");
+
         var minPerGroup = options.MinPerGroup;
         var covariates = options.Covariates;
         var pairingMessages = new List<string>();

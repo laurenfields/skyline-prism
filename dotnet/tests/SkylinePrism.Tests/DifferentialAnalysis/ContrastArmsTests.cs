@@ -172,3 +172,46 @@ public class ControlSampleTypesTests
             new string?[] { "experimental", "experimental", "qc" }));
     }
 }
+
+/// <summary>
+/// The linear-trend design is declared but not implemented. It must refuse, not quietly run the
+/// two-arm contrast under its name.
+/// </summary>
+public class UnimplementedDesignTests
+{
+    [Fact]
+    public void LinearTrend_Throws_RatherThanRunningAnUnpairedContrast()
+    {
+        var expr = new double[,] { { 1, 2, 3, 4 }, { 2, 3, 4, 5 } };
+        var options = new DifferentialOptions { Design = DifferentialDesign.LinearTrend };
+
+        var ex = Assert.Throws<NotImplementedException>(() => Differential.Run(
+            expr, new[] { "F1", "F2" }, new[] { 0, 1 }, new[] { 2, 3 }, options));
+
+        // The message has to separate it from the variance prior of nearly the same name, which is
+        // implemented and is the default - that collision is why the guard reads the way it does.
+        Assert.Contains("linear-trend design", ex.Message);
+        Assert.Contains("IntensityTrend", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(DifferentialDesign.Unpaired)]
+    [InlineData(DifferentialDesign.Paired)]
+    public void TheImplementedDesigns_AreNotCaughtByTheGuard(DifferentialDesign design)
+    {
+        var expr = new double[,] { { 1, 2, 3, 4 }, { 2, 3, 4, 5 } };
+        var options = new DifferentialOptions
+        {
+            Design = design,
+            SubjectLabels = design == DifferentialDesign.Paired
+                ? new string?[] { "s1", "s2", "s1", "s2" }
+                : null,
+        };
+
+        // Whatever else they do, they do not throw NotImplementedException.
+        var ex = Record.Exception(() => Differential.Run(
+            expr, new[] { "F1", "F2" }, new[] { 0, 1 }, new[] { 2, 3 }, options));
+
+        Assert.IsNotType<NotImplementedException>(ex);
+    }
+}
