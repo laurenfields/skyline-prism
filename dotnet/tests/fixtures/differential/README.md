@@ -33,6 +33,10 @@ installed. Without `uv`, install those exact versions and run it with `python`.
 | `detection_lrt.json` | `Detection.DetectionGlm` | the above, twice, + `scipy.stats.chi2.sf(., 1)` |
 | `pca.json` | `Pca.Fit` (center-only, complete-case) | `numpy.linalg.svd(full_matrices=False)` |
 | `intensity_trend.json` | `VariancePriors.IntensityTrend` | `proteomics_toolkit._fit_intensity_trend_prior` |
+| `peptide_count_prior.json` | `VariancePriors.PeptideCountTrend` (DEqMS) | `proteomics_toolkit._fit_count_dependent_prior` |
+| `simple_tests.json` | `SimpleTests` Welch / Student / Mann-Whitney | `scipy.stats.ttest_ind`, `scipy.stats.mannwhitneyu(method="asymptotic")` |
+| `paired.json` | `SimpleTests` paired t / Wilcoxon, and the paired moderated design | `scipy.stats.ttest_rel`, `scipy.stats.wilcoxon(method="asymptotic")`, lstsq + `squeezeVar` |
+| `corrections.json` | `Fdr.Adjust` (BY, Holm, Bonferroni) | `statsmodels` `multipletests` |
 
 **One reference is a sibling lab tool, deliberately.** `intensity_trend.json` is pinned to
 `proteomics-toolkit`, not to a third-party library, because the estimator is not a published formula
