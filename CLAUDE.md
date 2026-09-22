@@ -984,6 +984,16 @@ amounts, so their CVs need not improve together). It caught both reversions abov
 
 ### [TODO] Not Yet Implemented
 
+- **A more general source for the differential variance prior.** PRISM fits it on the control
+  replicates by default, and finds them by looking up `sample_type` against a fixed vocabulary
+  (`ControlSampleTypes.Values`: Standard, Quality Control, QC, reference, qc). The lab's
+  `proteomics-toolkit` is more general - `variance_prior_group_column` names ANY metadata column and
+  `variance_prior_groups` restricts which of its values count, so a document whose QC classes live
+  in, say, a `QC_Category` annotation is covered. That generality was **deliberately not** carried
+  over: the prior source changes every p-value in the result, and a free-text column picker invites
+  someone to point it at something that is not a set of technical replicates at all, which would be
+  worse than not having the option. Revisit only with a concrete cohort that needs it, and keep the
+  "these must be nominal replicates" constraint visible in whatever replaces it.
 - Per-batch RT models with cross-validation
 - Quality-weighted protein rollup
 - directLFQ (see below)

@@ -249,6 +249,24 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// What fitting the prior on controls does, and why it is the default.
+    /// </summary>
+    /// <remarks>
+    /// Held here rather than in the XAML because the disabled case prefixes it with a reason, and
+    /// two copies of a paragraph this long would drift.
+    /// </remarks>
+    private const string PriorFromControlsHelp =
+        "Fit the variance prior on the run's QC and reference replicates - the default wherever the "
+        + "run has them. A design group's within-group spread contains the inter-subject biology "
+        + "the analysis is looking for, so a prior fitted on it describes measurement noise plus "
+        + "that biology and over-shrinks real signal; dedicated control injections are nominal "
+        + "replicates, so their spread is the measurement variance the prior is meant to describe. "
+        + "Only the per-feature scale comes from them - the prior degrees of freedom stay global, "
+        + "estimated from the study samples, so the amount of shrinkage still matches the data "
+        + "being analyzed. The controls take no part in the contrast itself. Untick to fit on the "
+        + "contrast groups instead, which is only worth doing to reproduce an older result.";
+
     /// <summary>Whether the current design fits a slope rather than contrasting two arms.</summary>
     private bool DiffIsTrend() => DiffSelectedDesign()
         is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject;
@@ -580,6 +598,17 @@ public partial class MainWindow
             ? Visibility.Visible
             : Visibility.Collapsed;
         DiffPriorFromControlsCheck.IsEnabled = controls is not null;
+        // GREYED, not hidden, and the tooltip says what to do about it. Hiding would be the usual
+        // treatment for an option that needs action elsewhere, but it teaches nothing: a reader who
+        // never sees the control never learns that setting sample types in Skyline would improve
+        // the analysis. The tooltip is rewritten rather than appended to, so the disabled case
+        // leads with the reason instead of burying it under a paragraph about what the option does.
+        DiffPriorFromControlsCheck.ToolTip = controls is not null
+            ? PriorFromControlsHelp
+            : "Unavailable: this run has no sample type with two or more replicates. Set replicates "
+              + "to Quality Control or Standard in the Skyline document and re-export, and the "
+              + "variance prior will be fitted on them."
+              + Environment.NewLine + Environment.NewLine + PriorFromControlsHelp;
         if (controls is null && DiffPriorFromControlsCheck.IsChecked == true)
             DiffPriorFromControlsCheck.IsChecked = false;
 
