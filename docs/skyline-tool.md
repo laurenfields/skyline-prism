@@ -598,6 +598,23 @@ suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
 > resolution and the estimators with this pane, so the two cannot disagree. See
 > [differential-analysis.md](differential-analysis.md#from-the-command-line).
 
+### The quant report
+
+**Quant report...** (beside **Run**) writes a self-contained `quant_report.html` to a `quant/` folder
+in the output directory — the quantification counterpart to the QC report. It runs the pane's current
+contrast across every view and bundles them into one page that shares the QC report's Analysis
+Information header, so the report names the version, date, host and inputs of the run behind the
+numbers. It records the analysis parameters as a table and re-runnable YAML, then renders a section per
+view (differential, detection, enrichment, and each panel ticked in the Markers pane) with embedded
+plots.
+
+Beside the HTML it writes the underlying tables as CSVs, including the **raw per-sample abundances in
+linear scale** (`differential_values.csv`, `markers_<panel>_values.csv`) so the export stands on its
+own for reanalysis — see [output_files.md](output_files.md#quant-report-differential-pane) for the full
+list. Enrichment needs network access; a view with nothing to show (no network, no ticked panels, a
+trend design with no two-group detection) is omitted with a note rather than failing the report. The
+report opens in your browser when it finishes.
+
 ### Attaching a clinical CSV
 
 The **Clinical CSV** input at the top of the window (beside the metadata report) joins an external

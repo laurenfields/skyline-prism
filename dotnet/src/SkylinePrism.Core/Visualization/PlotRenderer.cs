@@ -1179,6 +1179,273 @@ public static partial class PlotRenderer
     }
 
     /// <summary>
+    /// A static volcano PNG for the quantification report: effect size (x) against -log10 of the p the
+    /// <paramref name="rule"/> judges by, grey for non-hits and red for hits, with the rule's threshold
+    /// guides, and the strongest hits labeled. The interactive Volcano in the app draws the same points;
+    /// this is the headless copy the report and the CLI use, so it carries no hover or selection.
+    /// </summary>
+    public static byte[] DifferentialVolcanoPng(
+        DifferentialAnalysis.DifferentialResult res,
+        DifferentialAnalysis.SignificanceRule rule,
+        bool corrected, string xLabel, Func<string, string> labelFor, string? title = null)
+    {
+        var plt = new Plot();
+
+        var bgX = new List<double>();
+        var bgY = new List<double>();
+        var sigX = new List<double>();
+        var sigY = new List<double>();
+        var hits = new List<(double X, double Y, string Label)>();
+        foreach (var r in res.Rows)
+        {
+            var y = -Math.Log10(Math.Max(rule.PValueOf(r), 1e-300));
+            if (!double.IsFinite(r.LogFc) || !double.IsFinite(y))
+                continue;
+            if (rule.IsSignificant(r))
+            {
+                sigX.Add(r.LogFc);
+                sigY.Add(y);
+                hits.Add((r.LogFc, y, labelFor(r.FeatureId)));
+            }
+            else
+            {
+                bgX.Add(r.LogFc);
+                bgY.Add(y);
+            }
+        }
+
+        if (bgX.Count > 0)
+        {
+            var bg = plt.Add.Markers(bgX.ToArray(), bgY.ToArray());
+            bg.Color = Color.FromHex("#b8c4d0");
+            bg.MarkerSize = 5;
+        }
+
+        if (sigX.Count > 0)
+        {
+            var sig = plt.Add.Markers(sigX.ToArray(), sigY.ToArray());
+            sig.Color = Color.FromHex("#d62728");
+            sig.MarkerSize = 6;
+        }
+
+        if (rule.Log2FcThreshold > 0)
+        {
+            plt.Add.VerticalLine(rule.Log2FcThreshold);
+            plt.Add.VerticalLine(-rule.Log2FcThreshold);
+        }
+
+        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
+
+        // Label the strongest hits (by significance, then effect) - enough to orient a reader without
+        // turning the plot into a wall of text.
+        foreach (var h in hits.OrderByDescending(h => h.Y).ThenByDescending(h => Math.Abs(h.X)).Take(15))
+        {
+            var t = plt.Add.Text(h.Label, h.X, h.Y);
+            t.LabelAlignment = Alignment.LowerCenter;
+            StyleTextLabel(t, 11);
+        }
+
+        if (!string.IsNullOrEmpty(title))
+            plt.Title(title);
+        plt.XLabel(xLabel);
+        plt.YLabel(rule.YAxisLabel(corrected));
+        StyleQcPlot(plt);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>
+    /// A static detection volcano PNG for the quant report: detection-rate difference (B - A) against
+    /// -log10 of the p the <paramref name="rule"/> judges by. There is no effect-size guide - a
+    /// detection effect is a rate difference, not a fold change - so only the p threshold is drawn.
+    /// </summary>
+    public static byte[] DetectionVolcanoPng(
+        IReadOnlyList<DifferentialAnalysis.Detection.DetectionRow> rows,
+        DifferentialAnalysis.SignificanceRule rule, bool corrected, string? title = null)
+    {
+        var plt = new Plot();
+        var bgX = new List<double>();
+        var bgY = new List<double>();
+        var sigX = new List<double>();
+        var sigY = new List<double>();
+        foreach (var r in rows)
+        {
+            var p = rule.UseAdjusted ? r.Q : r.P;
+            if (!double.IsFinite(p))
+                continue;
+            var x = r.RateB - r.RateA;
+            var y = -Math.Log10(Math.Max(p, 1e-300));
+            if (p < rule.PThreshold) { sigX.Add(x); sigY.Add(y); }
+            else { bgX.Add(x); bgY.Add(y); }
+        }
+
+        if (bgX.Count > 0)
+        {
+            var bg = plt.Add.Markers(bgX.ToArray(), bgY.ToArray());
+            bg.Color = Color.FromHex("#b8c4d0");
+            bg.MarkerSize = 5;
+        }
+
+        if (sigX.Count > 0)
+        {
+            var sig = plt.Add.Markers(sigX.ToArray(), sigY.ToArray());
+            sig.Color = Color.FromHex("#2ca02c");
+            sig.MarkerSize = 6;
+        }
+
+        plt.Add.VerticalLine(0.0);
+        plt.Add.HorizontalLine(-Math.Log10(rule.PThreshold));
+        if (!string.IsNullOrEmpty(title))
+            plt.Title(title);
+        plt.XLabel("detection rate difference (B - A)");
+        plt.YLabel(rule.YAxisLabel(corrected));
+        StyleQcPlot(plt);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>
+    /// A static enrichment PNG for the quant report: the top terms as horizontal bars, most significant
+    /// at the top, term names on the y-axis, -log10 p on the x-axis.
+    /// </summary>
+    public static byte[] EnrichmentBarsPng(
+        IReadOnlyList<DifferentialAnalysis.Enrichment.EnrichmentTerm> terms, int top = 15)
+    {
+        var plt = new Plot();
+        var shown = terms.Take(top).ToList();
+        if (shown.Count > 0)
+        {
+            var bars = new List<Bar>(shown.Count);
+            var positions = new double[shown.Count];
+            var labels = new string[shown.Count];
+            for (var i = 0; i < shown.Count; i++)
+            {
+                var pos = shown.Count - 1 - i;
+                bars.Add(new Bar
+                {
+                    Position = pos,
+                    Value = -Math.Log10(Math.Max(shown[i].PValue, 1e-300)),
+                    Orientation = Orientation.Horizontal,
+                    FillColor = Color.FromHex("#2ca02c"),
+                });
+                positions[pos] = pos;
+                labels[pos] = shown[i].TermName.Length <= 45 ? shown[i].TermName : shown[i].TermName[..44] + "...";
+            }
+
+            plt.Add.Bars(bars);
+            plt.Axes.Left.TickGenerator = new ScottPlot.TickGenerators.NumericManual(positions, labels);
+            plt.Axes.Left.TickLabelStyle.FontSize = 11;
+            plt.Axes.SetLimitsY(-0.7, shown.Count - 0.3);
+            plt.XLabel("-log10 p (g:SCS)");
+        }
+
+        StyleQcPlot(plt);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>A static marker-panel heatmap PNG (row z-scored), for the quant report.</summary>
+    public static byte[] MarkerHeatmapPng(
+        DifferentialAnalysis.MarkerPanelResult result, string title, bool annotate = false)
+    {
+        var plt = new Plot();
+        DrawValueHeatmap(plt, result.Heatmap, result.ColumnLabels, result.MarkerLabels,
+            result.SymmetricMax, "row z-score", annotate);
+        if (!string.IsNullOrEmpty(title))
+            plt.Title(title);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    /// <summary>A static per-group marker panel-score boxplot PNG, for the quant report.</summary>
+    public static byte[] MarkerBoxplotPng(DifferentialAnalysis.MarkerPanelResult result, string groupColumn)
+    {
+        var plt = new Plot();
+        var boxes = new List<ScottPlot.Box>();
+        var allScores = new List<double>();
+        for (var g = 0; g < result.GroupNames.Length; g++)
+        {
+            var vals = result.PanelScoreByGroup[g];
+            var hex = MarkerPalette[g % MarkerPalette.Length];
+            if (vals.Length > 0)
+            {
+                var q1 = Numerics.Stats.PercentileLinear(vals, 25);
+                var med = Numerics.Stats.PercentileLinear(vals, 50);
+                var q3 = Numerics.Stats.PercentileLinear(vals, 75);
+                var iqr = q3 - q1;
+                double dataMin = double.PositiveInfinity, dataMax = double.NegativeInfinity;
+                foreach (var v in vals)
+                {
+                    if (v < dataMin) dataMin = v;
+                    if (v > dataMax) dataMax = v;
+                    allScores.Add(v);
+                }
+
+                boxes.Add(new ScottPlot.Box
+                {
+                    Position = g,
+                    Width = 0.6,
+                    BoxMin = q1,
+                    BoxMiddle = med,
+                    BoxMax = q3,
+                    WhiskerMin = Math.Max(dataMin, q1 - 1.5 * iqr),
+                    WhiskerMax = Math.Min(dataMax, q3 + 1.5 * iqr),
+                    FillColor = Color.FromHex(hex).WithAlpha((byte)90),
+                    LineColor = Color.FromHex(hex),
+                });
+            }
+
+            var rng = new Random(g * 7919 + result.MarkerLabels.Length);
+            var xs = new double[vals.Length];
+            for (var i = 0; i < vals.Length; i++)
+                xs[i] = g - 0.22 + rng.NextDouble() * 0.44;
+            if (vals.Length > 0)
+            {
+                var m = plt.Add.Markers(xs, vals);
+                m.Color = Color.FromHex(hex);
+                m.MarkerSize = 5;
+            }
+        }
+
+        if (boxes.Count > 0)
+            plt.Add.Boxes(boxes);
+
+        var pos = new double[result.GroupNames.Length];
+        for (var g = 0; g < pos.Length; g++)
+            pos[g] = g;
+        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericManual(pos, result.GroupNames);
+        plt.XLabel(groupColumn);
+        plt.YLabel("mean marker z-score");
+        StyleQcPlot(plt);
+
+        // Rotate the group labels only when they would actually crowd horizontally - a proxy on total
+        // label width, so many groups OR long names rotate but a handful of short labels (e.g. F01..F10)
+        // stay straight and centered under their boxes. When we do rotate, anchor UpperRight so the text
+        // hangs cleanly below the axis instead of tipping up across the axis line.
+        var maxLabelLen = result.GroupNames.Length == 0 ? 0 : result.GroupNames.Max(n => n?.Length ?? 0);
+        var rotateLabels = result.GroupNames.Length * (maxLabelLen + 1) > 60;
+        plt.Axes.Bottom.TickLabelStyle.Rotation = rotateLabels ? 45 : 0;
+        plt.Axes.Bottom.TickLabelStyle.Alignment =
+            rotateLabels ? Alignment.UpperRight : Alignment.UpperCenter;
+        plt.Axes.Bottom.MinimumSize = rotateLabels ? 90 : 34;
+
+        double yMin = -1, yMax = 1;
+        if (allScores.Count > 0)
+        {
+            yMin = allScores.Min();
+            yMax = allScores.Max();
+            var pad = Math.Max(0.2, (yMax - yMin) * 0.1);
+            yMin -= pad;
+            yMax += pad;
+        }
+
+        plt.Axes.SetLimits(-0.6, result.GroupNames.Length - 0.4, yMin, yMax);
+        return plt.GetImageBytes(Width, Height, ImageFormat.Png);
+    }
+
+    private static readonly string[] MarkerPalette =
+    {
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    };
+
+    /// <summary>
     /// RT-binned median CV before vs after, for one control group (grouped bars: light = before,
     /// solid = after). Ports plot_rt_bin_cv_comparison for a single panel.
     /// </summary>

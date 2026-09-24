@@ -415,6 +415,20 @@ public partial class MainWindow
         plt.XLabel(groupCol);
         plt.YLabel("mean marker z-score");
         PlotRenderer.StyleQcPlot(plt);
+        // Reserve left-axis room so the rotated y-axis title is not clipped at the pane edge.
+        plt.Axes.Left.MinimumSize = 60;
+
+        // Rotate the group labels only when they would actually crowd horizontally - a proxy on total
+        // label width, so many groups OR long names rotate but a handful of short labels (e.g. F01..F10)
+        // stay straight and centered under their boxes. When we do rotate, anchor UpperRight so the text
+        // hangs cleanly below the axis instead of tipping up across the axis line (MiddleRight put the
+        // top half of each label above the tick).
+        var maxLabelLen = result.GroupNames.Length == 0 ? 0 : result.GroupNames.Max(n => n?.Length ?? 0);
+        var rotateLabels = result.GroupNames.Length * (maxLabelLen + 1) > 60;
+        plt.Axes.Bottom.TickLabelStyle.Rotation = rotateLabels ? 45 : 0;
+        plt.Axes.Bottom.TickLabelStyle.Alignment =
+            rotateLabels ? ScottPlot.Alignment.UpperRight : ScottPlot.Alignment.UpperCenter;
+        plt.Axes.Bottom.MinimumSize = rotateLabels ? 90 : 34;
 
         // Pin both axes: X to the group slots, Y to the actual score range (auto-scale over-pads to
         // a round +/-10 when the panel scores sit near zero).

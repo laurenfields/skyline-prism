@@ -13,6 +13,7 @@ namespace SkylinePrism.Core.DifferentialAnalysis;
 /// </summary>
 public sealed record MarkerPanelResult(
     string[] MarkerLabels,
+    string[] MarkerFeatureIds,
     string[] ColumnLabels,
     double[,] Heatmap,
     double SymmetricMax,
@@ -63,6 +64,7 @@ public static class MarkerPanel
         var markerLabels = matched
             .Select(f => string.IsNullOrEmpty(identities[f].Label) ? identities[f].FeatureId : identities[f].Label)
             .ToArray();
+        var markerFeatureIds = matched.Select(f => identities[f].FeatureId).ToArray();
 
         // Per-member detection, for the "found N/total" report.
         //
@@ -201,7 +203,7 @@ public static class MarkerPanel
         if (symMax <= 0)
             symMax = 1.0;
 
-        return new MarkerPanelResult(markerLabels, columnLabels, heat, symMax, groupNames,
+        return new MarkerPanelResult(markerLabels, markerFeatureIds, columnLabels, heat, symMax, groupNames,
             panelScoreByGroup, notDetected, found, total);
     }
 

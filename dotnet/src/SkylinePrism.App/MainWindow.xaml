@@ -733,6 +733,9 @@
                                 <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
                                         Click="OnRunDifferential"
                                         ToolTip="Re-run the current contrast. Every selector here runs on its own when you change it - the arms and covariates when you close their list - so this is a manual refresh rather than a required step." />
+                                <Button x:Name="QuantReportButton" Content="Quant report..." Padding="12,2" Margin="8,0,0,0"
+                                        Click="OnGenerateQuantReport"
+                                        ToolTip="Run the current contrast across every view and write a self-contained quant_report.html plus result tables (CSV) to a quant/ folder in the output directory. Includes differential, detection, GO/pathway enrichment (needs internet), and the ticked Markers-pane panels." />
                                 <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
                                            Foreground="#888" TextWrapping="Wrap" />
                             </WrapPanel>

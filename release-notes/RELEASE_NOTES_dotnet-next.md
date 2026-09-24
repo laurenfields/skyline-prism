@@ -36,6 +36,20 @@ as the GitHub Release description and fails if it is missing.
   gene symbols or in protein names finds its members at either feature level, and a peptide matches
   through the protein columns beside it rather than through its own modified sequence. A shared
   peptide counts for any group it belongs to, not only its first.
+- **Quant report: one self-contained HTML for the whole analysis.** A **Quant report...** button in the
+  Differential pane runs the current contrast across every view and writes a `quant_report.html` to a
+  `quant/` folder in the output directory - the quantification counterpart to `qc_report.html`, sharing
+  its Analysis Information header (read from the run's `parameters.json`). It records the analysis
+  parameters as a table and re-runnable YAML, then renders a section per view with embedded plots:
+  differential abundance (volcano + ranked hits), peptide detection frequency, g:Profiler enrichment,
+  and each ticked Markers-pane panel (heatmap + panel-score boxplot). Alongside the HTML it writes the
+  result tables as CSVs - `differential.csv`, `detection.csv`, `enrichment_terms.csv` (full gene lists),
+  and `markers_<panel>_zscores.csv` - plus the **raw per-sample abundances in LINEAR scale**
+  (`differential_values.csv`, `markers_<panel>_values.csv`), so the export stands on its own for
+  reanalysis rather than carrying only fold changes and z-scores. Long tables are capped to a preview in
+  the HTML, with the full rows in the companion CSV. A view with nothing to show (no network for
+  enrichment, no panels ticked, a trend design with no two-group detection) is omitted with a note
+  rather than failing the report.
 
 - **A choice of variance prior for the Volcano, defaulting to the lab's own.** The **Prior** picker
   offers **Intensity trend** (the default), **Global** and **limma-trend**. Intensity trend is the

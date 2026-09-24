@@ -199,6 +199,35 @@ changes the order values are accumulated in, so the magnitudes move in the last 
 what was computed - but it means two results are only comparable digit-for-digit if the arms were
 given the same way round.
 
+## The quant report
+
+The **Quant report...** button in the Differential pane writes a self-contained `quant_report.html`
+to a `quant/` folder in the output directory - the quantification counterpart to `qc_report.html`. It
+runs the pane's current contrast across every view and bundles them into one page that shares the QC
+report's Analysis Information header (read from the run's `parameters.json`), so the report always
+names the version, date, host and inputs of the run that produced the numbers.
+
+The report contains:
+
+- the analysis parameters, as a table and as re-runnable YAML (also written to
+  `quant_parameters.yaml` / `.json`);
+- **differential abundance** - the volcano and a ranked hit table;
+- **detection frequency** - the peptide on/off test, for a two-group contrast;
+- **functional enrichment** - the g:Profiler bars, when the network is reachable and there are
+  significant genes;
+- **marker panels** - a heatmap and panel-score boxplot for each panel ticked in the Markers pane.
+
+Beside the HTML it writes the result tables as CSVs (`differential.csv`, `detection.csv`,
+`enrichment_terms.csv` with full gene lists, `markers_<panel>_zscores.csv`), and the **raw per-sample
+abundances in LINEAR scale** (`differential_values.csv`, `markers_<panel>_values.csv`, values are
+`2^log2`, matching `corrected_*.parquet`) so the export stands on its own for reanalysis. Long tables
+are capped to a preview in the HTML; the full rows are in the companion CSV. A view with nothing to
+show is omitted with a note rather than failing the report.
+
+The report is currently produced from the pane. The headless `prism differential` command writes
+`differential.csv` today; wiring the full report and its companion files to the CLI is a planned
+follow-up.
+
 ## PRISM and `proteomics-toolkit` are not interchangeable
 
 The lab's [`proteomics-toolkit`](https://github.com/uw-maccosslab/proteomics-toolkit) implements the

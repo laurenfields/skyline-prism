@@ -77,6 +77,24 @@ Under a trend design the first line reads differently, and says what `log2fc` no
 # trend: week from 0 to 12 (span 12); log2fc is the modeled change ACROSS that span, slope = log2fc / span
 ```
 
+### Quant report (Differential pane)
+
+Written by the **Quant report...** button in the Differential pane into a `quant/` folder in the
+output directory - the quantification counterpart to `qc_report.html`. It bundles the pane's current
+contrast across every view into one page and writes the underlying tables beside it. A view with
+nothing to show is omitted rather than written empty, so not every file below is always present.
+
+| File | One row per | Holds |
+|---|---|---|
+| `quant_report.html` | - | Self-contained report: the QC report's Analysis Information header, the analysis parameters (table + YAML), and a section per view (differential, detection, enrichment, markers) with embedded plots. Long tables are shown as a capped preview pointing to the CSV |
+| `quant_parameters.yaml` / `.json` | - | The analysis parameters - level, contrast, design, test, prior, correction, covariates, hit rule, and which views ran - as re-runnable YAML and machine-readable JSON |
+| `differential.csv` | tested feature | The differential result, as in `prism differential` above |
+| `differential_values.csv` | tested feature | The RAW per-sample abundances behind the contrast, **LINEAR** (`2^log2`, matching `corrected_*.parquet`), over the contrast's samples |
+| `detection.csv` | peptide | `detected_a`, `n_a`, `detected_b`, `n_b`, `rate_a`, `rate_b`, `p_value`, `adj_p_value` - the on/off detection test (two-group contrasts only) |
+| `enrichment_terms.csv` | enriched term | `source`, `term_id`, `term_name`, `p_value`, `fold_enrichment`, `intersection_size`, and the full `genes` list (the HTML truncates it) |
+| `markers_<panel>_zscores.csv` | panel member | The row z-scored log2 heatmap values across the grouping column, one file per ticked panel |
+| `markers_<panel>_values.csv` | panel member | The RAW per-sample abundances of that panel's members, **LINEAR**, over the grouped samples |
+
 ### Ion accounting (`prism ion-accounting`)
 
 Written only by `prism ion-accounting`, never by `prism run`: producing them reads every instrument
