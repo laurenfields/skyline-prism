@@ -95,6 +95,19 @@ public class QuantConfigTests
         Assert.Contains("\"@internal\"", yaml);
     }
 
+    /// <summary>
+    /// A quoted value's backslashes are escaped: an unescaped Windows path reads as the escape \d or \U
+    /// inside double quotes and makes the whole file invalid YAML.
+    /// </summary>
+    [Fact]
+    public void ToYaml_ClinicalPath_IsRecordedWithItsBackslashesEscaped()
+    {
+        var cfg = TwoGroup() with { ClinicalCsvs = new[] { @"C:\data\clinical.csv" } };
+        Assert.Contains(@"clinical_csv: [""C:\\data\\clinical.csv""]", cfg.ToYaml());
+        // And absent entirely when no clinical CSV was joined.
+        Assert.DoesNotContain("clinical_csv", TwoGroup().ToYaml());
+    }
+
     [Fact]
     public void ToYaml_EmptyLists_RenderAsEmptyBrackets()
     {

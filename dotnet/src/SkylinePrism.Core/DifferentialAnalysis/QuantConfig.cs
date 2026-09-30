@@ -31,6 +31,10 @@ public sealed record QuantContrast(
 /// execution engine - the engine is <see cref="DifferentialOptions"/>.
 /// </summary>
 /// <param name="Prior">The <c>--prior</c> value requested - what a re-run passes.</param>
+/// <param name="Command">The <c>prism differential ... --report</c> command that reproduces the analysis (<see cref="QuantCommand"/>).</param>
+/// <param name="CommandUnavailable">Why no command could be written, when <paramref name="Command"/> is null.</param>
+/// <param name="DetectionTest">The detection test that ran (<see cref="Detection.DetectionAnalysis.Describe"/>), if any.</param>
+/// <param name="ClinicalCsvs">Clinical CSVs joined to the samples (<see cref="DifferentialDataset.AttachedClinicalCsvs"/>), if any.</param>
 /// <param name="PriorUsed">The prior that actually ran, with its source (<see cref="DifferentialResult.VariancePrior"/>,
 /// e.g. "intensity-trend from controls"); it differs from the request when a requested prior had to fall back.</param>
 public sealed record QuantConfig(
@@ -48,7 +52,11 @@ public sealed record QuantConfig(
     bool EnrichmentEnabled,
     IReadOnlyList<string> EnrichmentSources,
     string EnrichmentDirection,
-    IReadOnlyList<string> MarkerPanels)
+    IReadOnlyList<string> MarkerPanels,
+    IReadOnlyList<string>? ClinicalCsvs = null,
+    string? Command = null,
+    string? CommandUnavailable = null,
+    string? DetectionTest = null)
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -66,6 +74,10 @@ public sealed record QuantConfig(
         var inv = CultureInfo.InvariantCulture;
         var sb = new StringBuilder();
         sb.Append("level: ").Append(Level).Append('\n');
+        // Only when one was joined: a contrast on a clinical column is not reproducible from the output
+        // directory alone, and this is the file `--clinical` needs.
+        if (ClinicalCsvs is { Count: > 0 })
+            sb.Append("clinical_csv: ").Append(YamlList(ClinicalCsvs)).Append('\n');
         sb.Append("contrast:\n");
         if (Contrast.TrendOver is not null)
             sb.Append("  trend_over: ").Append(Contrast.TrendOver).Append('\n');
@@ -85,6 +97,8 @@ public sealed record QuantConfig(
         sb.Append("hit_rule: ").Append(Yaml(HitRule)).Append('\n');
         sb.Append("detection:\n");
         sb.Append("  enabled: ").Append(DetectionEnabled ? "true" : "false").Append('\n');
+        if (DetectionTest is not null)
+            sb.Append("  test: ").Append(Yaml(DetectionTest)).Append('\n');
         sb.Append("  q_threshold: ").Append(DetectionQ.ToString("0.####", inv)).Append('\n');
         sb.Append("enrichment:\n");
         sb.Append("  enabled: ").Append(EnrichmentEnabled ? "true" : "false").Append('\n');
@@ -92,6 +106,12 @@ public sealed record QuantConfig(
         sb.Append("  direction: ").Append(EnrichmentDirection).Append('\n');
         sb.Append("markers:\n");
         sb.Append("  panels: ").Append(YamlList(MarkerPanels)).Append('\n');
+        // A literal block, not a quoted scalar: the command carries quotes and Windows backslashes,
+        // and escaping them would leave a line that no longer pastes into a shell as-is.
+        if (!string.IsNullOrEmpty(Command))
+            sb.Append("command: |-\n  ").Append(Command).Append('\n');
+        else if (!string.IsNullOrEmpty(CommandUnavailable))
+            sb.Append("command_unavailable: ").Append(Yaml(CommandUnavailable)).Append('\n');
         return sb.ToString();
     }
 

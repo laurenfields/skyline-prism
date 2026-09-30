@@ -230,6 +230,8 @@ public static class QuantReport
         sb.Append("<div class=\"box\"><h2>Quantification Parameters</h2><table class=\"kv\">");
         Kv(sb, "Contrast", quant.Contrast.Describe());
         Kv(sb, "Level", quant.Level);
+        if (quant.ClinicalCsvs is { Count: > 0 })
+            Kv(sb, "Clinical CSV", string.Join("; ", quant.ClinicalCsvs));
         // The same words the CLI prints and differential.csv's "# method:" line records, naming the
         // prior that actually RAN - which is the thing a reader comparing two results needs.
         Kv(sb, "Method", options.Describe(res.VariancePrior));
@@ -244,6 +246,13 @@ public static class QuantReport
         sb.Append("</table>");
         sb.Append("<details><summary>Quantification parameters (YAML)</summary><pre>")
           .Append(HtmlEncode(quant.ToYaml())).Append("</pre></details>");
+        if (!string.IsNullOrEmpty(quant.Command))
+            sb.Append("<p class=\"note\">Regenerate this report headless - no Skyline, no Windows:</p><pre>")
+              .Append(HtmlEncode(quant.Command)).Append("</pre>");
+        else if (!string.IsNullOrEmpty(quant.CommandUnavailable))
+            sb.Append("<p class=\"note\">No command line can regenerate this report: ")
+              .Append(HtmlEncode(quant.CommandUnavailable))
+              .Append(". Rename the value in the metadata to reproduce it headless.</p>");
         sb.Append("</div>");
     }
 

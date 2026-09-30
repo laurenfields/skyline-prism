@@ -33,6 +33,12 @@ public sealed class QuantRequest
     /// <summary>Two-arm contrasts: the grouping column. Ignored under a trend design.</summary>
     public string? GroupBy { get; init; }
 
+    /// <summary>
+    /// The metadata column <see cref="DifferentialOptions.SubjectLabels"/> came from, under a paired or
+    /// within-subject design. The labels alone cannot name it, and the reproducing command needs it.
+    /// </summary>
+    public string? SubjectColumn { get; init; }
+
     /// <summary>Two-arm contrasts: arm A's dataset columns, as resolved by <see cref="ContrastArms.Resolve"/>.</summary>
     public IReadOnlyList<int> GroupA { get; init; } = Array.Empty<int>();
 
@@ -73,9 +79,12 @@ public sealed class QuantRequest
 /// <param name="Detection">The detection test's result, or null when it did not run.</param>
 /// <param name="DetectionMatrix">The detection matrix read (or reused), for a caller to cache.</param>
 /// <param name="Notes">Each view that was skipped or limited, and why - for the status line or console.</param>
+/// <param name="CommandArguments">The recorded reproducing command's arguments (after <c>prism</c>), or
+/// null when no command can express the request.</param>
 public sealed record QuantAnalysisResult(
     string HtmlPath, DifferentialResult Differential, DetectionAnalysisResult? Detection,
-    DetectionMatrixData? DetectionMatrix, IReadOnlyList<string> Notes);
+    DetectionMatrixData? DetectionMatrix, IReadOnlyList<string> Notes,
+    IReadOnlyList<string>? CommandArguments = null);
 
 /// <summary>
 /// Runs a <see cref="QuantRequest"/> across every view and writes the quant report.
@@ -93,13 +102,38 @@ public static class QuantAnalysis
     /// <summary>The DetectionQValue cut a cell must fall below to count as detected.</summary>
     public const double DetectionQ = 0.01;
 
+    /// <summary>
+    /// The options the analysis actually runs under: covariates only when the test can take them.
+    /// </summary>
+    /// <remarks>
+    /// Only the moderated t has a design matrix to put a covariate in. The pane greys its Adjust-for
+    /// list out for the other tests but leaves the ticks in place, so a Welch contrast can arrive here
+    /// still carrying covariates. They are dropped - and said so - rather than passed through, because
+    /// the command this report records must be one the CLI accepts, and the CLI refuses
+    /// <c>--adjust-for</c> without <c>--test moderated</c>. Dropping them here means the contrast, the
+    /// detection test and the recorded command all describe the same unadjusted analysis.
+    /// </remarks>
+    public static DifferentialOptions EffectiveOptions(DifferentialOptions options, out string? note)
+    {
+        note = null;
+        if (options.Test == DifferentialTest.ModeratedT || options.Covariates is not { Count: > 0 } covariates)
+            return options;
+
+        note = $"Not adjusted for {string.Join(", ", covariates.Select(c => c.Name))}: only the moderated t "
+            + "takes covariates, so this report (and its detection test) is unadjusted. Switch to the "
+            + "moderated t to adjust, or untick them.";
+        return options with { Covariates = null };
+    }
+
     /// <summary>Run every view and write the report.</summary>
     public static QuantAnalysisResult Run(QuantRequest request)
     {
         var ds = request.Dataset;
-        var options = request.Options;
-        var rule = request.Rule;
         var notes = new List<string>();
+        var options = EffectiveOptions(request.Options, out var dropped);
+        if (dropped is not null)
+            notes.Add(dropped);
+        var rule = request.Rule;
 
         // Built once, never looked up per feature: enrichment and the CSVs walk every tested feature,
         // and a per-feature scan is quadratic (see DifferentialDataset.IdentityOf). The label falls back
@@ -185,6 +219,12 @@ public static class QuantAnalysis
                     notes.Add("Adjusted detection is not identifiable (group confounded with the covariates); "
                         + "the detection section says so and has no table.");
             }
+            catch (DetectionSamplesNotFoundException)
+            {
+                // merged_data is there; the contrast's samples are not in it. A different fix from a
+                // missing merged_data, so a different sentence.
+                notes.Add("Detection skipped: none of an arm's samples are in merged_data.");
+            }
             catch (Exception ex)
             {
                 // Broad on purpose, as the pane's was: a missing or unreadable merged_data surfaces as
@@ -240,6 +280,21 @@ public static class QuantAnalysis
                     MarkerPanel.Evaluate(ds.ExprLog2, identities, groups, ds.SampleIds, panel, perSample: false)));
         }
 
+        // The command that regenerates this report, from the options it actually ran with - or, where
+        // no command can express the request faithfully, the reason, in place of a command that would
+        // quietly run something else.
+        IReadOnlyList<string>? commandArgs = null;
+        string? commandLine = null;
+        if (QuantCommand.TryArguments(request, options, out var args, out var noCommand))
+        {
+            commandArgs = args;
+            commandLine = QuantCommand.For(request, options, out _);
+        }
+        else
+        {
+            notes.Add("No command-line equivalent: " + noCommand + ".");
+        }
+
         var quant = new QuantConfig(
             Level: DifferentialTokens.Level(ds.Level),
             Contrast: contrast,
@@ -255,7 +310,13 @@ public static class QuantAnalysis
             EnrichmentEnabled: enrichment is not null,
             EnrichmentSources: Enrichment.Enrichment.DefaultSources,
             EnrichmentDirection: "both",
-            MarkerPanels: markers.Select(m => m.PanelName).ToList());
+            MarkerPanels: markers.Select(m => m.PanelName).ToList(),
+            ClinicalCsvs: ds.AttachedClinicalCsvs.ToList(),
+            Command: commandLine,
+            CommandUnavailable: noCommand,
+            DetectionTest: detection is null
+                ? null
+                : DetectionAnalysis.Describe(detection) + (detection.Identifiable ? string.Empty : " (not identifiable - no result)"));
 
         var inputs = new QuantReportInputs
         {
@@ -277,6 +338,6 @@ public static class QuantAnalysis
         };
 
         var html = QuantReport.Write(request.OutputDir, quant, inputs);
-        return new QuantAnalysisResult(html, res, detection, detMatrix, notes);
+        return new QuantAnalysisResult(html, res, detection, detMatrix, notes, commandArgs);
     }
 }
