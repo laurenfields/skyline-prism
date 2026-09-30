@@ -50,7 +50,10 @@ public static class DetectionMatrix
         var dataset = OpenDataset(outputDirOrMergedRoot);
         var cols = ResolveColumns(dataset);
         var thr = qThreshold.ToString(CultureInfo.InvariantCulture);
-        var where = $"\"{cols.Peptide}\" IS NOT NULL"
+        // A row with no sample is a precursor Skyline reported with no replicate: it detects nothing in
+        // any sample, and unfiltered it failed the whole load on a null read (prism-diff-explorer#1
+        // found the same row in the Python reader, where it became a NaN sample column).
+        var where = $"\"{cols.Peptide}\" IS NOT NULL AND \"{cols.Sample}\" IS NOT NULL"
             + (term is null ? string.Empty : $" AND \"{cols.Protein}\" ILIKE '%{Esc(term)}%'");
         var sql =
             $"SELECT \"{cols.Peptide}\" AS pep, \"{cols.Sample}\" AS samp, " +

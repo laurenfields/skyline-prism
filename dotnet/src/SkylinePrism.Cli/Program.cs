@@ -206,7 +206,8 @@ public static class Program
     private static int CmdDifferential(string[] args)
     {
         var opts = ParseOptions(args,
-            multiValue: new HashSet<string> { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers" });
+            multiValue: new HashSet<string>
+                { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers", "--clinical" });
         var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
         RefuseReportFlagsWithoutReport(opts);
         // Resolved before anything runs, so a mistyped panel name refuses the command rather than
@@ -236,6 +237,9 @@ public static class Program
         };
 
         var dataset = DifferentialDataset.Load(dir, level);
+        // Before anything validates a column name, so --group-by, --adjust-for and the rest can name
+        // a clinical column, as they can in the pane once a clinical CSV is attached there.
+        AttachClinicalFrom(opts, dataset);
         RefuseUngroupableMarkers(opts, dataset, markerPanels, trendRequested);
         if (trendRequested)
             return RunDifferentialTrend(opts, dataset, level, dir, markerPanels);
@@ -312,6 +316,7 @@ public static class Program
             Options = options,
             Rule = rule,
             Differential = result,
+            SubjectColumn = opts.GetSingleOrNull("--subject", "--pair-by"),
             GroupBy = groupBy,
             GroupA = groupA,
             GroupB = groupB,
@@ -344,6 +349,33 @@ public static class Program
                 ?? throw new ArgumentException(
                     $"No marker panel '{name}'. Available: {string.Join(", ", available.Select(l => l.Name))}"))
             .ToList();
+    }
+
+    /// <summary>
+    /// <c>--clinical</c>: join an external clinical table to the samples - the same
+    /// <see cref="DifferentialDataset.AttachClinical"/> the pane's Clinical CSV input runs, so the key
+    /// column is detected the same way and the same columns are added.
+    /// </summary>
+    /// <remarks>
+    /// <para>Refused when nothing matches: the pane can say so and carry on, but a command that named a
+    /// clinical file almost certainly depends on one of its columns, and would otherwise fail later on
+    /// "no metadata column" without saying the join was the cause.</para>
+    /// <para>Repeatable, and joined in the order given - the pane lets a second file be attached on top
+    /// of the first, and a report records both, so the command that regenerates it must take both.</para>
+    /// </remarks>
+    private static void AttachClinicalFrom(ParsedOptions opts, DifferentialDataset dataset)
+    {
+        foreach (var path in opts.GetList("--clinical"))
+        {
+            var joined = dataset.AttachClinical(path);
+            var rate = (joined.MatchRate * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+            if (joined.KeyColumn is null || joined.AddedColumns.Count == 0)
+                throw new ArgumentException(
+                    $"--clinical: no column of {Path.GetFileName(path)} matched the samples (best match {rate}); "
+                    + "the key column needs to hold the replicate names for at least half the samples.");
+            Console.WriteLine($"Clinical CSV: joined {Path.GetFileName(path)} on '{joined.KeyColumn}' "
+                + $"({rate} of samples matched), added {string.Join(", ", joined.AddedColumns)}");
+        }
     }
 
     /// <summary>
@@ -436,6 +468,19 @@ public static class Program
                 Array.Empty<int>(), Array.Empty<int>(), Array.Empty<string>(), Array.Empty<string>(),
                 markerPanels);
         return 0;
+    }
+
+    /// <summary>
+    /// <c>--min-per-group</c> as a whole number. It used to be parsed as a double and cast, so 2.7 ran
+    /// as 2 with nothing said.
+    /// </summary>
+    private static int MinPerGroupFrom(string? text)
+    {
+        if (text is null)
+            return 2;
+        if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n < 1)
+            throw new ArgumentException($"--min-per-group must be a whole number of at least 1, not '{text}'.");
+        return n;
     }
 
     /// <summary>Levels from repeated flags and/or comma-separated lists, in the order given.</summary>
@@ -617,7 +662,7 @@ public static class Program
             PeptideCounts = dataset.PeptideCounts,
             PriorGroupColumns = priorGroups,
             Covariates = covariates.Count > 0 ? covariates : null,
-            MinPerGroup = (int)ParseDouble(opts.GetSingleOrNull("--min-per-group"), 2),
+            MinPerGroup = MinPerGroupFrom(opts.GetSingleOrNull("--min-per-group")),
         };
     }
 
@@ -1078,6 +1123,11 @@ public static class Program
         samples as independent understates the standard error.
 
         Options:
+            --clinical CSV...      Join an external clinical table to the samples first, exactly as
+                                   the pane's Clinical CSV input does (key column detected by value);
+                                   its columns can then be named by --group-by, --adjust-for,
+                                   --subject, --trend-over and --markers-group-by. Repeatable: several
+                                   tables are joined in the order given
             --level LEVEL          protein (default) or peptide
             --design DESIGN        unpaired (default), paired, trend, trend-within-subject
             --subject COL          Metadata column identifying the subject (alias: --pair-by).

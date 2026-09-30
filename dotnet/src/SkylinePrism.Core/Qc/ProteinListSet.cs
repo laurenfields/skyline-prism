@@ -197,9 +197,21 @@ public sealed class ProteinListSet
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Default location: per-user, so lists follow the user across projects and output folders.</summary>
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SkylinePrism", FileName);
+    /// <summary>
+    /// Where the user's saved lists live: <c>%LOCALAPPDATA%\SkylinePrism\protein-lists.json</c>, or the
+    /// file <c>PRISM_PROTEIN_LISTS</c> names. The override lets a cluster account share one set of lists
+    /// with the Windows machine a report was made on, and lets the test suite run against the shipped
+    /// panels alone instead of against whatever the developer has saved.
+    /// </summary>
+    public static string DefaultPath =>
+        Environment.GetEnvironmentVariable(ListsPathVariable) is { Length: > 0 } overridden
+            ? overridden
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SkylinePrism", FileName);
+
+    /// <summary>The environment variable that overrides <see cref="DefaultPath"/>.</summary>
+    public const string ListsPathVariable = "PRISM_PROTEIN_LISTS";
 
     public static ProteinListSet Load(string? path = null)
     {

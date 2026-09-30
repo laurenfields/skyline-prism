@@ -179,6 +179,19 @@ prism differential -d output/ --group-by stage -a Control Mild -b Severe --adjus
 A level named on both sides is refused rather than dropped from one, because which side it was
 dropped from would change the answer and nothing in the output would record the choice.
 
+A contrast on a clinical column - diagnosis, age, sex from a separate table - takes `--clinical`,
+which joins the table exactly as the pane's Clinical CSV input does (the key column is detected by
+value) before any column name is checked:
+
+```bash
+prism differential -d output/ --clinical clinical.csv --group-by Diagnosis -a Control -b AD \
+    --adjust-for Age,Sex
+```
+
+A clinical CSV that matches fewer than half the samples is refused rather than silently ignored,
+since the command almost certainly depends on one of its columns. `--clinical` can be given more
+than once; the tables are joined in the order given.
+
 A trend takes `--trend-over` in place of the arms, and the within-subject form also takes
 `--subject`:
 
@@ -226,9 +239,22 @@ The report contains:
 - the analysis parameters, as a table and as YAML (also written to `quant_parameters.yaml` /
   `.json`), recorded in `prism differential`'s own flag values - `design: paired`, `test: moderated`,
   `prior: intensity-trend`, `correction: bh`, and each arm as a list of its levels
-  (`group_a: [qc, reference]`) - so they read as the command that reproduces the analysis. The prior
-  that actually ran is recorded beside the requested one as `prior_used`, since a requested prior can
-  fall back;
+  (`group_a: [qc, reference]`). The prior that actually ran is recorded beside the requested one as
+  `prior_used`, since a requested prior can fall back;
+- **the command that regenerates it** - the full `prism differential ... --report` line, every
+  statistical choice spelled out, shown in the report and recorded as `command:` in the YAML. It is
+  built from what the analysis actually ran: a covariate the pane still shows ticked under a test
+  that cannot use one (anything but the moderated t) is dropped from the analysis, the detection test
+  and the command alike, and the report says so. The test suite runs the recorded command through the
+  CLI and requires every file it writes to be byte-identical to the pane's (the HTML apart from its
+  timestamp) - adjusted, paired, stale-covariate and two-clinical-CSV reports included. The
+  comparison runs with enrichment off, because g:Profiler answers from its current database and its
+  output can change between two runs of anything. Rerun elsewhere, the command needs the clinical CSV
+  at the path it names and any marker list you saved yourself on that machine (`PRISM_PROTEIN_LISTS`
+  can point at a copy of your lists file). Where a value cannot be written on a command line at all -
+  a level containing a comma, which `-a`/`-b` split on, or one with leading or trailing spaces - the
+  report says so, and records `command_unavailable:` with the reason, in place of a command that
+  would quietly select a different contrast;
 - **differential abundance** - the volcano and a ranked hit table;
 - **detection frequency** - the peptide on/off test, for a two-group contrast, chosen exactly as the
   Detection pane chooses it (`DetectionAnalysis` in Core serves both): the Firth-penalized GLM when

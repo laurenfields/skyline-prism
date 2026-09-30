@@ -127,6 +127,38 @@ public class DetectionAnalysisTests
         Assert.Equal(UnpairedReason.NoMatchedSubjects, r.UnpairedReason);
     }
 
+    /// <summary>
+    /// Subjects DID match, but no matched pair has both halves in merged_data. That is not "no subject
+    /// could be matched" - saying so would send someone to fix the wrong column - so it has its own reason.
+    /// </summary>
+    [Fact]
+    public void Paired_MatchedButNoPairInMergedData_FallsBackWithItsOwnReason()
+    {
+        var (ds, det, a, b) = Setup();
+        // Arm B gains five unpaired samples, then every PAIRED B sample is removed from merged_data:
+        // pairs exist in the metadata, none survives, and both arms still have samples to test.
+        var types = ds.MetadataValues("sample_type");
+        var extras = Enumerable.Range(0, ds.SampleIds.Length)
+            .Where(j => types[j] == "experimental" && !a.Contains(j) && !b.Contains(j)).Take(5).ToList();
+        var armB = b.Concat(extras).ToList();
+        var gone = new HashSet<string>(b.Select(j => ds.SampleIds[j]), StringComparer.Ordinal);
+        var keep = Enumerable.Range(0, det.SampleIds.Length).Where(s => !gone.Contains(det.SampleIds[s])).ToArray();
+        var m = new double[Peptides, keep.Length];
+        for (var p = 0; p < Peptides; p++)
+        for (var k = 0; k < keep.Length; k++)
+            m[p, k] = det.Matrix[p, keep[k]];
+        var partial = new DetectionMatrixData(det.PeptideIds, keep.Select(s => det.SampleIds[s]).ToArray(), m);
+
+        var r = DetectionAnalysis.Run(partial, ds, a, armB, DifferentialDesign.Paired, Subjects(ds, a, b), null,
+            MultipleTesting.BenjaminiHochberg);
+
+        Assert.Equal(DetectionMethod.FisherExact, r.Method);
+        Assert.Equal(UnpairedReason.NoPairInMergedData, r.UnpairedReason);
+        Assert.Equal(20, r.PairsNotInMerged);
+        Assert.Contains("no matched pair has both its samples in merged_data",
+            DetectionAnalysis.UnpairedNote(r.UnpairedReason));
+    }
+
     [Fact]
     public void CovariatesFor_AlignsToTheTargetOrder()
     {

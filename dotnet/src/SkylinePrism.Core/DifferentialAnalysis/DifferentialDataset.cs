@@ -222,6 +222,15 @@ public sealed class DifferentialDataset
         return values;
     }
 
+    private readonly List<string> _attachedClinical = new();
+
+    /// <summary>
+    /// The clinical CSVs that were actually joined - those that added at least one column - in the
+    /// order attached. A report records these, because a contrast grouped or adjusted by a clinical
+    /// column cannot be reproduced from the output directory alone.
+    /// </summary>
+    public IReadOnlyList<string> AttachedClinicalCsvs => _attachedClinical;
+
     /// <summary>
     /// Join a clinical metadata CSV to the samples, ported from the explorer's <c>attach_clinical</c>.
     /// The identifier column is auto-detected by value (<c>infer_clinical_key</c>): the column whose
@@ -302,6 +311,8 @@ public sealed class DifferentialDataset
             added.Add(name);
         }
 
+        if (added.Count > 0)
+            _attachedClinical.Add(Path.GetFullPath(clinicalCsvPath));
         return new ClinicalAttachResult(bestCol, bestRate, header.Length - 1, added);
     }
 

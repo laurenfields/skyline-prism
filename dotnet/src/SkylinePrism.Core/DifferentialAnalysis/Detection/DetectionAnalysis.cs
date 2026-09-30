@@ -28,6 +28,9 @@ public enum UnpairedReason
 
     /// <summary>No subject could be matched across the arms, or no subject column was given.</summary>
     NoMatchedSubjects,
+
+    /// <summary>Subjects were matched, but no matched pair has both its samples in merged_data.</summary>
+    NoPairInMergedData,
 }
 
 /// <summary>
@@ -159,6 +162,7 @@ public static class DetectionAnalysis
         var dropped = groupA.Count - aCols.Count + (groupB.Count - bCols.Count);
         var covariates = CovariatesFor(dataset, covariateColumns, detection.SampleIds);
         var paired = design == DifferentialDesign.Paired;
+        var matchedButMissing = 0;
 
         if (covariates is null && paired && subjectLabels is not null)
         {
@@ -187,10 +191,15 @@ public static class DetectionAnalysis
                     pairedRows: pairedRows, pairsNotInMerged: pairs.Count - detPairs.Count,
                     pairMessages: pairMessages);
             }
+
+            // Matched, but every pair lost a half to merged_data: a different reason from "nothing
+            // matched", and saying the latter would send someone to fix the wrong column.
+            matchedButMissing = pairs.Count;
         }
 
         var unpaired = !paired ? UnpairedReason.None
             : covariates is not null ? UnpairedReason.Covariates
+            : matchedButMissing > 0 ? UnpairedReason.NoPairInMergedData
             : UnpairedReason.NoMatchedSubjects;
 
         if (covariates is not null)
@@ -206,7 +215,7 @@ public static class DetectionAnalysis
 
         var fisher = DetectionTest.Run(detection.Matrix, detection.PeptideIds, aCols, bCols);
         return new DetectionAnalysisResult(DetectionMethod.FisherExact, fisher, aCols.Count, bCols.Count,
-            dropped, unpaired);
+            dropped, unpaired, pairsNotInMerged: matchedButMissing);
     }
 
     /// <summary>
@@ -257,6 +266,9 @@ public static class DetectionAnalysis
         UnpairedReason.NoMatchedSubjects =>
             "Note: detection is tested UNPAIRED - no subject could be matched across the arms - "
             + "so this uses every sample in them.",
+        UnpairedReason.NoPairInMergedData =>
+            "Note: detection is tested UNPAIRED - subjects were matched across the arms, but no matched "
+            + "pair has both its samples in merged_data - so this uses every sample in the arms that is.",
         _ => null,
     };
 

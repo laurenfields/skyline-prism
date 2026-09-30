@@ -127,6 +127,8 @@ public class DifferentialDatasetTests
             Assert.Equal(1.0, result.MatchRate, 9); // every sample name is present in the CSV
             Assert.Contains("Diagnosis", result.AddedColumns);
             Assert.Equal(before + 1, d.MetadataColumns.Count);
+            // Recorded, because a report on a clinical column needs the file to be reproduced.
+            Assert.Equal(new[] { Path.GetFullPath(path) }, d.AttachedClinicalCsvs);
 
             // Every sample got a non-null Diagnosis and both categories are represented. (Bare sample
             // names collide across merged plates, so exact per-index values are not asserted.)
@@ -209,6 +211,8 @@ public class DifferentialDatasetTests
             Assert.Null(result.KeyColumn);
             Assert.Empty(result.AddedColumns);
             Assert.Equal(before, d.MetadataColumns.Count);
+            // A join that added nothing is not recorded: nothing in the analysis depends on it.
+            Assert.Empty(d.AttachedClinicalCsvs);
         }
         finally
         {

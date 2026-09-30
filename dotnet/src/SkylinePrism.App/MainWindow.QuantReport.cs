@@ -82,6 +82,7 @@ public partial class MainWindow
             Dataset = ds,
             Options = options,
             Rule = DiffRule(),
+            SubjectColumn = DiffPairByCombo.SelectedItem as string,
             GroupBy = groupBy,
             GroupA = groupA,
             GroupB = groupB,
