@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -8,12 +9,18 @@ using System.Text.Json.Serialization;
 namespace SkylinePrism.Core.DifferentialAnalysis;
 
 /// <summary>The two arms of a contrast, or a trend column - what the analysis compares.</summary>
-public sealed record QuantContrast(string? GroupBy, string? GroupA, string? GroupB, string? TrendOver)
+/// <param name="GroupBy">The grouping column (two-arm contrasts).</param>
+/// <param name="GroupA">Arm A's levels - a list, as <c>-a</c> takes one, so a union arm records as one.</param>
+/// <param name="GroupB">Arm B's levels.</param>
+/// <param name="TrendOver">The numeric column a trend is fitted against (trend designs).</param>
+public sealed record QuantContrast(
+    string? GroupBy, IReadOnlyList<string>? GroupA, IReadOnlyList<string>? GroupB, string? TrendOver)
 {
     /// <summary>A one-line description for the report and the status line.</summary>
     public string Describe() => TrendOver is not null
         ? $"trend over {TrendOver}"
-        : $"{GroupB} vs {GroupA} by {GroupBy}";
+        : $"{ContrastArms.Describe(GroupB ?? Array.Empty<string>())} vs "
+          + $"{ContrastArms.Describe(GroupA ?? Array.Empty<string>())} by {GroupBy}";
 }
 
 /// <summary>
@@ -23,12 +30,16 @@ public sealed record QuantContrast(string? GroupBy, string? GroupA, string? Grou
 /// <c>parameters.json</c>. This is a DESCRIPTION built by the caller from its settings, not the
 /// execution engine - the engine is <see cref="DifferentialOptions"/>.
 /// </summary>
+/// <param name="Prior">The <c>--prior</c> value requested - what a re-run passes.</param>
+/// <param name="PriorUsed">The prior that actually ran, with its source (<see cref="DifferentialResult.VariancePrior"/>,
+/// e.g. "intensity-trend from controls"); it differs from the request when a requested prior had to fall back.</param>
 public sealed record QuantConfig(
     string Level,
     QuantContrast Contrast,
     string Design,
     string Test,
     string Prior,
+    string PriorUsed,
     string Correction,
     IReadOnlyList<string> Covariates,
     string HitRule,
@@ -61,13 +72,14 @@ public sealed record QuantConfig(
         else
         {
             sb.Append("  group_by: ").Append(Yaml(Contrast.GroupBy)).Append('\n');
-            sb.Append("  group_a: ").Append(Yaml(Contrast.GroupA)).Append('\n');
-            sb.Append("  group_b: ").Append(Yaml(Contrast.GroupB)).Append('\n');
+            sb.Append("  group_a: ").Append(YamlList(Contrast.GroupA ?? Array.Empty<string>())).Append('\n');
+            sb.Append("  group_b: ").Append(YamlList(Contrast.GroupB ?? Array.Empty<string>())).Append('\n');
         }
 
         sb.Append("design: ").Append(Design).Append('\n');
         sb.Append("test: ").Append(Test).Append('\n');
         sb.Append("prior: ").Append(Prior).Append('\n');
+        sb.Append("prior_used: ").Append(Yaml(PriorUsed)).Append('\n');
         sb.Append("correction: ").Append(Correction).Append('\n');
         sb.Append("covariates: ").Append(YamlList(Covariates)).Append('\n');
         sb.Append("hit_rule: ").Append(Yaml(HitRule)).Append('\n');

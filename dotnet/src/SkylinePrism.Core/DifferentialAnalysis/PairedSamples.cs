@@ -122,6 +122,27 @@ public static class PairedSamples
         return (pairs, messages);
     }
 
+    /// <summary>
+    /// The sample columns a contrast actually ran over: under a paired design with subject labels,
+    /// the matched subjects' columns; otherwise the arms as picked. What the per-feature boxplot and the
+    /// quant report's raw-value table show, so neither draws a subject that took no part in the test.
+    /// </summary>
+    /// <remarks>
+    /// A paired design where nothing could be matched gives the picked arms back: the test has then
+    /// fallen back too, and showing no samples at all would be the worse answer.
+    /// </remarks>
+    public static (List<int> A, List<int> B) ColumnsUsed(DifferentialDesign design,
+        IReadOnlyList<string?>? subjectLabels, IReadOnlyList<int> pickedA, IReadOnlyList<int> pickedB)
+    {
+        if (design != DifferentialDesign.Paired || subjectLabels is null)
+            return (pickedA.ToList(), pickedB.ToList());
+
+        var (pairs, _) = Resolve(subjectLabels, pickedA, pickedB);
+        return pairs.Count == 0
+            ? (pickedA.ToList(), pickedB.ToList())
+            : (pairs.Select(p => p.AColumn).ToList(), pairs.Select(p => p.BColumn).ToList());
+    }
+
     /// <summary>A few names rather than all of them - a status line with 200 subject ids in it is unreadable.</summary>
     private static string Preview(IReadOnlyList<string> names) => NamePreview.Of(names, show: 3);
 }

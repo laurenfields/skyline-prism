@@ -40,11 +40,12 @@ public class QuantReportTests
 
     private static QuantConfig ConfigFor(DifferentialResult res) => new(
         Level: "protein",
-        Contrast: new QuantContrast("sample_type", "experimental (A)", "experimental (B)", null),
-        Design: "TwoGroup",
-        Test: "ModeratedT",
-        Prior: res.VariancePrior,
-        Correction: "BH",
+        Contrast: new QuantContrast("sample_type", new[] { "first half" }, new[] { "second half" }, null),
+        Design: "unpaired",
+        Test: "moderated",
+        Prior: "global",
+        PriorUsed: res.VariancePrior,
+        Correction: "bh",
         Covariates: res.CovariatesUsed,
         HitRule: "adj.P < 0.05, |log2FC| >= 1",
         DetectionEnabled: false,
@@ -153,13 +154,13 @@ public class QuantReportTests
     {
         var (ds, res, cols) = RunContrast();
 
-        // Detection and enrichment are the already-computed rows the report renders, so they can be
+        // Detection and enrichment are the already-computed results the report renders, so they can be
         // built directly here without a merged_data read or a g:Profiler call.
-        var detection = new List<DetectionRow>
+        var detection = new DetectionAnalysisResult(DetectionMethod.FisherExact, new List<DetectionRow>
         {
             new("PEPTIDEA", 4, 5, 1, 5, 0.8, 0.2, 0.04, 0.09),
             new("PEPTIDEB", 2, 5, 3, 5, 0.4, 0.6, 0.5, 0.5),
-        };
+        }, 5, 5, 0, UnpairedReason.None);
         var enrichment = new List<EnrichmentTerm>
         {
             new("GO:BP", "GO:0006915", "apoptotic process", 1e-4, 120, 50, 3, 20000, 11.5,
@@ -206,10 +207,11 @@ public class QuantReportTests
             var htmlPath = QuantReport.Write(dir, ConfigFor(res), inputs);
             var quant = Path.Combine(dir, "quant");
 
-            // Detection: header + one row per detection row, and its HTML section rendered.
+            // Detection: a line naming the test, the column header, one row per peptide.
             var detCsv = File.ReadAllLines(Path.Combine(quant, "detection.csv"));
-            Assert.Equal("peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b,p_value,adj_p_value", detCsv[0]);
-            Assert.Equal(detection.Count + 1, detCsv.Length);
+            Assert.StartsWith("# test: Fisher exact", detCsv[0]);
+            Assert.Equal("peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b,p_value,adj_p_value", detCsv[1]);
+            Assert.Equal(detection.Rows.Count + 2, detCsv.Length);
 
             // Enrichment: the full gene list reaches the CSV (the HTML truncates it).
             var enrCsv = File.ReadAllText(Path.Combine(quant, "enrichment_terms.csv"));
@@ -225,8 +227,7 @@ public class QuantReportTests
             var html = File.ReadAllText(htmlPath);
             Assert.Contains("Detection frequency", html);
             Assert.Contains("Fisher exact", html);
-            // Unpaired and unadjusted: the pane runs the same Fisher test, so no divergence caveat.
-            Assert.DoesNotContain("does not yet follow", html);
+            Assert.DoesNotContain("UNPAIRED", html); // an unpaired design ran the unpaired test
             Assert.Contains("Functional enrichment", html);
             Assert.Contains("Marker panels", html);
             Assert.Contains("Test panel", html);
@@ -266,27 +267,80 @@ public class QuantReportTests
         }
     }
 
-    [Fact]
-    public void DetectionDivergence_OnlyWhenThePaneWouldRunADifferentTest()
+    /// <summary>Write a report around one detection result and return (html, detection.csv lines or null).</summary>
+    private static (string Html, string[]? DetCsv) WriteWithDetection(DetectionAnalysisResult detection)
     {
-        // Unpaired and unadjusted: pane and report both run Fisher.
-        Assert.Null(QuantReport.DetectionDivergence(new DifferentialOptions()));
-
-        var paired = QuantReport.DetectionDivergence(new DifferentialOptions { Design = DifferentialDesign.Paired });
-        Assert.NotNull(paired);
-        Assert.Contains("McNemar", paired);
-
-        // Covariates win over pairing, as they do in the pane (the Firth GLM is unpaired).
-        var age = Covariate.FromMetadata("age", new string?[] { "40", "55", "61", "70" });
-        var adjusted = QuantReport.DetectionDivergence(new DifferentialOptions
+        var (ds, res, cols) = RunContrast();
+        var dir = Path.Combine(Path.GetTempPath(), $"prism-quant-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
         {
-            Design = DifferentialDesign.Paired,
-            Covariates = new[] { age },
-        });
-        Assert.NotNull(adjusted);
-        Assert.Contains("Firth", adjusted);
-        Assert.Contains("age", adjusted);
-        Assert.DoesNotContain("McNemar", adjusted);
+            var inputs = InputsFor(ds, res, cols, SignificanceRule.Default);
+            var html = File.ReadAllText(QuantReport.Write(dir, ConfigFor(res), new QuantReportInputs
+            {
+                Differential = inputs.Differential, Rule = inputs.Rule, Corrected = inputs.Corrected,
+                Contrast = inputs.Contrast, EffectName = inputs.EffectName, LabelFor = inputs.LabelFor,
+                Options = inputs.Options, GroupBy = inputs.GroupBy, ALabel = inputs.ALabel,
+                BLabel = inputs.BLabel, Dataset = inputs.Dataset, ContrastColumns = inputs.ContrastColumns,
+                Detection = detection,
+            }));
+            var csv = Path.Combine(dir, "quant", "detection.csv");
+            return (html, File.Exists(csv) ? File.ReadAllLines(csv) : null);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Write_McNemarDetection_NamesTheTestAndKeepsTheDiscordantCounts()
+    {
+        var (ds, det, a, b) = DetectionAnalysisTests.Setup();
+        var paired = DetectionAnalysis.Run(det, ds, a, b, DifferentialDesign.Paired,
+            DetectionAnalysisTests.Subjects(ds, a, b), null, MultipleTesting.BenjaminiHochberg);
+
+        var (html, csv) = WriteWithDetection(paired);
+
+        Assert.Contains("McNemar's exact test over 20 matched subjects", html);
+        Assert.Contains("discordant pairs", html);
+        Assert.StartsWith("# test: McNemar", csv![0]);
+        Assert.Equal("peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b,only_a,only_b,p_value,adj_p_value", csv[1]);
+        // The discordant counts written are McNemar's own, row for row.
+        var firstPaired = paired.PairedRows![0];
+        Assert.StartsWith($"{firstPaired.PeptideId},", csv[2]);
+        Assert.Contains($",{firstPaired.OnlyA},{firstPaired.OnlyB},", csv[2]);
+    }
+
+    [Fact]
+    public void Write_UnidentifiableAdjustedDetection_SaysSoAndWritesNoTable()
+    {
+        var glm = new DetectionGlmResult(Array.Empty<DetectionGlmRow>(), identifiable: false,
+            groupCollinearityR2: 0.97, nParams: 3, nA: 5, nB: 5, covariatesUsed: new[] { "batch" },
+            dropped: Array.Empty<string>(), nNonConverged: 0, warning: null);
+        var result = new DetectionAnalysisResult(DetectionMethod.FirthGlm, new List<DetectionRow>(),
+            5, 5, 0, UnpairedReason.None, glm: glm);
+
+        var (html, csv) = WriteWithDetection(result);
+
+        Assert.Contains("not identifiable", html);
+        Assert.Contains("0.97", html);
+        Assert.DoesNotContain("Detection volcano", html);
+        Assert.Null(csv);
+    }
+
+    [Fact]
+    public void Write_PairedDesignRunUnpaired_SaysWhy()
+    {
+        var (ds, det, a, b) = DetectionAnalysisTests.Setup();
+        // Paired with no subject column: Fisher, with the reason recorded.
+        var fallback = DetectionAnalysis.Run(det, ds, a, b, DifferentialDesign.Paired, null, null,
+            MultipleTesting.BenjaminiHochberg);
+
+        var (html, csv) = WriteWithDetection(fallback);
+
+        Assert.Contains("tested UNPAIRED", html);
+        Assert.Contains("UNPAIRED", csv![1]);
     }
 
     [Fact]

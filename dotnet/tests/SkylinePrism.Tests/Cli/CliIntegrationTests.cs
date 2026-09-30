@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using SkylinePrism.Cli;
+using SkylinePrism.Core.DifferentialAnalysis;
 using Xunit;
 
 namespace SkylinePrism.Tests.Cli;
@@ -410,6 +411,21 @@ public class CliIntegrationTests
     [InlineData("Unknown --correction", "-g", "sample_type", "-a", "qc", "-b", "experimental",
         "--correction", "fdr")]
     [InlineData("--level must be", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--level", "gene")]
+    // Report-only flags without --report would read as if the command wrote a section it never did.
+    [InlineData("--markers needs --report", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--markers", "EV markers (core)")]
+    [InlineData("--markers-group-by needs --report", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--markers-group-by", "batch")]
+    [InlineData("--no-enrichment needs --report", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--no-enrichment")]
+    // A mistyped panel is refused before anything is written, not after differential.csv exists.
+    [InlineData("No marker panel 'nosuchpanel'", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--report", "--markers", "nosuchpanel")]
+    [InlineData("to group the marker panels by", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--report", "--markers-group-by", "nosuchcolumn")]
+    // A trend has no contrast column for the panels to fall back to.
+    [InlineData("needs --markers-group-by", "--design", "trend", "--trend-over", "batch",
+        "--report", "--markers", "EV markers (core)")]
     public void Differential_RefusesAndSaysWhy(string expected, params string[] args)
     {
         var outDir = TempDir();
@@ -423,6 +439,120 @@ public class CliIntegrationTests
             Assert.Contains(expected, output, StringComparison.Ordinal);
             Assert.False(File.Exists(Path.Combine(outDir, "differential.csv")),
                 "a refused contrast must not leave a results file behind");
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// <c>--report</c> writes the quant report the pane's button writes, from the same contrast - and its
+    /// differential.csv is the very file the command just wrote, byte for byte, wherever -o put it.
+    /// </summary>
+    [Fact]
+    public void Differential_Report_WritesTheQuantReport_WithTheSameDifferentialCsv()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            var custom = Path.Combine(outDir, "elsewhere", "my_contrast.csv");
+
+            var (code, output) = Invoke("differential", "-d", outDir, "-g", "sample_type", "-a", "qc",
+                "-b", "experimental", "-o", custom, "--report", "--no-enrichment",
+                "--markers", "EV markers (core)");
+
+            Assert.Equal(0, code);
+            var quant = Path.Combine(outDir, "quant");
+            Assert.True(File.Exists(Path.Combine(quant, "quant_report.html")));
+            Assert.Contains("Quant report written to:", output, StringComparison.Ordinal);
+            Assert.Contains("Enrichment skipped: not requested.", output, StringComparison.Ordinal);
+
+            // One writer, one file: the report's copy IS the command's results table.
+            Assert.Equal(File.ReadAllBytes(custom), File.ReadAllBytes(Path.Combine(quant, "differential.csv")));
+
+            // Detection ran from the run's own merged_data, and names its test.
+            var detection = File.ReadAllLines(Path.Combine(quant, "detection.csv"));
+            Assert.StartsWith("# test: Fisher exact", detection[0], StringComparison.Ordinal);
+
+            // The recorded parameters are this command's own flag values.
+            var yaml = File.ReadAllText(Path.Combine(quant, "quant_parameters.yaml"));
+            Assert.Contains("design: unpaired", yaml, StringComparison.Ordinal);
+            Assert.Contains("test: moderated", yaml, StringComparison.Ordinal);
+            Assert.Contains("correction: bh", yaml, StringComparison.Ordinal);
+
+            var html = File.ReadAllText(Path.Combine(quant, "quant_report.html"));
+            Assert.Contains("EV markers (core)", html, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// Every word quant_parameters.yaml can record is one this command accepts, so a saved report's
+    /// parameters always read as a runnable command. The table itself is pinned in DifferentialTokensTests.
+    /// </summary>
+    [Fact]
+    public void Differential_AcceptsEveryRecordedToken()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            string[] Contrast(params string[] extra) =>
+                new[] { "differential", "-d", outDir, "-g", "sample_type", "-a", "qc", "-b", "experimental" }
+                    .Concat(extra).ToArray();
+
+            foreach (var c in Enum.GetValues<MultipleTesting>())
+                Assert.Equal(0, Invoke(Contrast("--correction", DifferentialTokens.Correction(c))).Code);
+            foreach (var p in Enum.GetValues<VariancePrior>())
+                Assert.Equal(0, Invoke(Contrast("--prior", DifferentialTokens.Prior(p))).Code);
+            foreach (var t in new[] { DifferentialTest.ModeratedT, DifferentialTest.WelchT,
+                         DifferentialTest.StudentT, DifferentialTest.MannWhitney })
+                Assert.Equal(0, Invoke(Contrast("--test", DifferentialTokens.Test(t))).Code);
+            Assert.Equal(0, Invoke(Contrast("--design", DifferentialTokens.Design(DifferentialDesign.Unpaired))).Code);
+            Assert.Equal(0, Invoke(Contrast("--level", DifferentialTokens.Level(FeatureLevel.Peptide))).Code);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// A trend report: no arms, so no detection and no raw-value table - both said on the console -
+    /// and the panels grouped by the column named for them.
+    /// </summary>
+    [Fact]
+    public void Differential_Report_OnATrend_SaysWhatItLeftOut()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+
+            // Give the run a numeric column to fit against: append one to its sample metadata.
+            var metaPath = Path.Combine(outDir, "sample_metadata.csv");
+            var meta = File.ReadAllLines(metaPath);
+            File.WriteAllLines(metaPath, meta.Select((line, i) =>
+                i == 0 ? line + ",week" : line.Length == 0 ? line : $"{line},{(i - 1) % 4}"));
+
+            var (code, output) = Invoke("differential", "-d", outDir, "--design", "trend",
+                "--trend-over", "week", "--report", "--no-enrichment",
+                "--markers", "EV markers (core)", "--markers-group-by", "sample_type");
+
+            Assert.Equal(0, code);
+            Assert.Contains("Detection skipped: it compares two groups", output, StringComparison.Ordinal);
+            Assert.Contains("No differential_values.csv", output, StringComparison.Ordinal);
+            var quant = Path.Combine(outDir, "quant");
+            Assert.False(File.Exists(Path.Combine(quant, "differential_values.csv")));
+            Assert.StartsWith("# trend: week from 0 to 3",
+                File.ReadLines(Path.Combine(quant, "differential.csv")).First(), StringComparison.Ordinal);
+            Assert.Contains("trend_over: week",
+                File.ReadAllText(Path.Combine(quant, "quant_parameters.yaml")), StringComparison.Ordinal);
         }
         finally
         {

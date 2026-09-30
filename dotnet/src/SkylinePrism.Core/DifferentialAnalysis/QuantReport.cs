@@ -49,7 +49,8 @@ public sealed class QuantReportInputs
     /// </summary>
     public required DifferentialDataset Dataset { get; init; }
 
-    public IReadOnlyList<DetectionRow>? Detection { get; init; }
+    /// <summary>The detection test the design called for (<see cref="DetectionAnalysis"/>); null omits the section.</summary>
+    public DetectionAnalysisResult? Detection { get; init; }
     public IReadOnlyList<EnrichmentTerm>? Enrichment { get; init; }
     public IReadOnlyList<MarkerReportSection>? Markers { get; init; }
 
@@ -110,7 +111,7 @@ public static class QuantReport
         // The SAME Analysis Information block the QC report shows: how the data was produced.
         QcReport.AppendRunInfo(sb, runInfo, pipelineConfig, generatedAt);
 
-        AppendQuantParameters(sb, quant, res, rule, inputs.EffectName);
+        AppendQuantParameters(sb, quant, res, rule, inputs.Options, inputs.EffectName);
 
         // --- Differential ---
         sb.Append("<div class=\"section-header\">Differential abundance</div>");
@@ -141,26 +142,44 @@ public static class QuantReport
         AppendMessages(sb, "Warnings", res.Warnings);
 
         // --- Detection ---
-        if (inputs.Detection is { Count: > 0 } det)
+        if (inputs.Detection is { } det)
         {
             sb.Append("<div class=\"section-header\">Detection frequency</div>");
+            // The same test the Detection pane runs for this contrast (DetectionAnalysis chooses it for
+            // both), named so a reader never has to infer it.
             sb.Append("<p class=\"note\">On/off detection from the transition-level data, not the dense "
-                + "abundance matrix. A cell counts as detected where DetectionQValue is below the "
-                + "threshold. The test is a two-sided Fisher exact test of whether the detection rate "
-                + "differs between the two groups, Benjamini-Hochberg adjusted across peptides.</p>");
-            // Said outright WHEN it matters: the Detection pane follows the design, so for a paired or
-            // adjusted contrast a reader comparing the two would otherwise take this section for the
-            // pane's result. On an unpaired, unadjusted contrast the two run the same Fisher test, and
-            // a caveat there would warn about a difference that does not exist.
-            if (DetectionDivergence(inputs.Options) is { } divergence)
-                sb.Append("<p class=\"note\">").Append(HtmlEncode(divergence)).Append("</p>");
-            AppendImage(sb, PlotRenderer.DetectionVolcanoPng(det, rule, inputs.Corrected, inputs.Contrast),
-                "Detection volcano");
-            var detHits = det.Where(r => (rule.UseAdjusted ? r.Q : r.P) < rule.PThreshold)
-                .OrderBy(r => rule.UseAdjusted ? r.Q : r.P).ToList();
-            sb.Append($"<h3>Detection differences ({detHits.Count})</h3>");
-            AppendDetectionTable(sb, detHits.Take(maxHitRows));
-            AppendPreviewNote(sb, detHits.Count, maxHitRows, "detection.csv (every peptide)");
+                + "abundance matrix. A cell counts as detected where DetectionQValue is below "
+                + QuantAnalysis.DetectionQ.ToString("0.##", Inv) + ". Test: "
+                + HtmlEncode(DetectionAnalysis.Describe(det)) + ".</p>");
+            if (DetectionAnalysis.UnpairedNote(det.UnpairedReason) is { } unpaired)
+                sb.Append("<p class=\"note\">").Append(HtmlEncode(unpaired)).Append("</p>");
+            if (det.Method == DetectionMethod.McNemarPaired)
+                sb.Append("<p class=\"note\">Only the discordant pairs carry information - a subject "
+                    + "detected in both conditions, or in neither, is its own control - so their counts "
+                    + "(<code>only_a</code>, <code>only_b</code>) are in <code>detection.csv</code>. "
+                    + "A result resting on three pairs should not be read like one resting on thirty.</p>");
+            if (det.DroppedSamples > 0)
+                sb.Append($"<p class=\"note\">{det.DroppedSamples} contrast sample(s) are not in "
+                    + "merged_data and took no part.</p>");
+
+            if (!det.Identifiable)
+            {
+                sb.Append("<p class=\"note\">The adjusted model is not identifiable: the group is "
+                    + "confounded with the covariates (R^2 = "
+                    + det.Glm!.GroupCollinearityR2.ToString("0.00", Inv)
+                    + "), so no adjusted detection result can be given. Run the contrast without "
+                    + "covariates for the unadjusted test.</p>");
+            }
+            else
+            {
+                AppendImage(sb, PlotRenderer.DetectionVolcanoPng(det.Rows, rule, inputs.Corrected, inputs.Contrast),
+                    "Detection volcano");
+                var detHits = det.Rows.Where(r => (rule.UseAdjusted ? r.Q : r.P) < rule.PThreshold)
+                    .OrderBy(r => rule.UseAdjusted ? r.Q : r.P).ToList();
+                sb.Append($"<h3>Detection differences ({detHits.Count})</h3>");
+                AppendDetectionTable(sb, detHits.Take(maxHitRows));
+                AppendPreviewNote(sb, detHits.Count, maxHitRows, "detection.csv (every peptide)");
+            }
         }
 
         // --- Enrichment ---
@@ -205,33 +224,16 @@ public static class QuantReport
         return sb.ToString();
     }
 
-    /// <summary>
-    /// How the report's (always unpaired, unadjusted Fisher) detection section differs from what the
-    /// Detection pane runs for these options, or null when the two run the same test.
-    /// </summary>
-    internal static string? DetectionDivergence(DifferentialOptions options)
-    {
-        var paired = options.Design == DifferentialDesign.Paired;
-        var adjusted = options.Covariates is { Count: > 0 };
-        if (adjusted)
-            return "This section is not adjusted for covariates. For this contrast the Detection pane "
-                + "runs the Firth-penalized GLM adjusted for "
-                + string.Join(", ", options.Covariates!.Select(c => c.Name))
-                + "; this report does not yet follow it.";
-        if (paired)
-            return "This section is unpaired. For this paired contrast the Detection pane runs "
-                + "McNemar's exact test over the matched subjects; this report does not yet follow it.";
-        return null;
-    }
-
-    private static void AppendQuantParameters(
-        StringBuilder sb, QuantConfig quant, DifferentialResult res, SignificanceRule rule, string effectName)
+    private static void AppendQuantParameters(StringBuilder sb, QuantConfig quant, DifferentialResult res,
+        SignificanceRule rule, DifferentialOptions options, string effectName)
     {
         sb.Append("<div class=\"box\"><h2>Quantification Parameters</h2><table class=\"kv\">");
         Kv(sb, "Contrast", quant.Contrast.Describe());
         Kv(sb, "Level", quant.Level);
-        Kv(sb, "Method", quant.Design + ", " + quant.Test + ", " + quant.Prior + " prior");
-        Kv(sb, "Multiple testing", quant.Correction);
+        // The same words the CLI prints and differential.csv's "# method:" line records, naming the
+        // prior that actually RAN - which is the thing a reader comparing two results needs.
+        Kv(sb, "Method", options.Describe(res.VariancePrior));
+        Kv(sb, "Multiple testing", DifferentialCsv.CorrectionName(options.Correction));
         Kv(sb, "Hit rule", rule.Describe(effectName));
         Kv(sb, "Groups", res.IsTrend
             ? $"n = {res.NA}" + (res.NSubjects > 0 ? $" ({res.NSubjects} subjects)" : string.Empty)
@@ -255,14 +257,8 @@ public static class QuantReport
             inputs.Dataset, inputs.Options, inputs.Rule, inputs.GroupBy, inputs.ALabel, inputs.BLabel,
             inputs.EffectName);
 
-        if (inputs.Detection is { Count: > 0 } det)
-            using (var w = new StreamWriter(Path.Combine(quantDir, "detection.csv")))
-            {
-                w.WriteLine("peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b,p_value,adj_p_value");
-                foreach (var r in det)
-                    w.WriteLine(string.Join(",", Csv(r.PeptideId), r.DetA, r.NA, r.DetB, r.NB,
-                        N(r.RateA), N(r.RateB), N(r.P), N(r.Q)));
-            }
+        if (inputs.Detection is { Rows.Count: > 0 } det)
+            WriteDetectionCsv(Path.Combine(quantDir, "detection.csv"), det);
 
         if (inputs.Enrichment is { Count: > 0 } terms)
             using (var w = new StreamWriter(Path.Combine(quantDir, "enrichment_terms.csv")))
@@ -354,6 +350,56 @@ public static class QuantReport
         }
 
         return stems;
+    }
+
+    /// <summary>
+    /// The detection table: a <c>#</c> line naming the test (and any unpaired fallback), then one row per
+    /// peptide in the shared columns, plus the columns only one test has - McNemar's discordant counts,
+    /// the Firth GLM's log odds ratio. Under McNemar <c>n_a</c>/<c>n_b</c> are the matched-pair count.
+    /// </summary>
+    private static void WriteDetectionCsv(string path, DetectionAnalysisResult det)
+    {
+        using var w = new StreamWriter(path);
+        w.WriteLine($"# test: {DetectionAnalysis.Describe(det)}; detected where DetectionQValue < "
+            + QuantAnalysis.DetectionQ.ToString("0.##", Inv));
+        if (DetectionAnalysis.UnpairedNote(det.UnpairedReason) is { } unpaired)
+            w.WriteLine("# " + unpaired);
+
+        const string shared = "peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b";
+        switch (det.Method)
+        {
+            case DetectionMethod.McNemarPaired:
+                // The uniform rows are built from PairedRows in order, so they line up index by index.
+                w.WriteLine(shared + ",only_a,only_b,p_value,adj_p_value");
+                for (var i = 0; i < det.Rows.Count; i++)
+                {
+                    var r = det.Rows[i];
+                    var pr = det.PairedRows![i];
+                    w.WriteLine(string.Join(",", Csv(r.PeptideId), r.DetA, r.NA, r.DetB, r.NB,
+                        N(r.RateA), N(r.RateB), pr.OnlyA, pr.OnlyB, N(r.P), N(r.Q)));
+                }
+
+                break;
+
+            case DetectionMethod.FirthGlm:
+                w.WriteLine(shared + ",log_odds_ratio,p_value,adj_p_value");
+                for (var i = 0; i < det.Rows.Count; i++)
+                {
+                    var r = det.Rows[i];
+                    var g = det.Glm!.Rows[i];
+                    w.WriteLine(string.Join(",", Csv(r.PeptideId), r.DetA, r.NA, r.DetB, r.NB,
+                        N(r.RateA), N(r.RateB), N(g.LogOr), N(r.P), N(r.Q)));
+                }
+
+                break;
+
+            default:
+                w.WriteLine(shared + ",p_value,adj_p_value");
+                foreach (var r in det.Rows)
+                    w.WriteLine(string.Join(",", Csv(r.PeptideId), r.DetA, r.NA, r.DetB, r.NB,
+                        N(r.RateA), N(r.RateB), N(r.P), N(r.Q)));
+                break;
+        }
     }
 
     /// <summary>

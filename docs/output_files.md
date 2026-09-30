@@ -51,7 +51,8 @@ output_dir/
 
 Written only by `prism differential`, never by `prism run`: a contrast is a question asked *of* a
 finished result, and the same result answers many of them. The command reads the output directory
-and writes nothing else into it.
+and writes nothing else into it - unless `--report` is given, which adds the `quant/` folder described
+below. Neither touches any file `prism run` wrote.
 
 | File | One row per | Holds |
 |---|---|---|
@@ -77,22 +78,23 @@ Under a trend design the first line reads differently, and says what `log2fc` no
 # trend: week from 0 to 12 (span 12); log2fc is the modeled change ACROSS that span, slope = log2fc / span
 ```
 
-### Quant report (Differential pane)
+### Quant report
 
-Written by the **Quant report...** button in the Differential pane into a `quant/` folder in the
-output directory - the quantification counterpart to `qc_report.html`. It bundles the pane's current
+Written into a `quant/` folder in the output directory by `prism differential --report` and by the
+**Quant report...** button in the Differential pane - one implementation behind both, so the files are
+the same whichever produced them. The quantification counterpart to `qc_report.html`: it bundles one
 contrast across every view into one page and writes the underlying tables beside it. A view with
 nothing to show is omitted rather than written empty, so not every file below is always present.
 
 | File | One row per | Holds |
 |---|---|---|
 | `quant_report.html` | - | Self-contained report: the QC report's Analysis Information header, the analysis parameters (table + YAML), and a section per view (differential, detection, enrichment, markers) with embedded plots. Long tables are shown as a capped preview pointing to the CSV |
-| `quant_parameters.yaml` / `.json` | - | The analysis parameters - level, contrast, design, test, prior, correction, covariates, hit rule, and which views ran - as re-runnable YAML and machine-readable JSON |
+| `quant_parameters.yaml` / `.json` | - | The analysis parameters - level, contrast, design, test, prior, correction, covariates, hit rule, and which views ran - as YAML and machine-readable JSON. Design, test, prior and correction are recorded as `prism differential`'s flag values (`paired`, `moderated`, `intensity-trend`, `bh`) and each arm as a list of its levels, as `-a`/`-b` take them; `prior_used` records the prior that actually ran, which can differ from the one requested |
 | `differential.csv` | tested feature | The same file `prism differential` writes above - written by the same code, so the `#` provenance lines, the columns and the number format are identical |
 | `differential_values.csv` | tested feature | The RAW per-sample abundances behind the contrast, **LINEAR** (`2^log2`, matching `corrected_*.parquet`), over the samples the contrast ran on - under a paired design, the matched subjects only. Not written for a trend, whose fitted sample subset the result does not record |
-| `detection.csv` | peptide | `detected_a`, `n_a`, `detected_b`, `n_b`, `rate_a`, `rate_b`, `p_value`, `adj_p_value` - the two-sided Fisher exact detection test, BH-adjusted (two-group contrasts only). It is unpaired and not covariate-adjusted whatever the design; the Detection pane's McNemar and Firth-GLM paths are not yet followed here |
+| `detection.csv` | peptide | Two-group contrasts only. A `# test:` line names the test - the one the Detection pane runs for the same contrast: Fisher exact, McNemar's exact test when paired, the Firth GLM when adjusted - and a second `#` line says why when a paired design ran unpaired. Then `peptide`, `detected_a`, `n_a`, `detected_b`, `n_b`, `rate_a`, `rate_b`, the test's own columns (McNemar: the discordant counts `only_a`, `only_b`, with `n_a`/`n_b` the matched-pair count; Firth: `log_odds_ratio`), `p_value`, `adj_p_value`. Not written when the adjusted model is not identifiable (the report says so) |
 | `enrichment_terms.csv` | enriched term | `source`, `term_id`, `term_name`, `p_value`, `fold_enrichment`, `intersection_size`, and the full `genes` list (the HTML truncates it) |
-| `markers_<panel>_zscores.csv` | panel member | The row z-scored log2 heatmap values across the grouping column, one file per ticked panel |
+| `markers_<panel>_zscores.csv` | panel member | The row z-scored log2 heatmap values across the grouping column, one file per selected panel |
 | `markers_<panel>_values.csv` | panel member | The RAW per-sample abundances of that panel's members, **LINEAR**, over the grouped samples |
 
 ### Ion accounting (`prism ion-accounting`)
