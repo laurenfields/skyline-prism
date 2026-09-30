@@ -312,21 +312,10 @@ public partial class MainWindow
     /// <summary>
     /// The trend column's value per sample, NaN where the sample has none.
     /// </summary>
-    private double[]? DiffTrendValues()
-    {
-        if (_diffDataset is null || DiffTrendColumn() is not { } col
-            || !_diffDataset.MetadataColumns.Contains(col))
-            return null;
-
-        var raw = _diffDataset.MetadataValues(col);
-        var values = new double[raw.Length];
-        for (var i = 0; i < raw.Length; i++)
-            values[i] = raw[i] is { } v
-                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
-                ? d
-                : double.NaN;
-        return values;
-    }
+    private double[]? DiffTrendValues() =>
+        _diffDataset is null || DiffTrendColumn() is not { } col || !_diffDataset.MetadataColumns.Contains(col)
+            ? null
+            : _diffDataset.NumericValues(col);
 
     /// <summary>
     /// The metadata columns a trend can be fitted against: those whose every non-empty value parses
@@ -929,30 +918,14 @@ public partial class MainWindow
         return kept.Count == covariates.Count ? covariates : kept;
     }
 
-    private IReadOnlyList<Covariate>? SelectedCovariatesFor(IReadOnlyList<string> targetSampleIds)
-    {
-        if (_diffDataset is null)
-            return null;
-        var chosen = _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
-        if (chosen.Count == 0)
-            return null;
+    private IReadOnlyList<Covariate>? SelectedCovariatesFor(IReadOnlyList<string> targetSampleIds) =>
+        _diffDataset is null
+            ? null
+            : DetectionAnalysis.CovariatesFor(_diffDataset, SelectedCovariateNames(), targetSampleIds);
 
-        var indexById = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (var i = 0; i < _diffDataset.SampleIds.Length; i++)
-            indexById[_diffDataset.SampleIds[i]] = i;
-
-        var result = new List<Covariate>(chosen.Count);
-        foreach (var col in chosen)
-        {
-            var colValues = _diffDataset.MetadataValues(col);
-            var aligned = new string?[targetSampleIds.Count];
-            for (var k = 0; k < targetSampleIds.Count; k++)
-                aligned[k] = indexById.TryGetValue(targetSampleIds[k], out var di) ? colValues[di] : null;
-            result.Add(Covariate.FromMetadata(col, aligned));
-        }
-
-        return result;
-    }
+    /// <summary>The metadata columns ticked in Adjust for.</summary>
+    private List<string> SelectedCovariateNames() =>
+        _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
 
     private async void OnDiffLevelChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1156,6 +1129,11 @@ public partial class MainWindow
     /// <summary>Whether this run is still the current one. False means drop everything and paint nothing.</summary>
     private bool StillCurrent(int request) => request == _diffViewRequest;
 
+    /// <summary>The levels ticked for each arm - what <see cref="TryGetGroups"/> resolves into columns.</summary>
+    private (List<string> A, List<string> B) SelectedArmLevels() => (
+        _diffAValues.Where(v => v.IsSelected).Select(v => v.Name).ToList(),
+        _diffBValues.Where(v => v.IsSelected).Select(v => v.Name).ToList());
+
     private bool TryGetGroups(out string col, out List<int> groupA, out List<int> groupB,
         out string aVal, out string bVal)
     {
@@ -1167,8 +1145,7 @@ public partial class MainWindow
         if (_diffDataset is null || DiffGroupByCombo.SelectedItem is not string c)
             return false;
 
-        var aSet = _diffAValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
-        var bSet = _diffBValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        var (aSet, bSet) = SelectedArmLevels();
         var arms = ContrastArms.Resolve(_diffDataset.MetadataValues(c), aSet, bSet);
         if (!arms.Ok)
             return false;
@@ -1192,16 +1169,8 @@ public partial class MainWindow
     /// alternative is Core returning its column sets, which widens its result type for a display
     /// concern.
     /// </remarks>
-    private (List<int> A, List<int> B) ContrastColumns(List<int> pickedA, List<int> pickedB)
-    {
-        if (DiffSelectedDesign() != DifferentialDesign.Paired || DiffSubjectLabels() is not { } subjects)
-            return (pickedA, pickedB);
-
-        var (pairs, _) = PairedSamples.Resolve(subjects, pickedA, pickedB);
-        return pairs.Count == 0
-            ? (pickedA, pickedB)
-            : (pairs.Select(p => p.AColumn).ToList(), pairs.Select(p => p.BColumn).ToList());
-    }
+    private (List<int> A, List<int> B) ContrastColumns(List<int> pickedA, List<int> pickedB) =>
+        PairedSamples.ColumnsUsed(DiffSelectedDesign(), DiffSubjectLabels(), pickedA, pickedB);
 
     /// <summary>
     /// The Volcano under a trend design: a slope against a numeric column, plotted as the modeled
@@ -1361,23 +1330,11 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Said when the paired design is selected but this run could not honor it.
+    /// A paired design's "ran unpaired" note (<see cref="DetectionAnalysis.UnpairedNote"/>), led by a
+    /// space for appending to a status line, or empty when the design was honored.
     /// </summary>
-    /// <remarks>
-    /// The paired form of a detection-rate test is McNemar's, which PRISM does run - but only
-    /// unadjusted. Adjusting a paired binary outcome for covariates needs conditional logistic
-    /// regression, a different estimator that is not implemented, so a ticked covariate falls back
-    /// to the unpaired Firth GLM. That is a reasonable answer to a different question, and the one
-    /// thing it must not do is arrive silently under a Design box that says Paired.
-    /// </remarks>
-    private static string DetectionUnpairedNote(bool becauseCovariates) =>
-        becauseCovariates
-            ? " Note: adjusted detection is UNPAIRED - the paired form needs conditional logistic "
-              + "regression, which is not implemented - so this uses every sample in the arms, "
-              + "including subjects the paired contrast left out. Untick the covariates for "
-              + "McNemar's paired test."
-            : " Note: detection is tested UNPAIRED - no subject could be matched across the arms - "
-              + "so this uses every sample in them.";
+    private static string UnpairedSuffix(UnpairedReason reason) =>
+        DetectionAnalysis.UnpairedNote(reason) is { } note ? " " + note : string.Empty;
 
     private async Task RunDetectionAsync(int request)
     {
@@ -1425,133 +1382,28 @@ public partial class MainWindow
             _detectionDir = dir;
         }
 
+        // Everything read off a WPF control is read here, on the UI thread, never inside the Task.Run:
+        // touching a control from a worker throws "The calling thread cannot access this object".
         var dataset = _diffDataset!;
-        var detIndex = det.SampleIds.Select((s, i) => (s, i)).ToDictionary(x => x.s, x => x.i, StringComparer.Ordinal);
-        var aCols = a.Select(j => dataset.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
-        var bCols = b.Select(j => dataset.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
-        if (aCols.Count == 0 || bCols.Count == 0)
-        {
-            DiffStatusText.Text = "The selected samples were not found in the detection matrix.";
-            return;
-        }
+        var design = DiffSelectedDesign();
+        var subjects = DiffSubjectLabels();
+        var covariateNames = SelectedCovariateNames();
+        var correction = DiffSelectedCorrection();
+        var corrected = correction != MultipleTesting.None;
 
-        var dropped = a.Count - aCols.Count + (b.Count - bCols.Count);
-        var droppedNote = dropped > 0 ? $" ({dropped} samples not in merged_data)" : string.Empty;
-
-        var covariates = SelectedCovariatesFor(det.SampleIds);
-
-        // Paired and unadjusted: McNemar over the matched pairs. Only the discordant pairs carry
-        // information - a subject that agreed with itself is its own control - so the counts that
-        // drove the test are reported beside the rates rather than left implied.
-        if (covariates is null && DiffSelectedDesign() == DifferentialDesign.Paired
-            && DiffSubjectLabels() is { } subjects)
-        {
-            var (pairs, pairMessages) = PairedSamples.Resolve(subjects, a, b);
-
-            // The detection matrix has its own column order, so each pair has to be re-expressed in
-            // it; a pair with either half missing from merged_data cannot be tested at all.
-            var detPairs = pairs
-                .Select(pair => (
-                    A: detIndex.TryGetValue(dataset.SampleIds[pair.AColumn], out var ia) ? ia : -1,
-                    B: detIndex.TryGetValue(dataset.SampleIds[pair.BColumn], out var ib) ? ib : -1,
-                    pair.Subject))
-                .Where(x => x.A >= 0 && x.B >= 0)
-                .Select(x => new SamplePair(x.Subject, x.A, x.B))
-                .ToList();
-
-            if (detPairs.Count > 0)
-            {
-                // Read on the UI thread, never inside the Task.Run: touching a WPF control from a
-                // worker throws "The calling thread cannot access this object". The same rule is
-                // documented on the Dynamic Range pane's selection poll.
-                var detCorrection = DiffSelectedCorrection();
-
-                IReadOnlyList<DetectionPairedRow> pairedRows;
-                try
-                {
-                    pairedRows = await Task.Run(() => DetectionPairedTest.Run(
-                        det.Matrix, det.PeptideIds, detPairs, detCorrection));
-                    if (!StillCurrent(request))
-                        return;
-                }
-                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-                {
-                    DiffStatusText.Text = "Paired detection failed: " + ex.Message;
-                    return;
-                }
-
-                // The plot wants the same shape the unpaired test produces; the pair count stands in
-                // for each arm's n, which is what a paired rate is out of.
-                RenderDetection(pairedRows
-                    .Select(r => new DetectionRow(r.PeptideId, r.DetA, r.Pairs, r.DetB, r.Pairs,
-                        r.RateA, r.RateB, r.P, r.Q))
-                    .ToList(), DiffRule(), detCorrection != MultipleTesting.None);
-                DiffGrid.ItemsSource = pairedRows.Take(1000)
-                    .Select(r => new DetPairedRow(r.PeptideId, r.RateA, r.RateB, r.OnlyA, r.OnlyB, r.P, r.Q))
-                    .ToList();
-
-                var lost = pairMessages.Count > 0 ? " " + string.Join(" ", pairMessages) : string.Empty;
-                var notInMerged = pairs.Count - detPairs.Count;
-                var missing = notInMerged > 0
-                    ? $" {notInMerged} matched pair(s) are not in merged_data."
-                    : string.Empty;
-                DiffStatusText.Text =
-                    $"Paired detection (McNemar exact): {aVal} vs {bVal} over {detPairs.Count} matched "
-                    + $"subject(s), {pairedRows.Count} peptides.{lost}{missing} Only discordant pairs "
-                    + "carry information - the two counts are in the table.";
-                return;
-            }
-
-            DiffStatusText.Text = "Paired detection needs matched subjects; none could be matched. "
-                + "Falling back to the unpaired test.";
-        }
-
-        // A ticked covariate switches to the Firth-penalized GLM (adjusted detection); otherwise Fisher.
-        if (covariates is not null)
-        {
-            DetectionGlmResult glm;
-            try
-            {
-                glm = await Task.Run(() =>
-                    DetectionGlm.Run(det.Matrix, det.PeptideIds, aCols, bCols, covariates));
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-            {
-                DiffStatusText.Text = "Adjusted detection failed: " + ex.Message;
-                return;
-            }
-
-            // AFTER the await, not before it: the Firth GLM is the slowest path in the pane, so it
-            // is the one most likely to be superseded while it runs.
-            if (!StillCurrent(request))
-                return;
-
-            if (!glm.Identifiable)
-            {
-                ClearDiffOutput();
-                DiffStatusText.Text = "Adjusted detection is not identifiable (group confounded with the "
-                    + $"covariates, R^2={glm.GroupCollinearityR2:0.00}). Use the unadjusted view.";
-                return;
-            }
-
-            RenderDetectionGlm(glm.Rows, DiffRule(), DiffSelectedCorrection() != MultipleTesting.None);
-            DiffGrid.ItemsSource = glm.Rows.Take(1000)
-                .Select(r => new DetGlmRow(r.PeptideId, r.RateA, r.RateB, r.LogOr, r.P, r.Q)).ToList();
-            DiffStatusText.Text =
-                $"Adjusted detection (Firth GLM): {aVal} (n={aCols.Count}) vs {bVal} (n={bCols.Count}), "
-                + $"adjusted for {string.Join(", ", glm.CovariatesUsed)}, {glm.Rows.Count} peptides{droppedNote}."
-                + (DiffSelectedDesign() == DifferentialDesign.Paired
-                    ? DetectionUnpairedNote(becauseCovariates: true)
-                    : string.Empty);
-            return;
-        }
-
-        IReadOnlyList<DetectionRow> rows;
+        // Which test runs is decided in Core (DetectionAnalysis), so the quant report and the CLI make
+        // the same choice this pane does: Firth GLM when covariates are ticked, McNemar when paired,
+        // Fisher otherwise.
+        DetectionAnalysisResult result;
         try
         {
-            rows = await Task.Run(() => DetectionTest.Run(det.Matrix, det.PeptideIds, aCols, bCols));
-            if (!StillCurrent(request))
-                return;
+            result = await Task.Run(() => DetectionAnalysis.Run(det, dataset, a, b, design, subjects,
+                covariateNames, correction));
+        }
+        catch (DetectionSamplesNotFoundException ex)
+        {
+            DiffStatusText.Text = ex.Message;
+            return;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -1559,15 +1411,73 @@ public partial class MainWindow
             return;
         }
 
-        RenderDetection(rows, DiffRule(), DiffSelectedCorrection() != MultipleTesting.None);
-        DiffGrid.ItemsSource = rows.Take(1000)
-            .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
-        DiffStatusText.Text =
-            $"Detection (peptide-level, DetectionQValue < 0.01): {aVal} (n={aCols.Count}) vs " +
-            $"{bVal} (n={bCols.Count}) over {rows.Count} peptides{droppedNote}."
-            + (DiffSelectedDesign() == DifferentialDesign.Paired
-                ? DetectionUnpairedNote(becauseCovariates: false)
-                : string.Empty);
+        // AFTER the await, not before it: the Firth GLM is the slowest path in the pane, so it is the
+        // one most likely to be superseded while it runs.
+        if (!StillCurrent(request))
+            return;
+
+        var droppedNote = result.DroppedSamples > 0
+            ? $" ({result.DroppedSamples} samples not in merged_data)"
+            : string.Empty;
+
+        switch (result.Method)
+        {
+            case DetectionMethod.McNemarPaired:
+            {
+                // Only the discordant pairs carry information - a subject that agreed with itself is
+                // its own control - so the counts that drove the test are in the table beside the
+                // rates rather than left implied. The plot takes the unpaired shape, with the pair
+                // count standing in for each arm's n.
+                var pairedRows = result.PairedRows!;
+                RenderDetection(result.Rows, DiffRule(), corrected);
+                DiffGrid.ItemsSource = pairedRows.Take(1000)
+                    .Select(r => new DetPairedRow(r.PeptideId, r.RateA, r.RateB, r.OnlyA, r.OnlyB, r.P, r.Q))
+                    .ToList();
+
+                var lost = result.PairMessages.Count > 0
+                    ? " " + string.Join(" ", result.PairMessages)
+                    : string.Empty;
+                var missing = result.PairsNotInMerged > 0
+                    ? $" {result.PairsNotInMerged} matched pair(s) are not in merged_data."
+                    : string.Empty;
+                DiffStatusText.Text =
+                    $"Paired detection (McNemar exact): {aVal} vs {bVal} over {result.NA} matched "
+                    + $"subject(s), {pairedRows.Count} peptides.{lost}{missing} Only discordant pairs "
+                    + "carry information - the two counts are in the table.";
+                return;
+            }
+
+            case DetectionMethod.FirthGlm:
+            {
+                var glm = result.Glm!;
+                if (!glm.Identifiable)
+                {
+                    ClearDiffOutput();
+                    DiffStatusText.Text = "Adjusted detection is not identifiable (group confounded with the "
+                        + $"covariates, R^2={glm.GroupCollinearityR2:0.00}). Use the unadjusted view.";
+                    return;
+                }
+
+                RenderDetectionGlm(glm.Rows, DiffRule(), corrected);
+                DiffGrid.ItemsSource = glm.Rows.Take(1000)
+                    .Select(r => new DetGlmRow(r.PeptideId, r.RateA, r.RateB, r.LogOr, r.P, r.Q)).ToList();
+                DiffStatusText.Text =
+                    $"Adjusted detection (Firth GLM): {aVal} (n={result.NA}) vs {bVal} (n={result.NB}), "
+                    + $"adjusted for {string.Join(", ", glm.CovariatesUsed)}, {glm.Rows.Count} peptides{droppedNote}."
+                    + UnpairedSuffix(result.UnpairedReason);
+                return;
+            }
+
+            default:
+                RenderDetection(result.Rows, DiffRule(), corrected);
+                DiffGrid.ItemsSource = result.Rows.Take(1000)
+                    .Select(r => new DetRow(r.PeptideId, r.RateA, r.RateB, r.P, r.Q)).ToList();
+                DiffStatusText.Text =
+                    $"Detection (peptide-level, DetectionQValue < 0.01): {aVal} (n={result.NA}) vs " +
+                    $"{bVal} (n={result.NB}) over {result.Rows.Count} peptides{droppedNote}."
+                    + UnpairedSuffix(result.UnpairedReason);
+                return;
+        }
     }
 
     private async Task RunEnrichmentAsync(int request)

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -203,6 +204,23 @@ public sealed class DifferentialDataset
         _metaByColumn.TryGetValue(column, out var v)
             ? v
             : throw new ArgumentException($"Unknown metadata column '{column}'.", nameof(column));
+
+    /// <summary>
+    /// <paramref name="column"/> read as numbers, aligned to <see cref="SampleIds"/>: invariant
+    /// culture, NaN where a sample has no value or one that does not parse. What a trend is fitted
+    /// against - one parse, so the pane, the CLI and the report cannot disagree on a sample's x.
+    /// </summary>
+    public double[] NumericValues(string column)
+    {
+        var raw = MetadataValues(column);
+        var values = new double[raw.Length];
+        for (var i = 0; i < raw.Length; i++)
+            values[i] = raw[i] is { } v
+                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+                ? d
+                : double.NaN;
+        return values;
+    }
 
     /// <summary>
     /// Join a clinical metadata CSV to the samples, ported from the explorer's <c>attach_clinical</c>.

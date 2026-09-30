@@ -49,7 +49,11 @@ public static class Enrichment
     public const string GProfilerUrl = "https://biit.cs.ut.ee/gprofiler/api/gost/profile/";
     public const string OpenTargetsUrl = "https://api.platform.opentargets.org/api/v4/graphql";
 
-    private static readonly string[] DefaultSources = { "GO:BP", "GO:MF", "GO:CC", "REAC", "KEGG" };
+    /// <summary>
+    /// The g:Profiler sources queried when none are named - public so a report records the set that
+    /// was actually queried rather than a copy of it.
+    /// </summary>
+    public static IReadOnlyList<string> DefaultSources { get; } = new[] { "GO:BP", "GO:MF", "GO:CC", "REAC", "KEGG" };
     private static readonly Regex SymbolSplit = new(@"[;,/|\s]+", RegexOptions.Compiled);
 
     /// <summary>

@@ -40,20 +40,32 @@ as the GitHub Release description and fails if it is missing.
   Differential pane runs the current contrast across every view and writes a `quant_report.html` to a
   `quant/` folder in the output directory - the quantification counterpart to `qc_report.html`, sharing
   its Analysis Information header (read from the run's `parameters.json`). It records the analysis
-  parameters as a table and re-runnable YAML, then renders a section per view with embedded plots:
+  parameters as a table and as YAML in `prism differential`'s own flag values (`design: paired`,
+  `test: moderated`, `prior: intensity-trend`, `correction: bh`, arms as lists of their levels), with
+  the prior that actually ran beside the requested one, then renders a section per view with embedded plots:
   differential abundance (volcano + ranked hits), peptide detection frequency, g:Profiler enrichment,
-  and each ticked Markers-pane panel (heatmap + panel-score boxplot). The detection section is the
-  unpaired Fisher exact test whatever the design - it does not yet follow the Detection pane's McNemar
-  (paired) or Firth-GLM (covariates) paths, and says so on any contrast where the two differ.
-  Alongside the HTML it writes the
-  result tables as CSVs - `differential.csv` (the same file, from the same code, as
-  `prism differential` writes), `detection.csv`, `enrichment_terms.csv` (full gene lists),
-  and `markers_<panel>_zscores.csv` - plus the **raw per-sample abundances in LINEAR scale**
-  (`differential_values.csv`, `markers_<panel>_values.csv`), so the export stands on its own for
-  reanalysis rather than carrying only fold changes and z-scores. Long tables are capped to a preview in
-  the HTML, with the full rows in the companion CSV. A view with nothing to show (no network for
-  enrichment, no panels ticked, a trend design with no two-group detection) is omitted with a note
-  rather than failing the report.
+  and each ticked Markers-pane panel (heatmap + panel-score boxplot). The detection section runs the
+  test the Detection pane runs for the same contrast - Fisher exact, McNemar's exact test when paired,
+  the Firth GLM when adjusted - names it, and says why when a paired design had to run unpaired.
+  Alongside the HTML it writes the result tables as CSVs - `differential.csv` (the same file, from the
+  same code, as `prism differential` writes), `detection.csv` (with McNemar's discordant counts or the
+  GLM's log odds ratio when those ran), `enrichment_terms.csv` (full gene lists), and
+  `markers_<panel>_zscores.csv` - plus the **raw per-sample abundances in LINEAR scale**
+  (`differential_values.csv` over the samples the contrast ran on, `markers_<panel>_values.csv`), so
+  the export stands on its own for reanalysis rather than carrying only fold changes and z-scores.
+  Long tables are capped to a preview in the HTML, with the full rows in the companion CSV. A view with
+  nothing to show (no network for enrichment, no panels ticked, a trend design with no two-group
+  detection) is omitted with a note rather than failing the report.
+- **`prism differential --report`: the quant report, headless.** The same report the button writes,
+  from the command's own flags, so it needs neither Skyline nor Windows:
+  `prism differential -d output/ -g condition -a Control -b Disease --report --markers "EV markers (core)"`.
+  `--markers` takes panels from the same set the Markers pane offers (saved lists plus the shipped
+  panels), `--markers-group-by` picks their grouping column, and `--no-enrichment` skips g:Profiler on a
+  machine with no internet access. The button and the command run one implementation, so a report
+  clicked and a report typed agree: on the committed fixture, the report's `quant/differential.csv` is
+  byte-identical to the results file the same command writes. A mistyped panel or column is refused
+  before anything is written, and `--markers`, `--markers-group-by` or `--no-enrichment` without
+  `--report` is refused rather than ignored.
 
 - **A choice of variance prior for the Volcano, defaulting to the lab's own.** The **Prior** picker
   offers **Intensity trend** (the default), **Global** and **limma-trend**. Intensity trend is the
