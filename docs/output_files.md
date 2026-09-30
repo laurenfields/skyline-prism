@@ -88,9 +88,9 @@ nothing to show is omitted rather than written empty, so not every file below is
 |---|---|---|
 | `quant_report.html` | - | Self-contained report: the QC report's Analysis Information header, the analysis parameters (table + YAML), and a section per view (differential, detection, enrichment, markers) with embedded plots. Long tables are shown as a capped preview pointing to the CSV |
 | `quant_parameters.yaml` / `.json` | - | The analysis parameters - level, contrast, design, test, prior, correction, covariates, hit rule, and which views ran - as re-runnable YAML and machine-readable JSON |
-| `differential.csv` | tested feature | The differential result, as in `prism differential` above |
-| `differential_values.csv` | tested feature | The RAW per-sample abundances behind the contrast, **LINEAR** (`2^log2`, matching `corrected_*.parquet`), over the contrast's samples |
-| `detection.csv` | peptide | `detected_a`, `n_a`, `detected_b`, `n_b`, `rate_a`, `rate_b`, `p_value`, `adj_p_value` - the on/off detection test (two-group contrasts only) |
+| `differential.csv` | tested feature | The same file `prism differential` writes above - written by the same code, so the `#` provenance lines, the columns and the number format are identical |
+| `differential_values.csv` | tested feature | The RAW per-sample abundances behind the contrast, **LINEAR** (`2^log2`, matching `corrected_*.parquet`), over the samples the contrast ran on - under a paired design, the matched subjects only. Not written for a trend, whose fitted sample subset the result does not record |
+| `detection.csv` | peptide | `detected_a`, `n_a`, `detected_b`, `n_b`, `rate_a`, `rate_b`, `p_value`, `adj_p_value` - the two-sided Fisher exact detection test, BH-adjusted (two-group contrasts only). It is unpaired and not covariate-adjusted whatever the design; the Detection pane's McNemar and Firth-GLM paths are not yet followed here |
 | `enrichment_terms.csv` | enriched term | `source`, `term_id`, `term_name`, `p_value`, `fold_enrichment`, `intersection_size`, and the full `genes` list (the HTML truncates it) |
 | `markers_<panel>_zscores.csv` | panel member | The row z-scored log2 heatmap values across the grouping column, one file per ticked panel |
 | `markers_<panel>_values.csv` | panel member | The RAW per-sample abundances of that panel's members, **LINEAR**, over the grouped samples |

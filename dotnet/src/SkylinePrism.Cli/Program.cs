@@ -267,10 +267,10 @@ public static class Program
         var rule = SignificanceRuleFrom(opts);
         var hits = result.Rows.Count(rule.IsSignificant);
         Console.WriteLine(
-            $"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe()}, {CorrectionName(options.Correction)})");
+            $"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe()}, {DifferentialCsv.CorrectionName(options.Correction)})");
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
-        WriteDifferentialCsv(outPath, result, dataset, options, rule, groupBy!, aLabel, bLabel);
+        DifferentialCsv.Write(outPath, result, dataset, options, rule, groupBy!, aLabel, bLabel);
         Console.WriteLine($"Results written to: {outPath}");
         return 0;
     }
@@ -305,14 +305,8 @@ public static class Program
         var result = Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, x, options);
         var rule = SignificanceRuleFrom(opts);
 
-        var used = x.Where(double.IsFinite).ToList();
-        // Kept as numbers. Formatting them and then splitting the formatted string back apart lost
-        // precision, and turned the no-usable-values case into two copies of the literal "(none)".
-        var xMin = used.Count > 0 ? used.Min() : double.NaN;
-        var xMax = used.Count > 0 ? used.Max() : double.NaN;
-        string Endpoint(double v) =>
-            double.IsNaN(v) ? "(none)" : v.ToString("0.###", CultureInfo.InvariantCulture);
-        var span = $"{Endpoint(xMin)} to {Endpoint(xMax)}";
+        var (xLow, xHigh) = DifferentialCsv.TrendEndpoints(x);
+        var span = $"{xLow} to {xHigh}";
         var n = result.NSubjects > 0
             ? $"{result.NA} samples in {result.NSubjects} subjects"
             : $"{result.NA} samples";
@@ -327,11 +321,11 @@ public static class Program
         var effectName = $"log2 change across {trendOver}";
         var hits = result.Rows.Count(rule.IsSignificant);
         Console.WriteLine($"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe(effectName)}, "
-            + $"{CorrectionName(options.Correction)})");
+            + $"{DifferentialCsv.CorrectionName(options.Correction)})");
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
-        WriteDifferentialCsv(outPath, result, dataset, options, rule, trendOver,
-            aLabel: Endpoint(xMin), bLabel: Endpoint(xMax), effectName: effectName);
+        DifferentialCsv.Write(outPath, result, dataset, options, rule, trendOver,
+            aLabel: xLow, bLabel: xHigh, effectName: effectName);
         Console.WriteLine($"Results written to: {outPath}");
         return 0;
     }
@@ -361,15 +355,6 @@ public static class Program
         DifferentialDesign.LinearTrend => "trend",
         DifferentialDesign.LinearTrendWithinSubject => "trend-within-subject",
         _ => "unpaired",
-    };
-
-    private static string CorrectionName(MultipleTesting correction) => correction switch
-    {
-        MultipleTesting.BenjaminiHochberg => "Benjamini-Hochberg",
-        MultipleTesting.BenjaminiYekutieli => "Benjamini-Yekutieli",
-        MultipleTesting.Bonferroni => "Bonferroni",
-        MultipleTesting.Holm => "Holm",
-        _ => "uncorrected",
     };
 
     /// <summary>
@@ -545,70 +530,6 @@ public static class Program
             MinPerGroup = (int)ParseDouble(opts.GetSingleOrNull("--min-per-group"), 2),
         };
     }
-
-    /// <summary>
-    /// Write the result table, in the row order the test produced (most significant first).
-    /// </summary>
-    /// <remarks>
-    /// The header carries the contrast and the method as <c>#</c> comment lines, because a results
-    /// file outlives the shell it was produced in and "which way round is the fold change" is the
-    /// first question anyone asks of one. Invariant culture throughout, as every other PRISM writer:
-    /// a decimal comma would make the file unreadable as CSV.
-    /// </remarks>
-    private static void WriteDifferentialCsv(
-        string path, DifferentialResult result, DifferentialDataset dataset,
-        DifferentialOptions options, SignificanceRule rule, string groupBy, string aLabel, string bLabel,
-        string effectName = "log2FC")
-    {
-        var dirName = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(dirName))
-            Directory.CreateDirectory(dirName);
-
-        using var w = new StreamWriter(path);
-        w.WriteLine(result.IsTrend
-            ? $"# trend: {groupBy} from {aLabel} to {bLabel} (span {result.TrendRange.ToString("0.####", CultureInfo.InvariantCulture)}); "
-              + "log2fc is the modeled change ACROSS that span, slope = log2fc / span"
-            : $"# contrast: {groupBy} = {bLabel} vs {aLabel} (positive log2FC is higher in {bLabel})");
-        w.WriteLine($"# method: {options.Describe(result.VariancePrior)}, {CorrectionName(options.Correction)}");
-        w.WriteLine(result.IsTrend
-            ? $"# n: {result.NA} samples"
-              + (result.NSubjects > 0 ? $" in {result.NSubjects} subjects" : string.Empty)
-              + $"; tested {result.NFeaturesTested} of {result.NFeaturesTotal}"
-            : $"# n: {result.NA} vs {result.NB}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
-        // EVERY tested feature is in this file, not just the hits - so the rule is recorded as the
-        // one the run reported against, not as a filter that was applied to the rows below.
-        w.WriteLine($"# hit rule (rows are NOT filtered by it): {rule.Describe(effectName)}");
-        w.WriteLine("feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
-            + "p_value,adj_p_value,mean_a,mean_b");
-        foreach (var r in result.Rows)
-        {
-            // A feature the matrix carried no annotation for keeps its id and leaves the rest
-            // empty, rather than repeating the id into columns that mean something else.
-            var identity = dataset.IdentityOf(r.FeatureId);
-            w.WriteLine(string.Join(',', new[]
-            {
-                Csv(r.FeatureId),
-                Csv(identity?.Label ?? r.FeatureId),
-                Csv(Join(identity?.Genes)),
-                Csv(Join(identity?.ProteinNames)),
-                Csv(Join(identity?.Accessions)),
-                Num(r.LogFc), Num(r.Fc), Num(r.AveExpr), Num(r.T),
-                Num(r.PValue), Num(r.AdjPValue), Num(r.MeanA), Num(r.MeanB),
-            }));
-        }
-    }
-
-    /// <summary>A shared feature's several groups, semicolon-joined so the cell stays one field.</summary>
-    private static string Join(IReadOnlyList<string>? values) =>
-        values is null ? string.Empty : string.Join(';', values.Where(v => !string.IsNullOrEmpty(v)));
-
-    private static string Num(double v) =>
-        double.IsNaN(v) ? string.Empty : v.ToString("G17", CultureInfo.InvariantCulture);
-
-    private static string Csv(string v) =>
-        v.Contains(',') || v.Contains('"') || v.Contains('\n')
-            ? '"' + v.Replace("\"", "\"\"") + '"'
-            : v;
 
     /// <summary>
     /// Measure acquired and assigned ions from the instrument files, and cache the result.

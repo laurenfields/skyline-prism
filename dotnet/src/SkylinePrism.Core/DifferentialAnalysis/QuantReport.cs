@@ -26,15 +26,32 @@ public sealed class QuantReportInputs
     public required string EffectName { get; init; }
     public required Func<string, string> LabelFor { get; init; }
 
+    /// <summary>
+    /// The options the contrast ran under, and its column and arm labels - what
+    /// <see cref="DifferentialCsv.Write"/> records in <c>differential.csv</c>'s header, so the report's
+    /// copy is the same file <c>prism differential</c> writes. Under a trend, <see cref="GroupBy"/> is
+    /// the trend column and the labels are its endpoints (<see cref="DifferentialCsv.TrendEndpoints"/>).
+    /// </summary>
+    public required DifferentialOptions Options { get; init; }
+
+    /// <inheritdoc cref="Options"/>
+    public required string GroupBy { get; init; }
+
+    /// <inheritdoc cref="Options"/>
+    public required string ALabel { get; init; }
+
+    /// <inheritdoc cref="Options"/>
+    public required string BLabel { get; init; }
+
+    /// <summary>
+    /// The loaded dataset: the feature annotations <c>differential.csv</c> carries, and the RAW
+    /// per-sample abundances behind the summaries (linear, matching PRISM's corrected parquet).
+    /// </summary>
+    public required DifferentialDataset Dataset { get; init; }
+
     public IReadOnlyList<DetectionRow>? Detection { get; init; }
     public IReadOnlyList<EnrichmentTerm>? Enrichment { get; init; }
     public IReadOnlyList<MarkerReportSection>? Markers { get; init; }
-
-    /// <summary>
-    /// The loaded dataset, so the export can emit the RAW per-sample abundances behind the summaries
-    /// (linear, matching PRISM's corrected parquet). Null omits the raw-value files.
-    /// </summary>
-    public DifferentialDataset? Dataset { get; init; }
 
     /// <summary>The sample columns of the contrast (group A then B), for the raw differential values.</summary>
     public IReadOnlyList<int>? ContrastColumns { get; init; }
@@ -110,6 +127,16 @@ public static class QuantReport
             AppendPreviewNote(sb, hits.Count, maxHitRows, "differential.csv (every tested feature)");
         }
 
+        // A file the reader might look for and not find is named, with the reason, rather than left out.
+        if (inputs.ContrastColumns is not { Count: > 0 })
+            sb.Append("<p class=\"note\">No <code>differential_values.csv</code> for this contrast: "
+                + (res.IsTrend
+                    ? "a trend has no arms, and the result does not record which samples entered the "
+                      + "fit (a sample can be dropped for a non-finite value or, within subject, for "
+                      + "having no partner), so a per-sample table would list samples the fit never saw."
+                    : "no contrast columns were given.")
+                + "</p>");
+
         AppendMessages(sb, "Notes", res.Messages);
         AppendMessages(sb, "Warnings", res.Warnings);
 
@@ -119,7 +146,14 @@ public static class QuantReport
             sb.Append("<div class=\"section-header\">Detection frequency</div>");
             sb.Append("<p class=\"note\">On/off detection from the transition-level data, not the dense "
                 + "abundance matrix. A cell counts as detected where DetectionQValue is below the "
-                + "threshold; the test asks whether the detection rate differs between the two groups.</p>");
+                + "threshold. The test is a two-sided Fisher exact test of whether the detection rate "
+                + "differs between the two groups, Benjamini-Hochberg adjusted across peptides.</p>");
+            // Said outright WHEN it matters: the Detection pane follows the design, so for a paired or
+            // adjusted contrast a reader comparing the two would otherwise take this section for the
+            // pane's result. On an unpaired, unadjusted contrast the two run the same Fisher test, and
+            // a caveat there would warn about a difference that does not exist.
+            if (DetectionDivergence(inputs.Options) is { } divergence)
+                sb.Append("<p class=\"note\">").Append(HtmlEncode(divergence)).Append("</p>");
             AppendImage(sb, PlotRenderer.DetectionVolcanoPng(det, rule, inputs.Corrected, inputs.Contrast),
                 "Detection volcano");
             var detHits = det.Where(r => (rule.UseAdjusted ? r.Q : r.P) < rule.PThreshold)
@@ -171,6 +205,25 @@ public static class QuantReport
         return sb.ToString();
     }
 
+    /// <summary>
+    /// How the report's (always unpaired, unadjusted Fisher) detection section differs from what the
+    /// Detection pane runs for these options, or null when the two run the same test.
+    /// </summary>
+    internal static string? DetectionDivergence(DifferentialOptions options)
+    {
+        var paired = options.Design == DifferentialDesign.Paired;
+        var adjusted = options.Covariates is { Count: > 0 };
+        if (adjusted)
+            return "This section is not adjusted for covariates. For this contrast the Detection pane "
+                + "runs the Firth-penalized GLM adjusted for "
+                + string.Join(", ", options.Covariates!.Select(c => c.Name))
+                + "; this report does not yet follow it.";
+        if (paired)
+            return "This section is unpaired. For this paired contrast the Detection pane runs "
+                + "McNemar's exact test over the matched subjects; this report does not yet follow it.";
+        return null;
+    }
+
     private static void AppendQuantParameters(
         StringBuilder sb, QuantConfig quant, DifferentialResult res, SignificanceRule rule, string effectName)
     {
@@ -196,13 +249,11 @@ public static class QuantReport
 
     private static void WriteCompanionCsvs(string quantDir, QuantReportInputs inputs)
     {
-        using (var w = new StreamWriter(Path.Combine(quantDir, "differential.csv")))
-        {
-            w.WriteLine("feature_id,label," + Csv(inputs.EffectName) + ",fc,ave_expr,statistic,p_value,adj_p_value,mean_a,mean_b");
-            foreach (var r in inputs.Differential.Rows)
-                w.WriteLine(string.Join(",", Csv(r.FeatureId), Csv(inputs.LabelFor(r.FeatureId)),
-                    N(r.LogFc), N(r.Fc), N(r.AveExpr), N(r.T), N(r.PValue), N(r.AdjPValue), N(r.MeanA), N(r.MeanB)));
-        }
+        // The same writer as `prism differential`, so this is the same file - header lines, the
+        // gene/protein/accession columns and the number format included.
+        DifferentialCsv.Write(Path.Combine(quantDir, "differential.csv"), inputs.Differential,
+            inputs.Dataset, inputs.Options, inputs.Rule, inputs.GroupBy, inputs.ALabel, inputs.BLabel,
+            inputs.EffectName);
 
         if (inputs.Detection is { Count: > 0 } det)
             using (var w = new StreamWriter(Path.Combine(quantDir, "detection.csv")))
@@ -240,29 +291,27 @@ public static class QuantReport
 
         // Raw per-sample abundances (LINEAR, matching corrected_*.parquet), so the export stands on its
         // own for reanalysis rather than carrying only fold changes and z-scores.
-        if (inputs.Dataset is { } ds)
-        {
-            var rowOf = new Dictionary<string, int>(StringComparer.Ordinal);
-            for (var i = 0; i < ds.FeatureIds.Length; i++)
-                rowOf[ds.FeatureIds[i]] = i;
+        var ds = inputs.Dataset;
+        var rowOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < ds.FeatureIds.Length; i++)
+            rowOf[ds.FeatureIds[i]] = i;
 
-            if (inputs.ContrastColumns is { Count: > 0 } cols)
-                WriteValuesMatrix(Path.Combine(quantDir, "differential_values.csv"),
-                    ds, rowOf, inputs.Differential.Rows.Select(r => (r.FeatureId, inputs.LabelFor(r.FeatureId))), cols);
+        if (inputs.ContrastColumns is { Count: > 0 } cols)
+            WriteValuesMatrix(Path.Combine(quantDir, "differential_values.csv"),
+                ds, rowOf, inputs.Differential.Rows.Select(r => (r.FeatureId, inputs.LabelFor(r.FeatureId))), cols);
 
-            if (inputs.Markers is { Count: > 0 } ms)
-                foreach (var m in ms)
-                {
-                    var safe = string.Concat(m.PanelName.Select(c => char.IsLetterOrDigit(c) ? c : '_'));
-                    var groups = ds.MetadataValues(m.GroupColumn);
-                    var included = Enumerable.Range(0, groups.Length)
-                        .Where(s => !string.IsNullOrEmpty(groups[s])).ToList();
-                    var rows = m.Result.MarkerFeatureIds
-                        .Select((id, i) => (id, m.Result.MarkerLabels[i]));
-                    WriteValuesMatrix(Path.Combine(quantDir, $"markers_{safe}_values.csv"),
-                        ds, rowOf, rows, included);
-                }
-        }
+        if (inputs.Markers is { Count: > 0 } ms)
+            foreach (var m in ms)
+            {
+                var safe = string.Concat(m.PanelName.Select(c => char.IsLetterOrDigit(c) ? c : '_'));
+                var groups = ds.MetadataValues(m.GroupColumn);
+                var included = Enumerable.Range(0, groups.Length)
+                    .Where(s => !string.IsNullOrEmpty(groups[s])).ToList();
+                var rows = m.Result.MarkerFeatureIds
+                    .Select((id, i) => (id, m.Result.MarkerLabels[i]));
+                WriteValuesMatrix(Path.Combine(quantDir, $"markers_{safe}_values.csv"),
+                    ds, rowOf, rows, included);
+            }
     }
 
     /// <summary>

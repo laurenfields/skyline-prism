@@ -615,6 +615,10 @@ list. Enrichment needs network access; a view with nothing to show (no network, 
 trend design with no two-group detection) is omitted with a note rather than failing the report. The
 report opens in your browser when it finishes.
 
+The report's detection section is the **unpaired Fisher exact test** whatever the design; unlike this
+pane's Detection view it does not yet switch to McNemar for a paired design or to the Firth GLM when
+covariates are ticked, and the section says so whenever the contrast is one where the two differ.
+
 ### Attaching a clinical CSV
 
 The **Clinical CSV** input at the top of the window (beside the metadata report) joins an external

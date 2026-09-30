@@ -72,6 +72,10 @@ public partial class MainWindow
         string contrastLabel;
         double[]? trendX = null;
         List<int> aCols = new(), bCols = new();
+        // What differential.csv's header records - the same column and labels `prism differential`
+        // writes for this contrast - and the columns the raw-value matrix covers.
+        string csvGroupBy, csvA, csvB;
+        List<int>? valueColumns;
         if (isTrend)
         {
             if (DiffTrendColumn() is not { } tcol || DiffTrendValues() is not { } xv)
@@ -83,6 +87,12 @@ public partial class MainWindow
             trendX = xv;
             contrast = new QuantContrast(null, null, null, tcol);
             contrastLabel = $"trend over {tcol}";
+            csvGroupBy = tcol;
+            (csvA, csvB) = DifferentialCsv.TrendEndpoints(xv);
+            // No arms, and the fitted sample subset is not recoverable from the result (a non-finite
+            // x or a within-subject singleton can be dropped), so a per-sample matrix would list
+            // samples that were not in the fit - omitted rather than overclaimed.
+            valueColumns = null;
         }
         else
         {
@@ -94,6 +104,13 @@ public partial class MainWindow
 
             contrast = new QuantContrast(col, aVal, bVal, null);
             contrastLabel = $"{bVal} vs {aVal} by {col}";
+            csvGroupBy = col;
+            csvA = aVal;
+            csvB = bVal;
+            // The columns the contrast actually ran over: under a paired design the matched subset,
+            // not everything ticked, so the raw values carry no subject that took no part in the test.
+            var (usedA, usedB) = ContrastColumns(aCols, bCols);
+            valueColumns = usedA.Concat(usedB).ToList();
         }
 
         var markerColumn = MarkersGroupByCombo.SelectedItem as string ?? contrast.GroupBy;
@@ -113,7 +130,8 @@ public partial class MainWindow
             var (html, detMatrix, note) = await Task.Run(() => Build(
                 dir!, ds, level, rule, corrected, effectName, isTrend, options, designName, testName,
                 correctionName, contrast, contrastLabel, aCols, bCols, trendX, markerColumn, markerPanels,
-                wantEnrichment, poster, geneById, labelById, cachedDetection));
+                wantEnrichment, poster, geneById, labelById, cachedDetection,
+                csvGroupBy, csvA, csvB, valueColumns));
 
             // Cache the detection matrix so a later Detection-pane run on the same folder reuses it.
             if (detMatrix is not null)
@@ -145,9 +163,12 @@ public partial class MainWindow
         string correctionName, QuantContrast contrast, string contrastLabel, List<int> aCols,
         List<int> bCols, double[]? trendX, string? markerColumn, IReadOnlyList<Core.Qc.ProteinList> markerPanels,
         bool wantEnrichment, HttpJsonPoster poster, Dictionary<string, string> geneById,
-        Dictionary<string, string> labelById, DetectionMatrixData? cachedDetection)
+        Dictionary<string, string> labelById, DetectionMatrixData? cachedDetection,
+        string csvGroupBy, string csvA, string csvB, List<int>? valueColumns)
     {
         var notes = new List<string>();
+        if (valueColumns is null)
+            notes.Add(" No differential_values.csv: a trend does not record which samples entered the fit.");
 
         var res = isTrend
             ? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds,
@@ -227,16 +248,15 @@ public partial class MainWindow
             Contrast = contrastLabel,
             EffectName = effectName,
             LabelFor = id => labelById.GetValueOrDefault(id, id),
+            Options = options,
+            GroupBy = csvGroupBy,
+            ALabel = csvA,
+            BLabel = csvB,
             Detection = detection,
             Enrichment = enrichment,
             Markers = markers,
             Dataset = ds,
-            // Raw per-sample values are written for a two-group contrast, where the columns ARE the two
-            // arms. A trend has no arms and its fitted sample subset is not recoverable from the result
-            // (some samples can be dropped for a non-finite x or a within-subject singleton), so a
-            // per-sample matrix here would list samples that were not in the fit - omitted rather than
-            // overclaimed. differential.csv (per feature) is still written for a trend.
-            ContrastColumns = isTrend ? null : aCols.Concat(bCols).ToList(),
+            ContrastColumns = valueColumns,
         };
 
         var html = QuantReport.Write(dir, quant, inputs);

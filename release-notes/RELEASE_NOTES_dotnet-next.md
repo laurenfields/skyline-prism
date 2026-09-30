@@ -42,8 +42,12 @@ as the GitHub Release description and fails if it is missing.
   its Analysis Information header (read from the run's `parameters.json`). It records the analysis
   parameters as a table and re-runnable YAML, then renders a section per view with embedded plots:
   differential abundance (volcano + ranked hits), peptide detection frequency, g:Profiler enrichment,
-  and each ticked Markers-pane panel (heatmap + panel-score boxplot). Alongside the HTML it writes the
-  result tables as CSVs - `differential.csv`, `detection.csv`, `enrichment_terms.csv` (full gene lists),
+  and each ticked Markers-pane panel (heatmap + panel-score boxplot). The detection section is the
+  unpaired Fisher exact test whatever the design - it does not yet follow the Detection pane's McNemar
+  (paired) or Firth-GLM (covariates) paths, and says so on any contrast where the two differ.
+  Alongside the HTML it writes the
+  result tables as CSVs - `differential.csv` (the same file, from the same code, as
+  `prism differential` writes), `detection.csv`, `enrichment_terms.csv` (full gene lists),
   and `markers_<panel>_zscores.csv` - plus the **raw per-sample abundances in LINEAR scale**
   (`differential_values.csv`, `markers_<panel>_values.csv`), so the export stands on its own for
   reanalysis rather than carrying only fold changes and z-scores. Long tables are capped to a preview in

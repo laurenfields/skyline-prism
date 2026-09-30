@@ -212,12 +212,16 @@ The report contains:
 - the analysis parameters, as a table and as re-runnable YAML (also written to
   `quant_parameters.yaml` / `.json`);
 - **differential abundance** - the volcano and a ranked hit table;
-- **detection frequency** - the peptide on/off test, for a two-group contrast;
+- **detection frequency** - the peptide on/off test, for a two-group contrast. This is the
+  unpaired Fisher exact test whatever the design: the Detection pane runs McNemar's exact test for a
+  paired design and the Firth-penalized GLM when covariates are set, and the report does not yet
+  follow either, which the section says whenever the contrast is one where the two differ;
 - **functional enrichment** - the g:Profiler bars, when the network is reachable and there are
   significant genes;
 - **marker panels** - a heatmap and panel-score boxplot for each panel ticked in the Markers pane.
 
-Beside the HTML it writes the result tables as CSVs (`differential.csv`, `detection.csv`,
+Beside the HTML it writes the result tables as CSVs (`differential.csv` - the same file, from the
+same code, as `prism differential` writes - `detection.csv`,
 `enrichment_terms.csv` with full gene lists, `markers_<panel>_zscores.csv`), and the **raw per-sample
 abundances in LINEAR scale** (`differential_values.csv`, `markers_<panel>_values.csv`, values are
 `2^log2`, matching `corrected_*.parquet`) so the export stands on its own for reanalysis. Long tables

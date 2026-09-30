@@ -21,6 +21,10 @@ public class QuantReportTests
 {
     private static string MiniOutput => Fixtures.Path2("mini", "e2e-sum", "output");
 
+    // One options object for the run AND the report inputs, as the pane and the CLI both pass the
+    // options the contrast actually ran under.
+    private static readonly DifferentialOptions Options = new() { Prior = VariancePrior.Global };
+
     private static (DifferentialDataset Ds, DifferentialResult Res, List<int> Cols) RunContrast()
     {
         var ds = DifferentialDataset.Load(MiniOutput, FeatureLevel.Protein);
@@ -30,7 +34,7 @@ public class QuantReportTests
         var half = experimental.Count / 2;
         var groupA = experimental.Take(half).ToList();
         var groupB = experimental.Skip(half).ToList();
-        var res = Differential.Run(ds.ExprLog2, ds.FeatureIds, groupA, groupB);
+        var res = Differential.Run(ds.ExprLog2, ds.FeatureIds, groupA, groupB, Options);
         return (ds, res, groupA.Concat(groupB).ToList());
     }
 
@@ -51,7 +55,7 @@ public class QuantReportTests
         MarkerPanels: Array.Empty<string>());
 
     private static QuantReportInputs InputsFor(DifferentialDataset ds, DifferentialResult res,
-        List<int> cols, SignificanceRule rule) => new()
+        List<int>? cols, SignificanceRule rule) => new()
     {
         Differential = res,
         Rule = rule,
@@ -59,6 +63,10 @@ public class QuantReportTests
         Contrast = "experimental split A vs B",
         EffectName = "log2FC",
         LabelFor = id => id,
+        Options = Options,
+        GroupBy = "sample_type",
+        ALabel = "first half",
+        BLabel = "second half",
         Dataset = ds,
         ContrastColumns = cols,
     };
@@ -82,10 +90,14 @@ public class QuantReportTests
             Assert.True(File.Exists(Path.Combine(quant, "differential.csv")));
             Assert.True(File.Exists(Path.Combine(quant, "differential_values.csv")));
 
-            // differential.csv: one header + one row per tested feature.
+            // differential.csv is `prism differential`'s file: four provenance lines, the column header,
+            // then one row per tested feature.
             var diffLines = File.ReadAllLines(Path.Combine(quant, "differential.csv"));
-            Assert.Equal(res.Rows.Count + 1, diffLines.Length);
-            Assert.StartsWith("feature_id,label,", diffLines[0]);
+            Assert.Equal(res.Rows.Count + 5, diffLines.Length);
+            Assert.StartsWith("# contrast: sample_type = second half vs first half", diffLines[0]);
+            Assert.StartsWith("# method:", diffLines[1]);
+            Assert.Equal("feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
+                + "p_value,adj_p_value,mean_a,mean_b", diffLines[4]);
 
             // The HTML is self-contained: title, contrast, parameters block, and an embedded volcano PNG.
             var html = File.ReadAllText(htmlPath);
@@ -176,6 +188,10 @@ public class QuantReportTests
             Contrast = "experimental split A vs B",
             EffectName = "log2FC",
             LabelFor = id => id,
+            Options = Options,
+            GroupBy = "sample_type",
+            ALabel = "first half",
+            BLabel = "second half",
             Detection = detection,
             Enrichment = enrichment,
             Markers = markers,
@@ -208,9 +224,84 @@ public class QuantReportTests
 
             var html = File.ReadAllText(htmlPath);
             Assert.Contains("Detection frequency", html);
+            Assert.Contains("Fisher exact", html);
+            // Unpaired and unadjusted: the pane runs the same Fisher test, so no divergence caveat.
+            Assert.DoesNotContain("does not yet follow", html);
             Assert.Contains("Functional enrichment", html);
             Assert.Contains("Marker panels", html);
             Assert.Contains("Test panel", html);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The report's differential.csv must be the file `prism differential` writes, not a lookalike:
+    /// there were two writers once, and the report's dropped the provenance header and the annotation
+    /// columns while the docs called the two the same file.
+    /// </summary>
+    [Fact]
+    public void Write_DifferentialCsv_IsByteIdenticalToTheSharedWriter()
+    {
+        var (ds, res, cols) = RunContrast();
+        var dir = Path.Combine(Path.GetTempPath(), $"prism-quant-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var inputs = InputsFor(ds, res, cols, SignificanceRule.Default);
+            QuantReport.Write(dir, ConfigFor(res), inputs);
+
+            var direct = Path.Combine(dir, "direct.csv");
+            DifferentialCsv.Write(direct, res, ds, Options, SignificanceRule.Default,
+                inputs.GroupBy, inputs.ALabel, inputs.BLabel, inputs.EffectName);
+
+            Assert.Equal(File.ReadAllBytes(direct),
+                File.ReadAllBytes(Path.Combine(dir, "quant", "differential.csv")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DetectionDivergence_OnlyWhenThePaneWouldRunADifferentTest()
+    {
+        // Unpaired and unadjusted: pane and report both run Fisher.
+        Assert.Null(QuantReport.DetectionDivergence(new DifferentialOptions()));
+
+        var paired = QuantReport.DetectionDivergence(new DifferentialOptions { Design = DifferentialDesign.Paired });
+        Assert.NotNull(paired);
+        Assert.Contains("McNemar", paired);
+
+        // Covariates win over pairing, as they do in the pane (the Firth GLM is unpaired).
+        var age = Covariate.FromMetadata("age", new string?[] { "40", "55", "61", "70" });
+        var adjusted = QuantReport.DetectionDivergence(new DifferentialOptions
+        {
+            Design = DifferentialDesign.Paired,
+            Covariates = new[] { age },
+        });
+        Assert.NotNull(adjusted);
+        Assert.Contains("Firth", adjusted);
+        Assert.Contains("age", adjusted);
+        Assert.DoesNotContain("McNemar", adjusted);
+    }
+
+    [Fact]
+    public void Write_NoContrastColumns_NamesTheMissingValuesFile()
+    {
+        var (ds, res, _) = RunContrast();
+        var dir = Path.Combine(Path.GetTempPath(), $"prism-quant-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var html = File.ReadAllText(QuantReport.Write(dir, ConfigFor(res),
+                InputsFor(ds, res, cols: null, SignificanceRule.Default)));
+
+            Assert.False(File.Exists(Path.Combine(dir, "quant", "differential_values.csv")));
+            Assert.Contains("No <code>differential_values.csv</code>", html);
         }
         finally
         {
