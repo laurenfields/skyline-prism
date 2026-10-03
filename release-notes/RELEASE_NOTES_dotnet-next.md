@@ -16,7 +16,11 @@ as the GitHub Release description and fails if it is missing.
   symbols at both feature levels, reading `leading_gene_name` rather than the display label (a
   peptide's label is its modified sequence, which is not a gene symbol). The statistics live in
   `SkylinePrism.Core.DifferentialAnalysis` and are validated to 1e-9 against the reference
-  implementation.
+  implementation. **Enrichment is the one part of PRISM that sends data off the machine**: opening it
+  POSTs gene symbols - the significant hits *and* the full tested-gene background - to `biit.cs.ut.ee`
+  and, on the disease-association view, to `api.platform.opentargets.org`. No abundances, replicate
+  names or clinical annotations go with them. See `docs/skyline-tool.md` before using it on data under
+  a sharing agreement.
 - **Per-feature boxplots.** Clicking a point on the Volcano plot - or a row in the hit table - opens a
   detail window with that feature's log2 abundance split into a boxplot per contrast group, with jittered
   per-sample points and the log2FC / adj.P in the title. Hovering a point names the replicate it came

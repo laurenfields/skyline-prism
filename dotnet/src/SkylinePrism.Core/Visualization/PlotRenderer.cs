@@ -893,7 +893,12 @@ public static partial class PlotRenderer
                 {
                     if (double.IsNaN(values[i, j]))
                         continue;
-                    var t = plt.Add.Text(values[i, j].ToString("0.0"), j + 0.5, nRows - 1 - i + 0.5);
+                    // Invariant: a cell label is a number, not prose. On a comma-decimal locale the
+                    // default culture renders "0,5", which reads as a grouped integer to anyone the
+                    // exported figure is sent to.
+                    var t = plt.Add.Text(
+                        values[i, j].ToString("0.0", CultureInfo.InvariantCulture),
+                        j + 0.5, nRows - 1 - i + 0.5);
                     // Set BOTH anchors: the Text plottable positions by Alignment (default MiddleLeft,
                     // which pushes the number right of the cell centre), while LabelAlignment styles the
                     // label box; center both so the value sits in the middle of the cell.

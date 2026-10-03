@@ -137,9 +137,17 @@ public static class SignificanceScan
             {
                 res = Differential.Run(exprLog2FeaturesBySamples, featureIds, ga, gb, minN, covariates);
             }
-            catch (Exception)
+            // A degenerate split is skipped, not fatal - the reference catches `except Exception`, and
+            // the parity that matters is WHICH splits yield a row. Narrowed to what Differential.Run
+            // and its callees actually raise (ArgumentException / InvalidOperationException, plus
+            // ArithmeticException for the linear algebra) so an IndexOutOfRange or NullReference from a
+            // real defect surfaces instead of being counted as a degenerate split - which would scan
+            // fewer splits than asked for and report a plausible number for them. Same narrowing the
+            // Differential pane already applies to this call.
+            catch (Exception e) when (
+                e is ArgumentException or InvalidOperationException or ArithmeticException)
             {
-                continue; // a degenerate split is skipped, not fatal (matches the reference's except Exception)
+                continue;
             }
 
             var nSig = res.Rows.Count(r => r.AdjPValue < qCut && Math.Abs(r.LogFc) >= lfcCut);
@@ -275,9 +283,12 @@ public static class SignificanceScan
                 var res = Differential.Run(exprLog2FeaturesBySamples, featureIds, pa, pb, minN, covariates);
                 null_.Add(res.Rows.Count(r => r.AdjPValue < qCut && Math.Abs(r.LogFc) >= lfcCut));
             }
-            catch (Exception)
+            // Skip a degenerate shuffle, as the reference does, but narrowed for the reason given on
+            // the scan loop above: a permutation null built from fewer draws than requested is exactly
+            // the kind of plausible wrong number a blanket catch hides.
+            catch (Exception e) when (
+                e is ArgumentException or InvalidOperationException or ArithmeticException)
             {
-                // skip a degenerate shuffle, as the reference does (except Exception)
             }
         }
 

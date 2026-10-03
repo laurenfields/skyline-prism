@@ -573,7 +573,17 @@ contrast:
   design falls back to the unpaired GLM, because adjusting a paired binary outcome needs conditional
   logistic regression, which is not implemented; the status line says so rather than letting it pass.
 - **Enrichment** — g:Profiler functional enrichment of the significant hits against the tested
-  background (needs network access).
+  background.
+
+  > [!IMPORTANT]
+  > **This sends data off the machine, to a third party.** Running it POSTs gene symbols to
+  > `biit.cs.ut.ee` (g:Profiler) and, on the disease-association view, to
+  > `api.platform.opentargets.org` — and not only the significant hits: the enrichment *background*
+  > is every gene quantified in the run, so the full tested gene list is submitted with each query.
+  > Nothing else about the samples goes with it — no abundances, no replicate names, no clinical
+  > annotations — but the gene list itself describes the experiment. Nothing is sent until the view
+  > is opened; no other part of PRISM makes a network request. If your data is under an agreement
+  > that restricts sending derived data to third parties, do not use this view.
 
 > [!NOTE]
 > **The sample PCA is in the QC Plots pane, not here.** There were briefly two - this pane had its own

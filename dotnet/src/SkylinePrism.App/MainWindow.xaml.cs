@@ -1415,6 +1415,10 @@ public partial class MainWindow : Window
             _runCancellation?.Cancel();
         }
         SetRangeFollowActive(false); // stop polling Skyline's selection
+        // The enrichment poster owns its HttpClient (HttpJsonPoster sets _ownsClient when it builds
+        // one), and it is created lazily on the first query, so it may never have existed.
+        _diffPoster?.Dispose();
+        _diffPoster = null;
         base.OnClosing(e);
     }
 

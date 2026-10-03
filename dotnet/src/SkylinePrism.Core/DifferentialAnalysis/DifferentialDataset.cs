@@ -390,6 +390,18 @@ public sealed class DifferentialDataset
             throw new InvalidOperationException(
                 "No sample columns in the matrix matched sample_metadata.csv sample ids " +
                 "(neither the full sample_id nor the bare replicate name before '__@__').");
+
+        // A metadata row with no column means the two files describe different cohorts. Refuse rather
+        // than analyze whichever samples happened to line up: the result would be a contrast over a
+        // silently chosen subset, and nothing in the output would say which samples were in it.
+        var unmatched = UnmatchedMetadata(sampleIdToRow, alignment);
+        if (unmatched.Count > 0)
+            throw new InvalidOperationException(
+                $"{unmatched.Count} of {sampleIdToRow.Count} replicates in sample_metadata.csv have no "
+                + $"column in {matrixName} ({NamePreview.Of(unmatched, show: 3)}). The two files "
+                + "describe different sample sets, so a contrast would silently run on only the "
+                + $"{alignment.Count} that matched. Re-run the pipeline so the matrix and the metadata "
+                + "come from the same run.");
         var sampleCols = alignment.Select(a => a.Col).ToArray();
         var alignedMeta = alignment.Select(a => a.Meta).ToArray();
         var matched = new HashSet<string>(sampleCols, StringComparer.Ordinal);
@@ -452,26 +464,55 @@ public sealed class DifferentialDataset
     }
 
     /// <summary>
-    /// Align the matrix's sample columns to the metadata rows. Exact <c>sample_id</c> match is
-    /// preferred; if it matches nothing, fall back to the bare replicate name (the part before the
-    /// <c>__@__</c> document separator), which equals the metadata <c>sample</c> value. The fallback
-    /// exists because some PRISM runs wrote the corrected matrix with one document/batch stem
+    /// Align the matrix's sample columns to the metadata rows. Each column is resolved on its own:
+    /// an exact <c>sample_id</c> match first, then the bare replicate name (the part before the
+    /// <c>__@__</c> document separator), which equals the metadata <c>sample</c> value. The bare-name
+    /// fallback exists because some PRISM runs wrote the corrected matrix with one document/batch stem
     /// (e.g. <c>...__@__PRISM</c>) but <c>sample_metadata.csv</c> with another (e.g.
     /// <c>...__@__merged_data</c>); the bare replicate name is identical in both. A bare name matched
-    /// to more than one metadata row is ambiguous and skipped. Returned columns keep the matrix's
-    /// column names (they index the matrix), each paired with its resolved metadata row.
+    /// to more than one metadata row is ambiguous and skipped, and a row already taken by an exact
+    /// match is never handed to a second column. Returned columns keep the matrix's column names
+    /// (they index the matrix), each paired with its resolved metadata row.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Per column, not per file.</b> This used to choose between the two strategies globally -
+    /// return the exact matches if there were ANY, otherwise try bare names - which meant a PARTIAL
+    /// exact match silently discarded the rest. The leftovers did not merely drop out of the analysis:
+    /// they fell through to <c>annotCols</c> and were treated as feature-annotation columns, so a
+    /// 96-sample contrast could quietly run on 90. Nothing reported it, because the only guard was
+    /// <c>alignment.Count == 0</c>. The stage cache makes the mismatch reachable - it reuses a stage
+    /// whose declared keys are unchanged, so a matrix can carry an older run's sample ids beside a
+    /// freshly written <c>sample_metadata.csv</c>.</para>
+    /// <para>Resolving each column independently removes the failure rather than reporting it: the
+    /// columns that match exactly do, and the stragglers get the fallback that was put there for them.
+    /// <see cref="UnmatchedMetadata"/> then states what is left over, and the caller refuses.</para>
+    /// </remarks>
     internal static List<(string Col, string?[] Meta)> AlignSampleColumns(
         IReadOnlyList<string> parquetCols,
         IReadOnlyDictionary<string, string?[]> sampleIdToRow,
         IReadOnlyList<string> metaColumns)
     {
-        var exact = new List<(string, string?[])>();
+        var result = new List<(string, string?[])>();
+        // Reference equality: two metadata rows may be identical field for field (a duplicated
+        // replicate in the CSV) and are still two rows, so they must be tracked as two objects.
+        var claimed = new HashSet<string?[]>(ReferenceEqualityComparer.Instance);
+        var pending = new List<string>();
+
         foreach (var c in parquetCols)
+        {
             if (sampleIdToRow.TryGetValue(c, out var row))
-                exact.Add((c, row));
-        if (exact.Count > 0)
-            return exact;
+            {
+                result.Add((c, row));
+                claimed.Add(row);
+            }
+            else
+            {
+                pending.Add(c);
+            }
+        }
+
+        if (pending.Count == 0)
+            return result;
 
         // Fallback: match on the bare replicate name (before "__@__"), requiring it to be unique.
         var sampleIdx = -1;
@@ -497,12 +538,48 @@ public sealed class DifferentialDataset
             lst.Add(kv.Value);
         }
 
-        var result = new List<(string, string?[])>();
-        foreach (var c in parquetCols)
-            if (bareToRows.TryGetValue(StripDocSuffix(c), out var lst) && lst.Count == 1)
-                result.Add((c, lst[0]));
+        foreach (var c in pending)
+        {
+            if (!bareToRows.TryGetValue(StripDocSuffix(c), out var lst) || lst.Count != 1)
+                continue;
+            // A row an exact match already took is not available: handing it to a second column would
+            // give two different samples one sample's type, batch and subject, which is worse than
+            // leaving the column out - that at least gets reported.
+            if (!claimed.Add(lst[0]))
+                continue;
+            result.Add((c, lst[0]));
+        }
 
         return result;
+    }
+
+    /// <summary>
+    /// The <c>sample_id</c>s in <paramref name="sampleIdToRow"/> that no column of
+    /// <paramref name="alignment"/> resolved to, in metadata order.
+    /// </summary>
+    /// <remarks>
+    /// Every row of <c>sample_metadata.csv</c> is a replicate that must have a column: the pipeline
+    /// writes that file from the same sample list it writes the matrix from, AFTER outlier exclusion
+    /// has already shortened it (<c>PrismPipeline</c> Stage 2a reassigns <c>samples</c>, and Stage 5
+    /// writes both from it). So a leftover row is never a legitimate "this one was excluded" - it means
+    /// the two files describe different cohorts, and any contrast run across them would be over a
+    /// silently chosen subset. Leftover COLUMNS are not an error by contrast: the matrix carries
+    /// feature-annotation columns (protein_group, leading_gene_name, n_peptides) that match no sample
+    /// by construction.
+    /// </remarks>
+    internal static List<string> UnmatchedMetadata(
+        IReadOnlyDictionary<string, string?[]> sampleIdToRow,
+        IReadOnlyList<(string Col, string?[] Meta)> alignment)
+    {
+        var claimed = new HashSet<string?[]>(ReferenceEqualityComparer.Instance);
+        foreach (var (_, meta) in alignment)
+            claimed.Add(meta);
+
+        var missing = new List<string>();
+        foreach (var kv in sampleIdToRow)
+            if (!claimed.Contains(kv.Value))
+                missing.Add(kv.Key);
+        return missing;
     }
 
     /// <summary>The replicate name before the <c>__@__</c> document separator (or the whole string).</summary>
