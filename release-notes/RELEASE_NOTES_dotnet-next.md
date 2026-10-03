@@ -206,6 +206,23 @@ as the GitHub Release description and fails if it is missing.
 
 ## Bug Fixes
 
+- **`quant_parameters.yaml` now round-trips every value.** The file is offered as a re-runnable record
+  of a quantification analysis, but plain scalars were emitted unquoted whenever they held no special
+  character - so a contrast on a case/control column spelled `0` and `1` wrote `group_a: 0`, which
+  reads back as an integer rather than the string, and values spelled `no`, `yes`, `on` or `null` read
+  back as booleans and nulls. Quoted values were escaped for the double quote only, while a YAML
+  double-quoted scalar also treats the backslash as an escape introducer, so a panel or covariate
+  holding `\run` came back carrying a carriage return and one holding a newline broke the document.
+- **Two marker panels whose names differ only in punctuation no longer overwrite each other's CSVs.**
+  The filename keeps letters and digits only, so a user panel named `EV-markers` resolved to the same
+  file as the shipped `EV markers`; the second write truncated the first, leaving one panel's export
+  holding another panel's numbers while the report linked each section to it. Repeated stems now take
+  a numeric suffix, and a panel's `_zscores` and `_values` files are guaranteed to share one.
+- **A slow enrichment query is reported as slow, not as a missing network.** Asking g:Profiler for
+  per-gene evidence (what lets a term name its member proteins) makes the response much larger, and the
+  request timeout was still the 30 seconds chosen for the smaller one; a proteome-scale query could
+  exceed it and report "needs internet access", pointing at the wrong thing. The timeout is now two
+  minutes, and a timeout says so, with the gene and background counts that caused it.
 - **The QC Plots pane now loads when you open it, not only after a run.** Pointing the tool at an
   existing output directory and clicking QC Plots left the Group-by list empty and no plot drawn;
   the pane only ever filled at the end of a `prism run`. Every other pane loads itself on

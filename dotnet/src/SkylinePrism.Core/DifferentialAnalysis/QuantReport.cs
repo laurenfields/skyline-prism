@@ -274,11 +274,17 @@ public static class QuantReport
                         Csv(string.Join(";", t.IntersectingGenes))));
             }
 
+        // One stem per panel, computed ONCE for both exports below: a panel's _zscores and _values
+        // files have to share a stem, and deriving them from two copies of the same expression let
+        // them drift apart.
+        var panelStems = PanelFileStems(inputs.Markers);
+
         if (inputs.Markers is { Count: > 0 } markers)
-            foreach (var m in markers)
+            for (var k = 0; k < markers.Count; k++)
             {
-                var safe = string.Concat(m.PanelName.Select(c => char.IsLetterOrDigit(c) ? c : '_'));
-                using var w = new StreamWriter(Path.Combine(quantDir, $"markers_{safe}_zscores.csv"));
+                var m = markers[k];
+                using var w = new StreamWriter(
+                    Path.Combine(quantDir, $"markers_{panelStems[k]}_zscores.csv"));
                 w.WriteLine("marker," + string.Join(",", m.Result.ColumnLabels.Select(Csv)));
                 for (var i = 0; i < m.Result.MarkerLabels.Length; i++)
                 {
@@ -301,17 +307,53 @@ public static class QuantReport
                 ds, rowOf, inputs.Differential.Rows.Select(r => (r.FeatureId, inputs.LabelFor(r.FeatureId))), cols);
 
         if (inputs.Markers is { Count: > 0 } ms)
-            foreach (var m in ms)
+            for (var k = 0; k < ms.Count; k++)
             {
-                var safe = string.Concat(m.PanelName.Select(c => char.IsLetterOrDigit(c) ? c : '_'));
+                var m = ms[k];
                 var groups = ds.MetadataValues(m.GroupColumn);
                 var included = Enumerable.Range(0, groups.Length)
                     .Where(s => !string.IsNullOrEmpty(groups[s])).ToList();
                 var rows = m.Result.MarkerFeatureIds
                     .Select((id, i) => (id, m.Result.MarkerLabels[i]));
-                WriteValuesMatrix(Path.Combine(quantDir, $"markers_{safe}_values.csv"),
+                WriteValuesMatrix(Path.Combine(quantDir, $"markers_{panelStems[k]}_values.csv"),
                     ds, rowOf, rows, included);
             }
+    }
+
+    /// <summary>
+    /// One filename stem per panel, index-aligned with <paramref name="markers"/> and unique across
+    /// them.
+    /// </summary>
+    /// <remarks>
+    /// Panel names are free text and the stem keeps only letters and digits, so "EV markers" and
+    /// "EV-markers" both reduce to <c>EV_markers</c>. Writing both would not fail - StreamWriter
+    /// truncates - so one panel's export would silently become a copy of the other's while the report
+    /// linked each section to it. A repeated stem therefore gets a numeric suffix, and the suffixed
+    /// form is itself registered, so a panel literally named "EV markers 2" cannot collide with the
+    /// disambiguation of another. Compared case-insensitively because Windows paths are.
+    /// </remarks>
+    private static string[] PanelFileStems(IReadOnlyList<MarkerReportSection>? markers)
+    {
+        if (markers is null)
+            return Array.Empty<string>();
+
+        var stems = new string[markers.Count];
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < markers.Count; i++)
+        {
+            var base_ = string.Concat(
+                markers[i].PanelName.Select(c => char.IsLetterOrDigit(c) ? c : '_'));
+            if (base_.Length == 0)
+                base_ = "panel"; // a panel named only in punctuation still needs a file
+
+            var candidate = base_;
+            var n = 2;
+            while (!used.Add(candidate))
+                candidate = base_ + "_" + n++.ToString(Inv);
+            stems[i] = candidate;
+        }
+
+        return stems;
     }
 
     /// <summary>

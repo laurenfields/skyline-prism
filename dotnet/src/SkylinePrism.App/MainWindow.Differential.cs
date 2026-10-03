@@ -1637,6 +1637,18 @@ public partial class MainWindow
             if (!StillCurrent(request))
                 return;
         }
+        // A timeout is named apart from a connectivity failure. HttpClient surfaces its own timeout as
+        // a cancellation, so the blanket message sent someone to check their network when the request
+        // had in fact been answered too slowly - and with per-gene evidence in the response, a
+        // proteome-scale query is exactly the one that takes longest.
+        catch (TaskCanceledException)
+        {
+            DiffStatusText.Text =
+                $"Enrichment timed out after {HttpJsonPoster.DefaultTimeout.TotalSeconds:0}s with "
+                + $"{sig.Count} genes against a background of {background.Count}. The server is "
+                + "reachable but slow - try a stricter hit rule to send fewer genes.";
+            return;
+        }
         catch (Exception ex)
         {
             DiffStatusText.Text = "Enrichment request failed (needs internet access): " + ex.Message;
