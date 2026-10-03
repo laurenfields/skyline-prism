@@ -28,7 +28,10 @@ public class ReplicateMetadataTests
 
             Assert.Equal("reference", md!.TypeByReplicate["Pool_A"]);
             Assert.Equal("qc", md.TypeByReplicate["Carl_A"]);
-            Assert.Equal("experimental", md.TypeByReplicate["Study_01"]);
+            // "Unknown" is Skyline's default for an unclassified replicate, so it records NO
+            // annotation and the caller's name patterns still get their turn. MapSampleType maps the
+            // value itself to "experimental" either way - see MapSampleType_MatchesPython.
+            Assert.False(md.TypeByReplicate.ContainsKey("Study_01"));
 
             Assert.Equal("B1", md.BatchByReplicate["Pool_A"]);
             Assert.Equal("B2", md.BatchByReplicate["Study_01"]);

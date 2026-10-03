@@ -51,7 +51,9 @@ public class ReplicateAnnotationPassthroughTests
             // ReplicateMetadata keeps the raw value; it is sample_metadata.csv that does not write a
             // second column for it (see WriteSampleMetadata - "SampleType" restates "sample_type").
             Assert.Equal("Unknown", values["SampleType"]);
-            Assert.Equal("experimental", md.TypeFor("FLARE-001-1__@__plate1", "FLARE-001-1"));
+            // The RAW value is carried (asserted above), but "Unknown" is not an annotation: it
+            // records no type, so the pipeline's name patterns still get their turn on this replicate.
+            Assert.Null(md.TypeFor("FLARE-001-1__@__plate1", "FLARE-001-1"));
             Assert.Equal("reference", md.TypeFor("Pool-01__@__plate1", "Pool-01"));
         }
         finally

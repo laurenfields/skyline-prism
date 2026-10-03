@@ -219,6 +219,22 @@ as the GitHub Release description and fails if it is missing.
   both under the label "-log10 P". They now go through the same `SignificanceRule` as the Volcano:
   the axis, the threshold guide line and the point coloring all use whichever p the Hits control
   selects (adjusted by default, raw on request), and the axis is labeled to match.
+- **Reference and QC replicates are no longer reported as `experimental` when the document carries its
+  own "Sample Type" annotation.** A replicate annotation may be called "Sample Type" - in clinical work
+  it very often is, meaning serum vs plasma - and the exported Replicates report then holds two columns
+  that both look like the sample type: Skyline's built-in `SampleType` and the annotation. PRISM bound
+  to whichever matched its name list first, and on a 96-replicate serum cohort that was the annotation
+  (`Serum` x94, `Plasma` x2). Neither is a Skyline sample type, so all 96 replicates mapped to
+  `experimental`, losing 6 references and 6 QCs - which left ComBat without anchors and the QC report
+  without controls. Nothing was logged, because a column *had* been found and every value *had* been
+  mapped. PRISM now prefers the column whose values are actually Skyline sample types, and logs which
+  column it used and which it ignored. `metadata.sample_type_column` still overrides detection outright.
+- **`sample_annotations.reference_pattern` / `qc_pattern` now work on documents that carry a Sample Type
+  column.** Skyline's Replicates grid always offers the column and defaults every replicate to
+  `Unknown`; PRISM recorded that default as an annotation of `experimental`, which is non-null, so the
+  name patterns it was documented to fall through to were unreachable for exactly the unannotated
+  documents they exist to serve. An unset cell (empty, `Unknown` or `#N/A`) now records no annotation,
+  matching how the batch column has always treated an empty cell.
 
 ## Performance
 
