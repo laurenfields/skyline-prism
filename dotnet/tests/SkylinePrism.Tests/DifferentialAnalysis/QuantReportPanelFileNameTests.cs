@@ -74,8 +74,8 @@ public class QuantReportPanelFileNameTests
 
         var config = new QuantConfig(
             Level: "protein",
-            Contrast: new QuantContrast("sample_type", "A", "B", null),
-            Design: "TwoGroup", Test: "ModeratedT", Prior: res.VariancePrior, Correction: "BH",
+            Contrast: new QuantContrast("sample_type", new[] { "A" }, new[] { "B" }, null),
+            Design: "TwoGroup", Test: "ModeratedT", Prior: res.VariancePrior, PriorUsed: res.VariancePrior, Correction: "BH",
             Covariates: res.CovariatesUsed, HitRule: "adj.P < 0.05",
             DetectionEnabled: false, DetectionQ: 0.01,
             EnrichmentEnabled: false, EnrichmentSources: Array.Empty<string>(),

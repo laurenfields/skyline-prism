@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using SkylinePrism.Core.Config;
 using SkylinePrism.Core.DifferentialAnalysis;
+using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
@@ -204,8 +205,14 @@ public static class Program
     /// </remarks>
     private static int CmdDifferential(string[] args)
     {
-        var opts = ParseOptions(args, multiValue: new HashSet<string> { "-a", "--group-a", "-b", "--group-b", "--adjust-for" });
+        var opts = ParseOptions(args,
+            multiValue: new HashSet<string>
+                { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers", "--clinical" });
         var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
+        RefuseReportFlagsWithoutReport(opts);
+        // Resolved before anything runs, so a mistyped panel name refuses the command rather than
+        // failing after differential.csv has already been written.
+        var markerPanels = ResolveMarkerPanels(opts.GetList("--markers"));
         var groupBy = opts.GetSingleOrNull("-g", "--group-by");
         // Both spellings on both arms: a level with a space in it is one -a argument, several levels
         // are several, and a comma-separated list is what a reader reaches for first.
@@ -230,8 +237,12 @@ public static class Program
         };
 
         var dataset = DifferentialDataset.Load(dir, level);
+        // Before anything validates a column name, so --group-by, --adjust-for and the rest can name
+        // a clinical column, as they can in the pane once a clinical CSV is attached there.
+        AttachClinicalFrom(opts, dataset);
+        RefuseUngroupableMarkers(opts, dataset, markerPanels, trendRequested);
         if (trendRequested)
-            return RunDifferentialTrend(opts, dataset, level, dir);
+            return RunDifferentialTrend(opts, dataset, level, dir, markerPanels);
         if (!dataset.MetadataColumns.Contains(groupBy!))
             throw new ArgumentException(
                 $"No metadata column '{groupBy}'. Available: {string.Join(", ", dataset.MetadataColumns)}");
@@ -272,7 +283,135 @@ public static class Program
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
         DifferentialCsv.Write(outPath, result, dataset, options, rule, groupBy!, aLabel, bLabel);
         Console.WriteLine($"Results written to: {outPath}");
+
+        if (opts.GetSingleOrNull("--report") is not null)
+            WriteQuantReport(opts, dataset, dir, options, rule, result, groupBy, arms.A, arms.B,
+                aLevels, bLevels, markerPanels);
         return 0;
+    }
+
+    /// <summary>
+    /// <c>--report</c>: the quant report the pane's Quant report button writes, for this contrast.
+    /// </summary>
+    /// <remarks>
+    /// Runs the SAME <see cref="QuantAnalysis"/> as the button, from the options this command already
+    /// built and the result it already computed (so the contrast is not run twice), and writes
+    /// quant/differential.csv through the same writer - so it is byte-identical to the file just
+    /// written, and a report typed here matches one clicked there. Every view that could not run is
+    /// printed with the reason - a report is never refused for a missing optional view.
+    /// </remarks>
+    private static void WriteQuantReport(ParsedOptions opts, DifferentialDataset dataset, string dir,
+        DifferentialOptions options, SignificanceRule rule, DifferentialResult result, string? groupBy,
+        IReadOnlyList<int> groupA, IReadOnlyList<int> groupB,
+        IReadOnlyList<string> aLevels, IReadOnlyList<string> bLevels, IReadOnlyList<ProteinList> panels)
+    {
+        // Enrichment runs by default, as it does from the button; --no-enrichment is for machines
+        // with no route to g:Profiler, where waiting on the request timeout would be pointless.
+        using var poster = opts.GetSingleOrNull("--no-enrichment") is null ? new HttpJsonPoster() : null;
+
+        var report = QuantAnalysis.Run(new QuantRequest
+        {
+            OutputDir = dir,
+            Dataset = dataset,
+            Options = options,
+            Rule = rule,
+            Differential = result,
+            SubjectColumn = opts.GetSingleOrNull("--subject", "--pair-by"),
+            GroupBy = groupBy,
+            GroupA = groupA,
+            GroupB = groupB,
+            ALevels = aLevels,
+            BLevels = bLevels,
+            MarkerPanels = panels,
+            MarkerGroupBy = opts.GetSingleOrNull("--markers-group-by"),
+            EnrichmentPoster = poster,
+        });
+
+        Console.WriteLine($"Quant report written to: {report.HtmlPath}");
+        foreach (var note in report.Notes)
+            Console.WriteLine($"  {note}");
+    }
+
+    /// <summary>
+    /// The named marker panels, from the same set the Markers pane offers: the user's saved lists
+    /// plus the shipped panels (a shipped one a user list shadows appears with a "(PRISM)" suffix).
+    /// Matched ignoring case; an unknown name is refused with the available ones listed.
+    /// </summary>
+    private static List<ProteinList> ResolveMarkerPanels(IEnumerable<string> raw)
+    {
+        var names = SplitLevels(raw).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (names.Count == 0)
+            return new List<ProteinList>();
+
+        var available = ProteinListSet.Load().WithBuiltIns().Where(l => l.Members.Count > 0).ToList();
+        return names.Select(name =>
+                available.FirstOrDefault(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException(
+                    $"No marker panel '{name}'. Available: {string.Join(", ", available.Select(l => l.Name))}"))
+            .ToList();
+    }
+
+    /// <summary>
+    /// <c>--clinical</c>: join an external clinical table to the samples - the same
+    /// <see cref="DifferentialDataset.AttachClinical"/> the pane's Clinical CSV input runs, so the key
+    /// column is detected the same way and the same columns are added.
+    /// </summary>
+    /// <remarks>
+    /// <para>Refused when nothing matches: the pane can say so and carry on, but a command that named a
+    /// clinical file almost certainly depends on one of its columns, and would otherwise fail later on
+    /// "no metadata column" without saying the join was the cause.</para>
+    /// <para>Repeatable, and joined in the order given - the pane lets a second file be attached on top
+    /// of the first, and a report records both, so the command that regenerates it must take both.</para>
+    /// </remarks>
+    private static void AttachClinicalFrom(ParsedOptions opts, DifferentialDataset dataset)
+    {
+        foreach (var path in opts.GetList("--clinical"))
+        {
+            var joined = dataset.AttachClinical(path);
+            var rate = (joined.MatchRate * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+            if (joined.KeyColumn is null || joined.AddedColumns.Count == 0)
+                throw new ArgumentException(
+                    $"--clinical: no column of {Path.GetFileName(path)} matched the samples (best match {rate}); "
+                    + "the key column needs to hold the replicate names for at least half the samples.");
+            Console.WriteLine($"Clinical CSV: joined {Path.GetFileName(path)} on '{joined.KeyColumn}' "
+                + $"({rate} of samples matched), added {string.Join(", ", joined.AddedColumns)}");
+        }
+    }
+
+    /// <summary>
+    /// Marker panels need a column to group by. An unknown one is refused, as an unknown
+    /// <c>--group-by</c> is; and a trend has no contrast column to fall back to, so it must be named.
+    /// The report itself would only note the omission - the CLI refuses instead, because a typo there
+    /// would otherwise produce a report quietly missing the section the command asked for.
+    /// </summary>
+    private static void RefuseUngroupableMarkers(ParsedOptions opts, DifferentialDataset dataset,
+        IReadOnlyList<ProteinList> panels, bool trend)
+    {
+        var groupBy = opts.GetSingleOrNull("--markers-group-by");
+        if (groupBy is not null && !dataset.MetadataColumns.Contains(groupBy))
+            throw new ArgumentException(
+                $"No metadata column '{groupBy}' to group the marker panels by. "
+                + $"Available: {string.Join(", ", dataset.MetadataColumns)}");
+        if (panels.Count > 0 && trend && groupBy is null)
+            throw new ArgumentException(
+                "--markers under a trend design needs --markers-group-by <column>: a trend has no "
+                + "contrast column to group the panels by.");
+    }
+
+    /// <summary>
+    /// A report-only flag without <c>--report</c> is refused, as <c>--subject</c> is without a paired
+    /// design: silently ignoring it would let a command read as if it produced a marker section it
+    /// never wrote.
+    /// </summary>
+    private static void RefuseReportFlagsWithoutReport(ParsedOptions opts)
+    {
+        if (opts.GetSingleOrNull("--report") is not null)
+            return;
+        if (opts.GetList("--markers").Count > 0)
+            throw new ArgumentException("--markers needs --report.");
+        foreach (var flag in new[] { "--markers-group-by", "--no-enrichment" })
+            if (opts.GetSingleOrNull(flag) is not null)
+                throw new ArgumentException($"{flag} needs --report.");
     }
 
     /// <summary>Whether the flags ask for a trend design.</summary>
@@ -289,17 +428,12 @@ public static class Program
     /// trend result is the same file shape as any other.
     /// </remarks>
     private static int RunDifferentialTrend(
-        ParsedOptions opts, DifferentialDataset dataset, FeatureLevel level, string dir)
+        ParsedOptions opts, DifferentialDataset dataset, FeatureLevel level, string dir,
+        IReadOnlyList<ProteinList> markerPanels)
     {
         var options = DifferentialOptionsFrom(opts, dataset, groupBy: string.Empty);
         var trendOver = options.TrendColumn!;
-        var raw = dataset.MetadataValues(trendOver);
-        var x = new double[raw.Length];
-        for (var i = 0; i < raw.Length; i++)
-            x[i] = raw[i] is { } v
-                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
-                ? d
-                : double.NaN;
+        var x = dataset.NumericValues(trendOver);
 
         var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
         var result = Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, x, options);
@@ -327,7 +461,26 @@ public static class Program
         DifferentialCsv.Write(outPath, result, dataset, options, rule, trendOver,
             aLabel: xLow, bLabel: xHigh, effectName: effectName);
         Console.WriteLine($"Results written to: {outPath}");
+
+        // A trend has no arms; the report takes its column and range from the options and the data.
+        if (opts.GetSingleOrNull("--report") is not null)
+            WriteQuantReport(opts, dataset, dir, options, rule, result, groupBy: null,
+                Array.Empty<int>(), Array.Empty<int>(), Array.Empty<string>(), Array.Empty<string>(),
+                markerPanels);
         return 0;
+    }
+
+    /// <summary>
+    /// <c>--min-per-group</c> as a whole number. It used to be parsed as a double and cast, so 2.7 ran
+    /// as 2 with nothing said.
+    /// </summary>
+    private static int MinPerGroupFrom(string? text)
+    {
+        if (text is null)
+            return DifferentialOptions.DefaultMinPerGroup;
+        if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n < 1)
+            throw new ArgumentException($"--min-per-group must be a whole number of at least 1, not '{text}'.");
+        return n;
     }
 
     /// <summary>Levels from repeated flags and/or comma-separated lists, in the order given.</summary>
@@ -338,24 +491,6 @@ public static class Program
     private static double ParseDouble(string? text, double fallback) =>
         text is not null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
             ? v : fallback;
-
-    private static string TestName(DifferentialTest test) => test switch
-    {
-        DifferentialTest.WelchT => "welch",
-        DifferentialTest.StudentT => "student",
-        DifferentialTest.MannWhitney => "mann-whitney",
-        DifferentialTest.PairedT => "paired-t",
-        DifferentialTest.Wilcoxon => "wilcoxon",
-        _ => "moderated",
-    };
-
-    private static string DesignName(DifferentialDesign design) => design switch
-    {
-        DifferentialDesign.Paired => "paired",
-        DifferentialDesign.LinearTrend => "trend",
-        DifferentialDesign.LinearTrendWithinSubject => "trend-within-subject",
-        _ => "unpaired",
-    };
 
     /// <summary>
     /// The hit rule, from the same flags the pane offers as controls.
@@ -424,7 +559,7 @@ public static class Program
         {
             if (pairBy is null)
                 throw new ArgumentException(
-                    $"--design {DesignName(design)} needs --subject <column> to group samples by.");
+                    $"--design {DifferentialTokens.Design(design)} needs --subject <column> to group samples by.");
             if (!dataset.MetadataColumns.Contains(pairBy))
                 throw new ArgumentException($"No metadata column '{pairBy}' to group subjects by.");
             subjects = dataset.MetadataValues(pairBy);
@@ -491,8 +626,8 @@ public static class Program
         };
         if (Array.IndexOf(allowed, test) < 0)
             throw new ArgumentException(
-                $"--test {TestName(test)} does not apply to --design {DesignName(design)}. "
-                + $"That design runs: {string.Join(", ", allowed.Select(TestName))}.");
+                $"--test {DifferentialTokens.Test(test)} does not apply to --design {DifferentialTokens.Design(design)}. "
+                + $"That design runs: {string.Join(", ", allowed.Select(DifferentialTokens.Test))}.");
 
         // The prior's per-feature SCALE comes from the run's QC and reference replicates whenever
         // it has any. That is the default, not an option, because the design groups of a real study
@@ -527,7 +662,7 @@ public static class Program
             PeptideCounts = dataset.PeptideCounts,
             PriorGroupColumns = priorGroups,
             Covariates = covariates.Count > 0 ? covariates : null,
-            MinPerGroup = (int)ParseDouble(opts.GetSingleOrNull("--min-per-group"), 2),
+            MinPerGroup = MinPerGroupFrom(opts.GetSingleOrNull("--min-per-group")),
         };
     }
 
@@ -961,7 +1096,8 @@ public static class Program
 
         Tests one contrast against the corrected peptide or protein matrix a `prism run`
         already produced, and writes a results table. Reads the output directory and
-        writes nothing back into it except the results file, so it cannot disturb the run.
+        writes nothing back into it except the results file (and, with --report, the
+        quant/ folder), so it cannot disturb the run.
 
         This is the same engine, and the same statistical menu, as the Skyline tool's
         Differential pane; the arms are resolved by the same code, so a contrast set up
@@ -987,6 +1123,11 @@ public static class Program
         samples as independent understates the standard error.
 
         Options:
+            --clinical CSV...      Join an external clinical table to the samples first, exactly as
+                                   the pane's Clinical CSV input does (key column detected by value);
+                                   its columns can then be named by --group-by, --adjust-for,
+                                   --subject, --trend-over and --markers-group-by. Repeatable: several
+                                   tables are joined in the order given
             --level LEVEL          protein (default) or peptide
             --design DESIGN        unpaired (default), paired, trend, trend-within-subject
             --subject COL          Metadata column identifying the subject (alias: --pair-by).
@@ -1020,6 +1161,19 @@ public static class Program
             --min-per-group N      Minimum samples per arm (default 2)
             -o, --output FILE      Results CSV (default <output-dir>/differential.csv)
 
+        Quant report:
+            --report               Also write the quant report - quant_report.html and its CSVs,
+                                   under <output-dir>/quant/ - exactly as the Differential pane's
+                                   Quant report button does: this contrast's volcano and hits, the
+                                   detection test the design calls for (Fisher; McNemar when paired;
+                                   the Firth GLM when adjusted), g:Profiler enrichment, and any
+                                   marker panels. A view that cannot run is skipped and printed with
+                                   the reason; it never stops the report
+            --markers PANEL...     Marker panels to include: your saved lists and the shipped ones,
+                                   e.g. "EV markers (core)". Repeat, space- or comma-separate
+            --markers-group-by COL Column to group the panels by (default: --group-by)
+            --no-enrichment        Skip g:Profiler, for machines with no internet access
+
         EXAMPLES:
             # Disease against control, protein level, default moderated t
             prism differential -d output/ --group-by condition -a Control -b Disease
@@ -1036,11 +1190,16 @@ public static class Program
             prism differential -d output/ --design trend --trend-over dose_mg
 
             # A time course following the same subjects
-            prism differential -d output/ --design trend-within-subject                 --trend-over week --subject patient_id
+            prism differential -d output/ --design trend-within-subject \
+                --trend-over week --subject patient_id
 
             # Peptide level, where BY is the correction to reach for
             prism differential -d output/ --level peptide --group-by condition \
                 -a Control -b Disease --correction by
+
+            # The full quant report for a contrast, with the shipped EV marker panel
+            prism differential -d output/ --group-by condition -a Control -b Disease \
+                --report --markers "EV markers (core)"
         """;
 
     private const string IonAccountingHelp = """

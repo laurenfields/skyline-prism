@@ -190,8 +190,16 @@ public sealed record DifferentialOptions
     /// </remarks>
     public IReadOnlyList<IReadOnlyList<int>>? PriorGroupColumns { get; init; }
 
+    /// <summary>
+    /// The default <see cref="MinPerGroup"/>. Named rather than repeated as a literal because three
+    /// places need to agree on it: this initializer, the CLI's <c>--min-per-group</c> fallback, and
+    /// <see cref="QuantCommand"/>, which omits the flag from a recorded command when the run used the
+    /// default. A drift between them would make a recorded command reproduce a different minimum.
+    /// </summary>
+    public const int DefaultMinPerGroup = 2;
+
     /// <summary>Minimum samples per arm before the contrast is refused.</summary>
-    public int MinPerGroup { get; init; } = 2;
+    public int MinPerGroup { get; init; } = DefaultMinPerGroup;
 
     /// <summary>Covariates to adjust the contrast for. Ignored by the rank-based tests.</summary>
     public IReadOnlyList<Covariate>? Covariates { get; init; }

@@ -13,11 +13,12 @@ public class QuantConfigTests
 {
     private static QuantConfig TwoGroup() => new(
         Level: "protein",
-        Contrast: new QuantContrast("condition", "control", "disease", null),
-        Design: "TwoGroup",
-        Test: "ModeratedT",
-        Prior: "IntensityTrend",
-        Correction: "BH",
+        Contrast: new QuantContrast("condition", new[] { "control" }, new[] { "disease" }, null),
+        Design: "unpaired",
+        Test: "moderated",
+        Prior: "intensity-trend",
+        PriorUsed: "intensity-trend from controls",
+        Correction: "bh",
         Covariates: new[] { "age", "sex" },
         HitRule: "adj.P < 0.05, |log2FC| >= 1",
         DetectionEnabled: true,
@@ -34,9 +35,12 @@ public class QuantConfigTests
 
         Assert.Contains("level: protein", yaml);
         Assert.Contains("group_by: condition", yaml);
-        Assert.Contains("group_a: control", yaml);
-        Assert.Contains("group_b: disease", yaml);
-        Assert.Contains("correction: BH", yaml);
+        Assert.Contains("group_a: [control]", yaml);
+        Assert.Contains("group_b: [disease]", yaml);
+        Assert.Contains("correction: bh", yaml);
+        // The requested prior (a --prior value) and the one that ran are both recorded, separately.
+        Assert.Contains("prior: intensity-trend\n", yaml);
+        Assert.Contains("prior_used: intensity-trend from controls", yaml);
         Assert.Contains("covariates: [age, sex]", yaml);
         Assert.Contains("q_threshold: 0.01", yaml);
         Assert.Contains("panels: [EV markers]", yaml);
@@ -51,6 +55,23 @@ public class QuantConfigTests
         var yaml = TwoGroup().ToYaml();
         Assert.Contains("\"GO:BP\"", yaml);
         Assert.Contains("\"GO:MF\"", yaml);
+    }
+
+    /// <summary>
+    /// A union arm records as a list of its levels - the form -a takes - never as the joined display
+    /// label ("qc + reference"), which is not something the CLI accepts.
+    /// </summary>
+    [Fact]
+    public void ToYaml_UnionArm_IsAListOfLevels()
+    {
+        var cfg = TwoGroup() with
+        {
+            Contrast = new QuantContrast("sample_type", new[] { "qc", "reference" }, new[] { "experimental" }, null),
+        };
+        var yaml = cfg.ToYaml();
+        Assert.Contains("group_a: [qc, reference]", yaml);
+        Assert.DoesNotContain("+", yaml);
+        Assert.Equal("experimental vs qc + reference by sample_type", cfg.Contrast.Describe());
     }
 
     [Fact]
@@ -72,6 +93,19 @@ public class QuantConfigTests
         var yaml = cfg.ToYaml();
         Assert.Contains("\"[draft] panel\"", yaml);
         Assert.Contains("\"@internal\"", yaml);
+    }
+
+    /// <summary>
+    /// A quoted value's backslashes are escaped: an unescaped Windows path reads as the escape \d or \U
+    /// inside double quotes and makes the whole file invalid YAML.
+    /// </summary>
+    [Fact]
+    public void ToYaml_ClinicalPath_IsRecordedWithItsBackslashesEscaped()
+    {
+        var cfg = TwoGroup() with { ClinicalCsvs = new[] { @"C:\data\clinical.csv" } };
+        Assert.Contains(@"clinical_csv: [""C:\\data\\clinical.csv""]", cfg.ToYaml());
+        // And absent entirely when no clinical CSV was joined.
+        Assert.DoesNotContain("clinical_csv", TwoGroup().ToYaml());
     }
 
     [Fact]

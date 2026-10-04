@@ -179,6 +179,19 @@ prism differential -d output/ --group-by stage -a Control Mild -b Severe --adjus
 A level named on both sides is refused rather than dropped from one, because which side it was
 dropped from would change the answer and nothing in the output would record the choice.
 
+A contrast on a clinical column - diagnosis, age, sex from a separate table - takes `--clinical`,
+which joins the table exactly as the pane's Clinical CSV input does (the key column is detected by
+value) before any column name is checked:
+
+```bash
+prism differential -d output/ --clinical clinical.csv --group-by Diagnosis -a Control -b AD \
+    --adjust-for Age,Sex
+```
+
+A clinical CSV that matches fewer than half the samples is refused rather than silently ignored,
+since the command almost certainly depends on one of its columns. `--clinical` can be given more
+than once; the tables are joined in the order given.
+
 A trend takes `--trend-over` in place of the arms, and the within-subject form also takes
 `--subject`:
 
@@ -201,24 +214,56 @@ given the same way round.
 
 ## The quant report
 
-The **Quant report...** button in the Differential pane writes a self-contained `quant_report.html`
-to a `quant/` folder in the output directory - the quantification counterpart to `qc_report.html`. It
-runs the pane's current contrast across every view and bundles them into one page that shares the QC
-report's Analysis Information header (read from the run's `parameters.json`), so the report always
-names the version, date, host and inputs of the run that produced the numbers.
+A self-contained `quant_report.html`, written to a `quant/` folder in the output directory - the
+quantification counterpart to `qc_report.html`. It runs one contrast across every view and bundles
+them into one page that shares the QC report's Analysis Information header (read from the run's
+`parameters.json`), so the report always names the version, date, host and inputs of the run that
+produced the numbers.
+
+Two front ends, one implementation (`QuantAnalysis` in Core): the Differential pane's **Quant
+report...** button, which uses the pane's current contrast and the panels ticked in the Markers pane,
+and `prism differential --report`, which uses the command's own flags:
+
+```bash
+prism differential -d output/ --group-by condition -a Control -b Disease \
+    --report --markers "EV markers (core)"
+```
+
+`--markers` names panels from the same set the Markers pane offers (your saved lists and the shipped
+ones), `--markers-group-by` picks their grouping column (default: `--group-by`; required under a
+trend), and `--no-enrichment` skips g:Profiler on a machine with no internet access. An unknown panel
+or column is refused before anything is written.
 
 The report contains:
 
-- the analysis parameters, as a table and as re-runnable YAML (also written to
-  `quant_parameters.yaml` / `.json`);
+- the analysis parameters, as a table and as YAML (also written to `quant_parameters.yaml` /
+  `.json`), recorded in `prism differential`'s own flag values - `design: paired`, `test: moderated`,
+  `prior: intensity-trend`, `correction: bh`, and each arm as a list of its levels
+  (`group_a: [qc, reference]`). The prior that actually ran is recorded beside the requested one as
+  `prior_used`, since a requested prior can fall back;
+- **the command that regenerates it** - the full `prism differential ... --report` line, every
+  statistical choice spelled out, shown in the report and recorded as `command:` in the YAML. It is
+  built from what the analysis actually ran: a covariate the pane still shows ticked under a test
+  that cannot use one (anything but the moderated t) is dropped from the analysis, the detection test
+  and the command alike, and the report says so. The test suite runs the recorded command through the
+  CLI and requires every file it writes to be byte-identical to the pane's (the HTML apart from its
+  timestamp) - adjusted, paired, stale-covariate and two-clinical-CSV reports included. The
+  comparison runs with enrichment off, because g:Profiler answers from its current database and its
+  output can change between two runs of anything. Rerun elsewhere, the command needs the clinical CSV
+  at the path it names and any marker list you saved yourself on that machine (`PRISM_PROTEIN_LISTS`
+  can point at a copy of your lists file). Where a value cannot be written on a command line at all -
+  a level containing a comma, which `-a`/`-b` split on, or one with leading or trailing spaces - the
+  report says so, and records `command_unavailable:` with the reason, in place of a command that
+  would quietly select a different contrast;
 - **differential abundance** - the volcano and a ranked hit table;
-- **detection frequency** - the peptide on/off test, for a two-group contrast. This is the
-  unpaired Fisher exact test whatever the design: the Detection pane runs McNemar's exact test for a
-  paired design and the Firth-penalized GLM when covariates are set, and the report does not yet
-  follow either, which the section says whenever the contrast is one where the two differ;
+- **detection frequency** - the peptide on/off test, for a two-group contrast, chosen exactly as the
+  Detection pane chooses it (`DetectionAnalysis` in Core serves both): the Firth-penalized GLM when
+  covariates are set, McNemar's exact test over the matched subjects when the design is paired, and
+  Fisher exact otherwise. The section names the test, and a paired design that had to run unpaired
+  says why;
 - **functional enrichment** - the g:Profiler bars, when the network is reachable and there are
   significant genes;
-- **marker panels** - a heatmap and panel-score boxplot for each panel ticked in the Markers pane.
+- **marker panels** - a heatmap and panel-score boxplot for each selected panel.
 
 Beside the HTML it writes the result tables as CSVs (`differential.csv` - the same file, from the
 same code, as `prism differential` writes - `detection.csv`,
@@ -226,11 +271,9 @@ same code, as `prism differential` writes - `detection.csv`,
 abundances in LINEAR scale** (`differential_values.csv`, `markers_<panel>_values.csv`, values are
 `2^log2`, matching `corrected_*.parquet`) so the export stands on its own for reanalysis. Long tables
 are capped to a preview in the HTML; the full rows are in the companion CSV. A view with nothing to
-show is omitted with a note rather than failing the report.
-
-The report is currently produced from the pane. The headless `prism differential` command writes
-`differential.csv` today; wiring the full report and its companion files to the CLI is a planned
-follow-up.
+show is omitted with a note rather than failing the report - no merged_data (detection), no network or
+no significant genes (enrichment), no panels (markers), a trend (detection and the raw-value table) -
+and each omission is printed on the console or the pane's status line with its reason.
 
 ## PRISM and `proteomics-toolkit` are not interchangeable
 

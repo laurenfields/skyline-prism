@@ -69,6 +69,44 @@ public class DetectionMatrixTests
         Assert.All(data.Matrix.Cast<double>(), v => Assert.True(v == 0.0 || v == 1.0));
     }
 
+    /// <summary>
+    /// A Skyline report can carry a precursor row with no replicate. Its sample id is null, and the
+    /// loader must drop it rather than fail on it - found by the Differential Explorer's reader
+    /// (prism-diff-explorer#1), which had turned the same row into a NaN sample column.
+    /// </summary>
+    [Fact]
+    public void Load_RowWithNoSample_IsDroppedNotFatal()
+    {
+        var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"prism-merged-{System.Guid.NewGuid():N}");
+        var part = System.IO.Path.Combine(root, "_pep_bucket=0");
+        System.IO.Directory.CreateDirectory(part);
+        try
+        {
+            var file = System.IO.Path.Combine(part, "data_0.parquet").Replace('\\', '/');
+            using (var conn = new DuckDB.NET.Data.DuckDBConnection("Data Source=:memory:"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    "COPY (SELECT 'PEPTIDEK' AS \"PeptideModifiedSequenceUnimodIds\", s AS \"Sample ID\", "
+                    + "q AS \"DetectionQValue\", 'P1_HUMAN' AS \"Protein\" "
+                    + "FROM (VALUES ('S1', 0.001), ('S2', 0.5), (NULL, 0.001)) t(s, q)) "
+                    + $"TO '{file}' (FORMAT PARQUET)";
+                cmd.ExecuteNonQuery();
+            }
+
+            var data = DetectionMatrix.Load(root, qThreshold: 0.01, term: null);
+
+            Assert.Equal(new[] { "S1", "S2" }, data.SampleIds);
+            Assert.Equal(1.0, data.Matrix[0, 0]);
+            Assert.Equal(0.0, data.Matrix[0, 1]);
+        }
+        finally
+        {
+            System.IO.Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("sp|P0DP02|HVC33_HUMAN", "HVC33_HUMAN")]
     [InlineData("CRYPTIC_UNIQUE|Q9Y2|S35U4_HUMAN", "S35U4_HUMAN")]

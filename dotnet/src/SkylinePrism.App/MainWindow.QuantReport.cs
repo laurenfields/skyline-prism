@@ -6,21 +6,17 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using SkylinePrism.Core.DifferentialAnalysis;
-using SkylinePrism.Core.DifferentialAnalysis.Detection;
-using SkylinePrism.Core.DifferentialAnalysis.Enrichment;
 
 namespace SkylinePrism.App;
 
 /// <summary>
 /// The "Quant report" button: run the Differential pane's current contrast across every view and write a
 /// self-contained quant_report.html plus the result tables (CSV) to a quant/ folder, the way the pipeline
-/// writes its own outputs. Reuses the pane's contrast, options and rule, the ticked Markers-pane panels,
-/// and (opt-in) g:Profiler enrichment.
+/// writes its own outputs. The pane only gathers its controls into a <see cref="QuantRequest"/>; the
+/// analysis is <see cref="QuantAnalysis.Run"/>, the same code <c>prism differential --report</c> runs.
 /// </summary>
 public partial class MainWindow
 {
-    private readonly string[] _quantEnrichmentSources = { "GO:BP", "GO:MF", "GO:CC", "REAC", "KEGG" };
-
     private async void OnGenerateQuantReport(object sender, RoutedEventArgs e)
     {
         try
@@ -54,96 +50,69 @@ public partial class MainWindow
             return;
         }
 
-        // Everything that reads a WPF control is gathered here, on the UI thread; the compute below runs
+        // Everything that reads a WPF control is gathered here, on the UI thread; the analysis below runs
         // on a worker.
         var ds = _diffDataset;
-        var level = DiffSelectedLevel();
-        var rule = DiffRule();
-        var corrected = DiffSelectedCorrection() != MultipleTesting.None;
-        var effectName = DiffEffectName();
-        var isTrend = DiffIsTrend();
-        var covariates = WithoutTestedTerm(SelectedCovariatesFor(ds.SampleIds));
-        var options = DiffOptions(covariates);
-        var designName = DiffSelectedDesign().ToString();
-        var testName = options.Test.ToString();
-        var correctionName = DiffSelectedCorrection().ToString();
-
-        QuantContrast contrast;
-        string contrastLabel;
-        double[]? trendX = null;
-        List<int> aCols = new(), bCols = new();
-        // What differential.csv's header records - the same column and labels `prism differential`
-        // writes for this contrast - and the columns the raw-value matrix covers.
-        string csvGroupBy, csvA, csvB;
-        List<int>? valueColumns;
-        if (isTrend)
+        var options = DiffOptions(WithoutTestedTerm(SelectedCovariatesFor(ds.SampleIds)));
+        string? groupBy = null;
+        List<int> groupA = new(), groupB = new();
+        List<string> aLevels = new(), bLevels = new();
+        if (DiffIsTrend())
         {
-            if (DiffTrendColumn() is not { } tcol || DiffTrendValues() is not { } xv)
+            if (DiffTrendColumn() is null)
             {
                 DiffStatusText.Text = "Pick a numeric trend column first.";
                 return;
             }
-
-            trendX = xv;
-            contrast = new QuantContrast(null, null, null, tcol);
-            contrastLabel = $"trend over {tcol}";
-            csvGroupBy = tcol;
-            (csvA, csvB) = DifferentialCsv.TrendEndpoints(xv);
-            // No arms, and the fitted sample subset is not recoverable from the result (a non-finite
-            // x or a within-subject singleton can be dropped), so a per-sample matrix would list
-            // samples that were not in the fit - omitted rather than overclaimed.
-            valueColumns = null;
+        }
+        else if (!TryGetGroups(out var col, out groupA, out groupB, out _, out _))
+        {
+            DiffStatusText.Text = "Pick a group-by column and two values before writing a report.";
+            return;
         }
         else
         {
-            if (!TryGetGroups(out var col, out aCols, out bCols, out var aVal, out var bVal))
-            {
-                DiffStatusText.Text = "Pick a group-by column and two values before writing a report.";
-                return;
-            }
-
-            contrast = new QuantContrast(col, aVal, bVal, null);
-            contrastLabel = $"{bVal} vs {aVal} by {col}";
-            csvGroupBy = col;
-            csvA = aVal;
-            csvB = bVal;
-            // The columns the contrast actually ran over: under a paired design the matched subset,
-            // not everything ticked, so the raw values carry no subject that took no part in the test.
-            var (usedA, usedB) = ContrastColumns(aCols, bCols);
-            valueColumns = usedA.Concat(usedB).ToList();
+            groupBy = col;
+            (aLevels, bLevels) = SelectedArmLevels();
         }
 
-        var markerColumn = MarkersGroupByCombo.SelectedItem as string ?? contrast.GroupBy;
-        var markerPanels = _markersPanelItems.Where(i => i.IsSelected).Select(i => i.List).ToList();
-        // Enrichment always runs; it degrades to a skipped-with-note section if there is no network or
-        // no significant genes, so there is nothing for the user to opt into.
-        const bool wantEnrichment = true;
-        var poster = DiffPoster;
-        var geneById = _diffGeneById;
-        var labelById = _diffLabelById;
-        var cachedDetection = _detectionData is not null && _detectionDir == dir ? _detectionData : null;
+        var request = new QuantRequest
+        {
+            OutputDir = dir,
+            Dataset = ds,
+            Options = options,
+            Rule = DiffRule(),
+            SubjectColumn = DiffPairByCombo.SelectedItem as string,
+            GroupBy = groupBy,
+            GroupA = groupA,
+            GroupB = groupB,
+            ALevels = aLevels,
+            BLevels = bLevels,
+            MarkerPanels = _markersPanelItems.Where(i => i.IsSelected).Select(i => i.List).ToList(),
+            MarkerGroupBy = MarkersGroupByCombo.SelectedItem as string,
+            // Enrichment always runs from the button; with no network it becomes a note, not a failure.
+            EnrichmentPoster = DiffPoster,
+            CachedDetection = _detectionData is not null && _detectionDir == dir ? _detectionData : null,
+        };
 
         DiffStatusText.Text = "Generating quant report...";
         QuantReportButton.IsEnabled = false;
         try
         {
-            var (html, detMatrix, note) = await Task.Run(() => Build(
-                dir!, ds, level, rule, corrected, effectName, isTrend, options, designName, testName,
-                correctionName, contrast, contrastLabel, aCols, bCols, trendX, markerColumn, markerPanels,
-                wantEnrichment, poster, geneById, labelById, cachedDetection,
-                csvGroupBy, csvA, csvB, valueColumns));
+            var result = await Task.Run(() => QuantAnalysis.Run(request));
 
             // Cache the detection matrix so a later Detection-pane run on the same folder reuses it.
-            if (detMatrix is not null)
+            if (result.DetectionMatrix is not null)
             {
-                _detectionData = detMatrix;
+                _detectionData = result.DetectionMatrix;
                 _detectionDir = dir;
             }
 
-            DiffStatusText.Text = $"Quant report written to {html}.{note}";
+            DiffStatusText.Text = $"Quant report written to {result.HtmlPath}."
+                + string.Concat(result.Notes.Select(n => " " + n));
             try
             {
-                Process.Start(new ProcessStartInfo(html) { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo(result.HtmlPath) { UseShellExecute = true });
             }
             catch
             {
@@ -154,112 +123,5 @@ public partial class MainWindow
         {
             QuantReportButton.IsEnabled = true;
         }
-    }
-
-    /// <summary>Runs on a worker thread: computes every requested view and writes the report.</summary>
-    private (string Html, DetectionMatrixData? Detection, string Note) Build(
-        string dir, DifferentialDataset ds, FeatureLevel level, SignificanceRule rule, bool corrected,
-        string effectName, bool isTrend, DifferentialOptions options, string designName, string testName,
-        string correctionName, QuantContrast contrast, string contrastLabel, List<int> aCols,
-        List<int> bCols, double[]? trendX, string? markerColumn, IReadOnlyList<Core.Qc.ProteinList> markerPanels,
-        bool wantEnrichment, HttpJsonPoster poster, Dictionary<string, string> geneById,
-        Dictionary<string, string> labelById, DetectionMatrixData? cachedDetection,
-        string csvGroupBy, string csvA, string csvB, List<int>? valueColumns)
-    {
-        var notes = new List<string>();
-        if (valueColumns is null)
-            notes.Add(" No differential_values.csv: a trend does not record which samples entered the fit.");
-
-        var res = isTrend
-            ? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds,
-                Enumerable.Range(0, ds.SampleIds.Length).ToArray(), trendX!, options)
-            : Differential.Run(ds.ExprLog2, ds.FeatureIds, aCols, bCols, options);
-
-        // Detection: two-group designs only, and only where merged_data is present.
-        DetectionMatrixData? detMatrix = null;
-        IReadOnlyList<DetectionRow>? detection = null;
-        if (!isTrend)
-        {
-            try
-            {
-                detMatrix = cachedDetection ?? DetectionMatrix.Load(dir, 0.01, null);
-                var detIndex = detMatrix.SampleIds
-                    .Select((s, i) => (s, i)).ToDictionary(x => x.s, x => x.i, StringComparer.Ordinal);
-                var da = aCols.Select(j => ds.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
-                var db = bCols.Select(j => ds.SampleIds[j]).Where(detIndex.ContainsKey).Select(s => detIndex[s]).ToList();
-                if (da.Count >= 2 && db.Count >= 2)
-                    detection = DetectionTest.Run(detMatrix.Matrix, detMatrix.PeptideIds, da, db);
-                else
-                    notes.Add(" Detection skipped: the contrast samples were not both present in merged_data.");
-            }
-            catch (Exception ex)
-            {
-                notes.Add(" Detection skipped: " + ex.Message);
-            }
-        }
-
-        // Enrichment: opt-in, needs network.
-        IReadOnlyList<EnrichmentTerm>? enrichment = null;
-        if (wantEnrichment)
-        {
-            try
-            {
-                var (sig, background) = Enrichment.SigAndBackgroundGenes(
-                    res, id => geneById.GetValueOrDefault(id), rule);
-                if (sig.Count == 0)
-                    notes.Add(" Enrichment skipped: no significant genes to submit.");
-                else
-                    enrichment = Enrichment.GProfiler(sig, background, poster);
-            }
-            catch (Exception ex)
-            {
-                notes.Add(" Enrichment skipped (needs internet): " + ex.Message);
-            }
-        }
-
-        // Markers: the ticked panels, grouped by the Markers-pane column (or the contrast column).
-        var markers = new List<MarkerReportSection>();
-        if (markerColumn is not null && markerPanels.Count > 0 && ds.MetadataColumns.Contains(markerColumn))
-        {
-            var groups = ds.MetadataValues(markerColumn);
-            var identities = Enumerable.Range(0, ds.FeatureIds.Length).Select(ds.IdentityOf).ToArray();
-            foreach (var panel in markerPanels)
-            {
-                var r = MarkerPanel.Evaluate(ds.ExprLog2, identities, groups, ds.SampleIds, panel, false);
-                markers.Add(new MarkerReportSection(panel.Name, markerColumn, r));
-            }
-        }
-        else if (markerPanels.Count == 0)
-        {
-            notes.Add(" Markers omitted: no panels ticked in the Markers pane.");
-        }
-
-        var quant = new QuantConfig(
-            level == FeatureLevel.Peptide ? "peptide" : "protein", contrast, designName, testName,
-            res.VariancePrior, correctionName, res.CovariatesUsed, rule.Describe(effectName),
-            detection is not null, 0.01, enrichment is not null, _quantEnrichmentSources, "both",
-            markers.Select(m => m.PanelName).ToList());
-
-        var inputs = new QuantReportInputs
-        {
-            Differential = res,
-            Rule = rule,
-            Corrected = corrected,
-            Contrast = contrastLabel,
-            EffectName = effectName,
-            LabelFor = id => labelById.GetValueOrDefault(id, id),
-            Options = options,
-            GroupBy = csvGroupBy,
-            ALabel = csvA,
-            BLabel = csvB,
-            Detection = detection,
-            Enrichment = enrichment,
-            Markers = markers,
-            Dataset = ds,
-            ContrastColumns = valueColumns,
-        };
-
-        var html = QuantReport.Write(dir, quant, inputs);
-        return (html, detMatrix, string.Concat(notes));
     }
 }

@@ -614,20 +614,30 @@ suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
 in the output directory — the quantification counterpart to the QC report. It runs the pane's current
 contrast across every view and bundles them into one page that shares the QC report's Analysis
 Information header, so the report names the version, date, host and inputs of the run behind the
-numbers. It records the analysis parameters as a table and re-runnable YAML, then renders a section per
-view (differential, detection, enrichment, and each panel ticked in the Markers pane) with embedded
-plots.
+numbers. It records the analysis parameters as a table and as YAML in `prism differential`'s own flag
+values, then renders a section per view (differential, detection, enrichment, and each panel ticked in
+the Markers pane) with embedded plots. The detection section runs the same test this pane's Detection
+view would for the contrast - Fisher, McNemar when paired, the Firth GLM when covariates are ticked -
+because both call the same code.
 
 Beside the HTML it writes the underlying tables as CSVs, including the **raw per-sample abundances in
 linear scale** (`differential_values.csv`, `markers_<panel>_values.csv`) so the export stands on its
-own for reanalysis — see [output_files.md](output_files.md#quant-report-differential-pane) for the full
-list. Enrichment needs network access; a view with nothing to show (no network, no ticked panels, a
-trend design with no two-group detection) is omitted with a note rather than failing the report. The
-report opens in your browser when it finishes.
+own for reanalysis — see [output_files.md](output_files.md#quant-report) for the full list.
+Enrichment needs network access; a view with nothing to show (no network, no ticked panels, a trend
+design with no two-group detection) is omitted with a note rather than failing the report. The report
+opens in your browser when it finishes.
 
-The report's detection section is the **unpaired Fisher exact test** whatever the design; unlike this
-pane's Detection view it does not yet switch to McNemar for a paired design or to the Firth GLM when
-covariates are ticked, and the section says so whenever the contrast is one where the two differ.
+> [!NOTE]
+> **The same report runs headlessly.** Every report the button writes shows, near the top, the exact
+> `prism differential ... --report` command that regenerates it - contrast, design, prior, hit rule,
+> clinical CSV and marker panels included - built from what the analysis actually ran (a covariate
+> left ticked under a test that cannot use it is not in it; the report says it was not applied).
+> Rerun elsewhere it writes the same files, with three conditions: the clinical CSV must exist at the
+> path the command names; a marker list you saved yourself must exist on that machine too (point
+> `PRISM_PROTEIN_LISTS` at a copy of your lists file); and the enrichment section is whatever
+> g:Profiler returns on the day, so it can change as g:Profiler updates its annotations. Where a value
+> cannot be written as a command at all - a level containing a comma, say - the report says so in
+> place of a command. See [differential-analysis.md](differential-analysis.md#the-quant-report).
 
 ### Attaching a clinical CSV
 
@@ -636,7 +646,8 @@ clinical table to the samples. The identifier column is detected by value — th
 match the sample names, preferring a near one-to-one match so a low-cardinality column cannot win by
 coincidence — and every other column is added to the metadata, so it becomes available in **Group by**
 and **Adjust for** across the Differential and Markers panes. If nothing matches at least half the
-samples, nothing is added and the status line says so.
+samples, nothing is added and the status line says so. The same join runs headless as
+`prism differential --clinical <csv>`, and a quant report records which clinical file it used.
 
 ---
 
@@ -756,6 +767,7 @@ Escape hatches for when an automatic choice picks badly. None are needed normall
 | `PRISM_ISOLATION_TIMEOUT_SEC` | How long to let Skyline read isolation windows out of a data file before giving up (default 300). Reading them normally takes ~10 s; raise this only if your data really is that slow to reach. |
 | `PRISM_EXTRACT_DIR` | Where `.sky.zip` archives are extracted, instead of beside the archive. One folder per archive underneath. For a Panorama download folder on a slow share, or one you would rather keep clean. |
 | `PRISM_SKYLINECMD` | Full path to `SkylineCmd.exe`, when the automatic discovery finds the wrong installation. |
+| `PRISM_PROTEIN_LISTS` | The saved protein-lists file to use instead of `%LOCALAPPDATA%\SkylinePrism\protein-lists.json`. Read by the tool and by the CLI (`prism differential --markers`), so a cluster account can use the same lists as the Windows machine a quant report was made on. The shipped panels are always available either way. |
 
 Memory for the Stage 1 merge is sized from the machine's **free** memory and is set with the
 `processing.merge_memory_mb` config key rather than an environment variable — see

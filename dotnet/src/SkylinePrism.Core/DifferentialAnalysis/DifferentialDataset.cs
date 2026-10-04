@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -205,6 +206,32 @@ public sealed class DifferentialDataset
             : throw new ArgumentException($"Unknown metadata column '{column}'.", nameof(column));
 
     /// <summary>
+    /// <paramref name="column"/> read as numbers, aligned to <see cref="SampleIds"/>: invariant
+    /// culture, NaN where a sample has no value or one that does not parse. What a trend is fitted
+    /// against - one parse, so the pane, the CLI and the report cannot disagree on a sample's x.
+    /// </summary>
+    public double[] NumericValues(string column)
+    {
+        var raw = MetadataValues(column);
+        var values = new double[raw.Length];
+        for (var i = 0; i < raw.Length; i++)
+            values[i] = raw[i] is { } v
+                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+                ? d
+                : double.NaN;
+        return values;
+    }
+
+    private readonly List<string> _attachedClinical = new();
+
+    /// <summary>
+    /// The clinical CSVs that were actually joined - those that added at least one column - in the
+    /// order attached. A report records these, because a contrast grouped or adjusted by a clinical
+    /// column cannot be reproduced from the output directory alone.
+    /// </summary>
+    public IReadOnlyList<string> AttachedClinicalCsvs => _attachedClinical;
+
+    /// <summary>
     /// Join a clinical metadata CSV to the samples, ported from the explorer's <c>attach_clinical</c>.
     /// The identifier column is auto-detected by value (<c>infer_clinical_key</c>): the column whose
     /// values best match the sample names, preferring near one-to-one columns so a low-cardinality
@@ -284,6 +311,8 @@ public sealed class DifferentialDataset
             added.Add(name);
         }
 
+        if (added.Count > 0)
+            _attachedClinical.Add(Path.GetFullPath(clinicalCsvPath));
         return new ClinicalAttachResult(bestCol, bestRate, header.Length - 1, added);
     }
 
