@@ -37,6 +37,10 @@ public class QuantCommandTests
     [InlineData(" AD", "leading or trailing spaces")]
     [InlineData("-1", "starts with '-'")]
     [InlineData("AD $HOME", "no shell quotes the same way")]
+    // Backslash, only where the two shells disagree: inside bash double quotes a doubled backslash
+    // collapses to one while PowerShell keeps both, and a trailing one escapes the closing quote.
+    [InlineData(@"AD\\early", "doubled backslash")]
+    [InlineData(@"AD\", "ends with a backslash")]
     public void ALevelTheCommandLineCannotCarry_GivesNoCommand(string level, string why)
     {
         var request = Request("C:\\runs\\out", new[] { "Control" }, new[] { level });
@@ -44,6 +48,32 @@ public class QuantCommandTests
         Assert.False(QuantCommand.TryArguments(request, out _, out var reason));
         Assert.Contains(why, reason);
         Assert.Null(QuantCommand.For(request, request.Options, out _));
+    }
+
+    [Fact]
+    public void AUncPathGivesNoCommand_ButAnOrdinaryWindowsPathStillDoes()
+    {
+        // The case this came from: a run on a lab share. Quoted, bash collapses the leading "\\" to one
+        // and hands the program a path that does not exist, while PowerShell passes it through - so the
+        // printed line would mean two different things. Refused rather than offered wrong.
+        var unc = Request(@"\\lab-nas\studies\out", new[] { "qc" }, new[] { "experimental" });
+        Assert.False(QuantCommand.TryArguments(unc, out _, out var reason));
+        Assert.Contains("doubled backslash", reason);
+
+        // A mapped drive has only single backslashes before ordinary characters, which are literal in
+        // both shells. Refusing every backslash would mean never offering a command on Windows.
+        var mapped = Request(@"R:\studies\out", new[] { "qc" }, new[] { "experimental" });
+        Assert.True(QuantCommand.TryArguments(mapped, out _, out _));
+        Assert.Contains(@"""R:\studies\out""", QuantCommand.For(mapped, mapped.Options, out _));
+    }
+
+    [Fact]
+    public void TheLineIsRenderedFromTheArgumentsItRecords()
+    {
+        // The report stores both; built from one resolution they cannot be two different answers.
+        var request = Request(@"C:\runs\out", new[] { "qc" }, new[] { "experimental" });
+        Assert.True(QuantCommand.TryArguments(request, out var args, out _));
+        Assert.Equal(QuantCommand.For(request, request.Options, out _), QuantCommand.Line(args));
     }
 
     [Fact]

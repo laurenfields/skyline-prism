@@ -69,5 +69,8 @@ public class DifferentialTokensTests
         Distinct<DifferentialTest>(DifferentialTokens.Test);
         Distinct<VariancePrior>(DifferentialTokens.Prior);
         Distinct<MultipleTesting>(DifferentialTokens.Correction);
+        // FeatureLevel too: Level is the one mapping written as a ternary rather than a switch, so a
+        // third level would silently record as "protein" - the exact fall-through this test is for.
+        Distinct<FeatureLevel>(DifferentialTokens.Level);
     }
 }

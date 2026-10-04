@@ -67,6 +67,18 @@ public static class QuantCommand
                 problems.Add($"{what} '{value}' has leading or trailing spaces, which the command line trims");
             else if (value.IndexOfAny(new[] { '"', '$', '`' }) >= 0)
                 problems.Add($"{what} '{value}' contains a character no shell quotes the same way");
+            // Backslash, but only where the two shells actually disagree. Inside bash double quotes a
+            // backslash is an escape ONLY before $ ` " \ or a newline; the first three are already
+            // refused above, which leaves the doubled backslash - bash collapses "\\" to one, PowerShell
+            // keeps both - and a trailing one, which escapes the closing quote. A single backslash
+            // before an ordinary character is literal in both, so an ordinary Windows path (C:\data\run)
+            // still gets a command; refusing every backslash would mean never offering one on Windows.
+            else if (value.Contains(@"\\", StringComparison.Ordinal))
+                problems.Add($"{what} '{value}' contains a doubled backslash, which bash collapses to "
+                    + "one inside quotes and PowerShell does not (a UNC path reaches the program with "
+                    + "its leading separator lost)");
+            else if (value[^1] == '\\')
+                problems.Add($"{what} '{value}' ends with a backslash, which escapes the closing quote");
         }
 
         var args = new List<string> { "differential" };
@@ -106,7 +118,10 @@ public static class QuantCommand
         if (!rule.UseAdjusted)
             args.Add("--raw-p");
         args.AddRange(new[] { "--min-log2fc", rule.Log2FcThreshold.ToString("R", inv) });
-        if (o.MinPerGroup != 2)
+        // Against the option's OWN default, not a literal 2 repeated here: the class's promise is that
+        // the command still means the same thing if a default later changes, and a second copy of the
+        // number is the one way it could stop being true.
+        if (o.MinPerGroup != DifferentialOptions.DefaultMinPerGroup)
             args.AddRange(new[] { "--min-per-group", o.MinPerGroup.ToString(inv) });
 
         args.Add("--report");
@@ -143,9 +158,19 @@ public static class QuantCommand
     /// so what is printed here means the same in either shell.
     /// </remarks>
     public static string? For(QuantRequest request, DifferentialOptions options, out string? reason) =>
-        TryArguments(request, options, out var args, out reason)
-            ? "prism " + string.Join(" ", args.Select(Quote))
-            : null;
+        TryArguments(request, options, out var args, out reason) ? Line(args) : null;
+
+    /// <summary>
+    /// Arguments already resolved by <see cref="TryArguments(QuantRequest, DifferentialOptions, out IReadOnlyList{string}, out string?)"/>,
+    /// as the one line to paste into a shell.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="For"/> so a caller holding the argument list does not resolve the
+    /// request a second time to print it. The report records both, and two resolutions could in
+    /// principle disagree - the line and the list it is supposed to be a rendering of.
+    /// </remarks>
+    public static string Line(IReadOnlyList<string> arguments) =>
+        "prism " + string.Join(" ", arguments.Select(Quote));
 
     // Not ',' or '@': unquoted, PowerShell reads a,b as an array and a leading @ as splatting.
     private static string Quote(string arg) =>

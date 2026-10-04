@@ -288,7 +288,9 @@ public static class QuantAnalysis
         if (QuantCommand.TryArguments(request, options, out var args, out var noCommand))
         {
             commandArgs = args;
-            commandLine = QuantCommand.For(request, options, out _);
+            // Rendered from the arguments just resolved, not by resolving the request again, so the
+            // recorded list and the printed line cannot be two different answers.
+            commandLine = QuantCommand.Line(args);
         }
         else
         {

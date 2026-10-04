@@ -477,7 +477,7 @@ public static class Program
     private static int MinPerGroupFrom(string? text)
     {
         if (text is null)
-            return 2;
+            return DifferentialOptions.DefaultMinPerGroup;
         if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n < 1)
             throw new ArgumentException($"--min-per-group must be a whole number of at least 1, not '{text}'.");
         return n;
