@@ -15,10 +15,11 @@ public class QuantConfigYamlScalarTests
 {
     private static QuantConfig WithArms(string a, string b, string groupBy = "condition") => new(
         Level: "protein",
-        Contrast: new QuantContrast(groupBy, a, b, null),
+        Contrast: new QuantContrast(groupBy, new[] { a }, new[] { b }, null),
         Design: "TwoGroup",
         Test: "ModeratedT",
         Prior: "Controls",
+        PriorUsed: "Controls",
         Correction: "BH",
         Covariates: new string[0],
         HitRule: "adj.P < 0.05",
@@ -51,7 +52,7 @@ public class QuantConfigYamlScalarTests
     public void AScalarThatWouldRetype_IsQuoted(string value)
     {
         var yaml = WithArms(value, "other").ToYaml();
-        Assert.Contains($"group_a: \"{value}\"", yaml);
+        Assert.Contains($"group_a: [\"{value}\"]", yaml);
     }
 
     [Theory]
@@ -62,7 +63,7 @@ public class QuantConfigYamlScalarTests
     public void AnOrdinaryScalar_IsLeftUnquoted(string value)
     {
         var yaml = WithArms(value, "other").ToYaml();
-        Assert.Contains($"group_a: {value}\n", yaml);
+        Assert.Contains($"group_a: [{value}]\n", yaml);
     }
 
     [Fact]
@@ -70,7 +71,7 @@ public class QuantConfigYamlScalarTests
     {
         // Escaping only the quote left \r to be read as a carriage return.
         var yaml = WithArms(@"C:\data\run", "other").ToYaml();
-        Assert.Contains(@"group_a: ""C:\\data\\run""", yaml);
+        Assert.Contains(@"group_a: [""C:\\data\\run""]", yaml);
     }
 
     [Fact]
@@ -78,16 +79,27 @@ public class QuantConfigYamlScalarTests
     {
         // A raw newline inside a double-quoted scalar ends the line and breaks the document.
         var yaml = WithArms("two\nlines\there", "other").ToYaml();
-        Assert.Contains(@"group_a: ""two\nlines\there""", yaml);
+        Assert.Contains(@"group_a: [""two\nlines\there""]", yaml);
         // The value must not have broken the one-key-per-line shape.
-        Assert.Contains("group_b: other\n", yaml);
+        Assert.Contains("group_b: [other]\n", yaml);
     }
 
     [Fact]
     public void AQuote_IsStillEscaped()
     {
         var yaml = WithArms("say \"hi\"", "other").ToYaml();
-        Assert.Contains(@"group_a: ""say \""hi\""""", yaml);
+        Assert.Contains(@"group_a: [""say \""hi\""""]", yaml);
+    }
+
+    [Fact]
+    public void TheTrendColumn_FollowsTheSameRules()
+    {
+        // trend_over is the one scalar in the contrast block that used to bypass Yaml() entirely.
+        var c = WithArms("a", "b") with { Contrast = new QuantContrast(null, null, null, "1.0") };
+        Assert.Contains("trend_over: \"1.0\"", c.ToYaml());
+
+        var ok = WithArms("a", "b") with { Contrast = new QuantContrast(null, null, null, "Age") };
+        Assert.Contains("trend_over: Age\n", ok.ToYaml());
     }
 
     [Fact]

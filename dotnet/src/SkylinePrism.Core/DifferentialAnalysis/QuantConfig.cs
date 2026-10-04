@@ -80,7 +80,9 @@ public sealed record QuantConfig(
             sb.Append("clinical_csv: ").Append(YamlList(ClinicalCsvs)).Append('\n');
         sb.Append("contrast:\n");
         if (Contrast.TrendOver is not null)
-            sb.Append("  trend_over: ").Append(Contrast.TrendOver).Append('\n');
+            // Through Yaml() like group_by below: a trend column named "1.0", or one holding a colon,
+            // would otherwise be emitted bare and read back as something other than its name.
+            sb.Append("  trend_over: ").Append(Yaml(Contrast.TrendOver)).Append('\n');
         else
         {
             sb.Append("  group_by: ").Append(Yaml(Contrast.GroupBy)).Append('\n');
