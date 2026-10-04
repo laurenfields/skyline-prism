@@ -40,18 +40,25 @@
         <Grid Grid.Row="3" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="200" />
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="140" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Metadata report:" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True" />
+            <ComboBox Grid.Column="1" x:Name="MetadataReportCombo" VerticalAlignment="Center" IsEditable="True"
+                      ToolTip="Report carrying replicate annotations (default reads the Replicates document grid)." />
             <TextBlock Grid.Column="2" Text="Batch column:" VerticalAlignment="Center" Margin="16,0,8,0" />
             <TextBox Grid.Column="3" x:Name="BatchColumnBox" VerticalAlignment="Center"
-                     TextChanged="OnBatchColumnChanged" />
-            <TextBlock Grid.Column="4" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#888"
-                       Text="Pick the report carrying replicate annotations (default reads the Replicates document grid), then the batch/plate column name." TextWrapping="Wrap" />
+                     TextChanged="OnBatchColumnChanged"
+                     ToolTip="The batch/plate column name within the metadata report." />
+            <TextBlock Grid.Column="4" Text="Clinical CSV:" VerticalAlignment="Center" Margin="16,0,8,0" />
+            <TextBox Grid.Column="5" x:Name="ClinicalCsvBox" VerticalAlignment="Center" IsReadOnly="True"
+                     ToolTip="Optional external clinical metadata CSV, joined to the samples by an auto-detected key column. Its columns become available in the Differential pane's Group by and Adjust for." />
+            <Button Grid.Column="6" Content="Browse..." Margin="8,0,0,0" Padding="10,4" Click="OnBrowseClinical"
+                    ToolTip="Choose a clinical metadata CSV to join to the samples." />
         </Grid>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,8">
@@ -308,6 +315,8 @@
                              nothing to offer rather than an empty pane to click. -->
                         <ListBoxItem x:Name="IonNavItem" Content="Ion Accounting" Padding="10,7"
                                      Visibility="Collapsed" />
+                        <ListBoxItem x:Name="DiffNavItem" Content="Differential" Padding="10,7" />
+                        <ListBoxItem x:Name="MarkersNavItem" Content="Markers" Padding="10,7" />
                     </ListBox>
                     <Grid Grid.Column="1">
                         <DockPanel x:Name="QcPane">
@@ -322,9 +331,9 @@
                                     <ComboBoxItem>Peptide</ComboBoxItem>
                                     <ComboBoxItem>Protein</ComboBoxItem>
                                 </ComboBox>
-                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <TextBlock x:Name="DiffGroupByLabel" Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
                                 <ComboBox x:Name="QcGroupByCombo" Width="150" SelectionChanged="OnGroupByChanged"
-                                          ToolTip="Column from the Replicates report to group samples by (defaults to Sample Type)." />
+                                          ToolTip="Column to group samples by: from the Replicates report if the run exported one, plus the run's own sample_metadata.csv (which supplies batch) and any clinical CSV attached in the Differential pane. Defaults to Sample Type." />
                                 <TextBlock Text="=" VerticalAlignment="Center" Margin="8,0,4,0" />
                                 <ComboBox x:Name="QcGroupCombo" Width="190" IsEditable="True" IsReadOnly="True"
                                           ToolTip="Values to include. Tick more than one to combine them - e.g. Quality Control + Standard to compare the two control types without the unknowns. Tick none to show every sample.">
@@ -346,6 +355,26 @@
                                     <ComboBoxItem>RT-lowess</ComboBoxItem>
                                     <ComboBoxItem>RT-binned CV</ComboBoxItem>
                                     <ComboBoxItem>RT-bin boxplot</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="QcPcLabel" Text="PCs:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="QcPcXCombo" Width="52" SelectionChanged="OnQcChanged"
+                                          ToolTip="Component on the x axis. Higher components often carry the batch or run-order structure that PC1 and PC2 hide. Features are standardized and a missing cell is imputed to its feature mean; the SIGN of a component is arbitrary, so orientation can differ from another tool while distances and variance-explained do not. Color is metadata only - the decomposition itself is unsupervised.">
+                                    <ComboBoxItem IsSelected="True">1</ComboBoxItem>
+                                    <ComboBoxItem>2</ComboBoxItem>
+                                    <ComboBoxItem>3</ComboBoxItem>
+                                    <ComboBoxItem>4</ComboBoxItem>
+                                    <ComboBoxItem>5</ComboBoxItem>
+                                    <ComboBoxItem>6</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="vs" VerticalAlignment="Center" Margin="4,0,4,0" />
+                                <ComboBox x:Name="QcPcYCombo" Width="52" SelectionChanged="OnQcChanged"
+                                          ToolTip="Component on the y axis.">
+                                    <ComboBoxItem>1</ComboBoxItem>
+                                    <ComboBoxItem IsSelected="True">2</ComboBoxItem>
+                                    <ComboBoxItem>3</ComboBoxItem>
+                                    <ComboBoxItem>4</ComboBoxItem>
+                                    <ComboBoxItem>5</ComboBoxItem>
+                                    <ComboBoxItem>6</ComboBoxItem>
                                 </ComboBox>
                                 <TextBlock Text="(toggle View for before/after; PCA/CV/Intensity are interactive)"
                                            VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#888" />
@@ -525,6 +554,256 @@
                                            Foreground="#333" TextWrapping="Wrap" />
                             </WrapPanel>
                             <sp:WpfPlot x:Name="IonPlot" MouseMove="OnIonPlotMouseMove" />
+                        </DockPanel>
+
+                        <DockPanel x:Name="DiffPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="DiffViewCombo" Width="110" SelectionChanged="OnDiffViewChanged"
+                                          ToolTip="Volcano (moderated-t), peptide detection frequency, or g:Profiler enrichment of the significant hits. For a sample PCA use the QC pane, which draws the same decomposition and can group by the same columns.">
+                                    <ComboBoxItem>Volcano</ComboBoxItem>
+                                    <!-- Collapsed and disabled under a trend design: Detection
+                                         compares two GROUPS, and a trend has none. -->
+                                    <ComboBoxItem x:Name="DiffViewDetectionItem">Detection</ComboBoxItem>
+                                    <!-- Also collapsed under a trend: RunEnrichmentAsync resolves
+                                         A/B arms, which a trend does not have. -->
+                                    <ComboBoxItem x:Name="DiffViewEnrichmentItem">Enrichment</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffLevelCombo" Width="90" SelectionChanged="OnDiffLevelChanged"
+                                          ToolTip="Protein- or peptide-level corrected matrix.">
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Design:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffDesignCombo" Width="165" SelectionChanged="OnDiffDesignChanged"
+                                          ToolTip="How the samples are related. 'Unpaired' treats the two arms as independent groups. 'Paired' matches each subject's two samples by a subject column and tests the within-subject change, which removes between-subject variation from the residual - the reason a paired design is worth having. The two 'Trend' designs fit a slope against a NUMERIC column (time, dose, a numeric stage) instead of contrasting two arms; pick 'within subject' when the same subjects are followed across that column, because treating one subject's repeated samples as independent understates the standard error and reports more hits than the data support.">
+                                    <ComboBoxItem Tag="Unpaired">Unpaired</ComboBoxItem>
+                                    <ComboBoxItem Tag="Paired">Paired</ComboBoxItem>
+                                    <!-- Collapsed AND disabled when the run carries no numeric
+                                         metadata column, by UpdateDiffControls: WPF's arrow-key and
+                                         type-ahead selection skip disabled items but not collapsed
+                                         ones, so hiding alone leaves them a keypress away. -->
+                                    <ComboBoxItem x:Name="DiffDesignTrendItem" Tag="LinearTrend">Trend, independent</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffDesignTrendSubjectItem" Tag="LinearTrendWithinSubject">Trend, within subject</ComboBoxItem>
+                                </ComboBox>
+                                <!-- One control, two designs: it is the subject column in both the
+                                     paired case (match each subject's two samples) and the
+                                     within-subject trend (absorb each subject's level). -->
+                                <TextBlock x:Name="DiffPairByLabel" Text="Subject:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffPairByCombo" Width="140" SelectionChanged="OnDiffPairByChanged"
+                                          ToolTip="The metadata column identifying the subject - usually a patient or donor id. Under a paired design it matches each subject's two samples; under a within-subject trend it gives each subject its own level, so the slope is estimated within subject rather than across people." />
+                                <TextBlock x:Name="DiffTrendOverLabel" Text="Trend over:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffTrendOverCombo" Width="140" SelectionChanged="OnDiffTrendOverChanged"
+                                          ToolTip="The NUMERIC metadata column to fit the slope against - a timepoint, a dose, a numeric stage. Only columns whose every value parses as a number are offered, because a slope needs one. The reported effect is the modeled change across this column's observed range, so the effect-size cut means the same thing as a fold change does on a two-arm contrast." />
+                                <TextBlock Text="Test:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffTestCombo" Width="130" SelectionChanged="OnDiffTestChanged"
+                                          ToolTip="The estimator. 'Moderated t' is limma's empirical Bayes - it borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. Welch and Student are ordinary two-sample t-tests, independent per feature: what a reader means by 'a t-test', and less powerful here. Mann-Whitney is the rank test, which assumes nothing about the distribution but reports a median shift rather than a mean difference. Only the moderated t can adjust for covariates.">
+                                    <ComboBoxItem Tag="ModeratedT">Moderated t</ComboBoxItem>
+                                    <!-- Each of these applies to one design only. UpdateDiffControls
+                                         collapses AND disables the ones that do not apply: WPF's
+                                         arrow-key and type-ahead selection skip disabled items but
+                                         not collapsed ones, so hiding alone leaves an inapplicable
+                                         test one keypress away. Same idiom as RefreshQcPlotKinds. -->
+                                    <ComboBoxItem x:Name="DiffTestWelchItem" Tag="WelchT">Welch t</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestStudentItem" Tag="StudentT">Student t</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestMannWhitneyItem" Tag="MannWhitney">Mann-Whitney</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestPairedTItem" Tag="PairedT">Paired t</ComboBoxItem>
+                                    <ComboBoxItem x:Name="DiffTestWilcoxonItem" Tag="Wilcoxon">Wilcoxon</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffGroupByCombo" Width="150" SelectionChanged="OnDiffGroupByChanged"
+                                          ToolTip="Metadata column to split samples by (from sample_metadata.csv)." />
+                                <TextBlock x:Name="DiffALabel" Text="A =" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <!-- Tick lists, not single pickers: an arm is often the UNION of
+                                     several values - two control classes against the rest, say - and
+                                     no single value expresses that. Same idiom as the QC pane's
+                                     Group-by values; the closed-state text has to be written by hand
+                                     because a tick list has no SelectedItem. -->
+                                <ComboBox x:Name="DiffACombo" DropDownClosed="OnDiffTickListClosed" Width="150" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick one or more)"
+                                          ToolTip="Group A, the reference arm. Tick more than one value to contrast their union - e.g. Quality Control + Standard as one control arm. A value ticked in both arms is refused rather than silently dropped from one.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffBLabel" Text="vs B =" VerticalAlignment="Center" Margin="12,0,4,0" />
+                                <ComboBox x:Name="DiffBCombo" DropDownClosed="OnDiffTickListClosed" Width="150" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick one or more)"
+                                          ToolTip="Group B, the treatment arm; a positive log2 fold change means higher in B. Tick more than one value to contrast their union.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <!-- The hit rule, as a sentence: "Hits: [adjusted p] < [0.05],
+                                     |log2FC| >= [1]". Editable combos rather than plain text boxes
+                                     so the usual cuts are one click while any value can still be
+                                     typed; they re-run on DropDownClosed and on Enter/focus-loss,
+                                     never per keystroke, which would fire a contrast per digit.
+                                     DiffEffectLabel is named because a TREND design renames it -
+                                     the effect is then a change across the trend column's range,
+                                     not a fold change between two arms. -->
+                                <TextBlock Text="Hits:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffPKindCombo" Width="110" SelectionChanged="OnDiffThresholdSelected"
+                                          ToolTip="Which p-value the cut-off applies to. 'Adjusted p' is the honest default. 'Raw p' is offered because a small pilot cohort can have nothing at all surviving correction, and the uncorrected ranking is a legitimate way to judge whether a full study is worth running - the plot's y-axis and the status line both say which one is in force, so a screenshot cannot be mistaken for a corrected result.">
+                                    <ComboBoxItem Tag="Adjusted">Adjusted p</ComboBoxItem>
+                                    <ComboBoxItem Tag="Raw">Raw p</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="&lt;" VerticalAlignment="Center" Margin="6,0,4,0" />
+                                <ComboBox x:Name="DiffPCutCombo" Width="80" IsEditable="True"
+                                          DropDownClosed="OnDiffThresholdChanged" LostFocus="OnDiffThresholdLostFocus"
+                                          KeyDown="OnDiffThresholdKeyDown"
+                                          ToolTip="The p-value cut-off. Pick a usual value or type your own.">
+                                    <ComboBoxItem>0.05</ComboBoxItem>
+                                    <ComboBoxItem>0.01</ComboBoxItem>
+                                    <ComboBoxItem>0.001</ComboBoxItem>
+                                    <ComboBoxItem>0.1</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffEffectLabel" Text="|log2FC| &gt;=" VerticalAlignment="Center"
+                                           Margin="12,0,4,0" />
+                                <ComboBox x:Name="DiffEffectCutCombo" Width="70" IsEditable="True"
+                                          DropDownClosed="OnDiffThresholdChanged" LostFocus="OnDiffThresholdLostFocus"
+                                          KeyDown="OnDiffThresholdKeyDown"
+                                          ToolTip="Minimum absolute log2 effect for a hit. 1 is a two-fold change. Set 0 to switch the effect-size filter off and let the p-value alone decide, which is what you want when the effect is a slope you have no prior expectation for.">
+                                    <ComboBoxItem>1</ComboBoxItem>
+                                    <ComboBoxItem>0.585</ComboBoxItem>
+                                    <ComboBoxItem>2</ComboBoxItem>
+                                    <ComboBoxItem>0</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock x:Name="DiffCovariatesLabel" Text="Adjust for:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffCovariatesCombo" DropDownClosed="OnDiffTickListClosed" Width="170" IsEditable="True" IsReadOnly="True"
+                                          Text="(none)"
+                                          ToolTip="Covariates to adjust the contrast for (Sex, PMI, batch...). Tick any metadata column; numeric columns are centered, categorical ones dummy-coded. A ticked covariate switches Detection to the Firth GLM.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <!-- Tag carries the value, Content the label, as the Density and Ion
+                                     Accounting pickers do - so the displayed wording can change
+                                     without touching the dispatch. No SelectedIndex here: a
+                                     preselected Selector raises SelectionChanged from EndInit, part
+                                     way through InitializeComponent. LoadDifferentialAsync sets it.
+                                     See XamlInitializationOrderTests. -->
+                                <TextBlock x:Name="DiffPriorLabel" Text="Prior:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffPriorCombo" Width="150"
+                                          SelectionChanged="OnDiffPriorChanged"
+                                          ToolTip="Variance prior for the moderated-t (Volcano and Enrichment). 'Intensity trend' is the lab's default and matches proteomics-toolkit's moderation='intensity_trend': a LOWESS of within-group variance against within-group mean intensity, fitted on the raw linear scale, replacing only the prior scale. 'limma-trend' is limma's trend=TRUE - a spline against mean log2 expression that also re-estimates the prior degrees of freedom. They are DIFFERENT estimators despite the similar names and disagree by a few percent on p-values, so quote which one produced a hit list. 'Global' is one prior for every feature.">
+                                    <ComboBoxItem Tag="IntensityTrend">Intensity trend</ComboBoxItem>
+                                    <ComboBoxItem Tag="Global">Global</ComboBoxItem>
+                                    <ComboBoxItem Tag="LimmaTrend">limma-trend</ComboBoxItem>
+                                    <!-- Both need n_peptides, which only the protein matrix has, so
+                                         UpdateDiffControls collapses and disables them at peptide
+                                         level rather than offering a prior that cannot be fitted. -->
+                                    <ComboBoxItem x:Name="DiffPriorPeptideCountItem" Tag="PeptideCount">Peptide count</ComboBoxItem>
+                                </ComboBox>
+                                <!-- ToolTipService.ShowOnDisabled, because this control is GREYED
+                                     rather than hidden when the run has no controls, and WPF
+                                     suppresses tooltips on disabled elements by default - which
+                                     would hide the explanation at exactly the moment it is the only
+                                     thing the user needs. UpdateDiffControls rewrites the text for
+                                     the disabled case. -->
+                                <CheckBox x:Name="DiffPriorFromControlsCheck" Content="from controls"
+                                          VerticalAlignment="Center" Margin="8,0,0,0"
+                                          ToolTipService.ShowOnDisabled="True"
+                                          Checked="OnDiffPriorSourceChanged" Unchecked="OnDiffPriorSourceChanged" />
+                                <TextBlock x:Name="DiffCorrectionLabel" Text="Correct:" VerticalAlignment="Center"
+                                           Margin="16,0,4,0" />
+                                <ComboBox x:Name="DiffCorrectionCombo" Width="150"
+                                          SelectionChanged="OnDiffCorrectionChanged"
+                                          ToolTip="Multiple-testing correction applied to the raw p-values. Benjamini-Hochberg controls the false-discovery rate under independence or positive dependence. Benjamini-Yekutieli is valid under arbitrary dependence - worth reaching for at peptide level, where peptides from one protein are strongly correlated. Bonferroni and Holm control the family-wise error rate instead, and are far stricter. 'None' reports the raw p in the adjusted column.">
+                                    <ComboBoxItem Tag="BenjaminiHochberg">Benjamini-Hochberg</ComboBoxItem>
+                                    <ComboBoxItem Tag="BenjaminiYekutieli">Benjamini-Yekutieli</ComboBoxItem>
+                                    <ComboBoxItem Tag="Holm">Holm</ComboBoxItem>
+                                    <ComboBoxItem Tag="Bonferroni">Bonferroni</ComboBoxItem>
+                                    <ComboBoxItem Tag="None">None</ComboBoxItem>
+                                </ComboBox>
+                                <Button x:Name="DiffRunButton" Content="Run" Padding="12,2" Margin="16,0,0,0"
+                                        Click="OnRunDifferential"
+                                        ToolTip="Re-run the current contrast. Every selector here runs on its own when you change it - the arms and covariates when you close their list - so this is a manual refresh rather than a required step." />
+                                <Button x:Name="QuantReportButton" Content="Quant report..." Padding="12,2" Margin="8,0,0,0"
+                                        Click="OnGenerateQuantReport"
+                                        ToolTip="Run the current contrast across every view and write a self-contained quant_report.html plus result tables (CSV) to a quant/ folder in the output directory. Includes differential, detection, GO/pathway enrichment (needs internet), and the ticked Markers-pane panels." />
+                                <TextBlock x:Name="DiffStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="360" />
+                                </Grid.ColumnDefinitions>
+                                <sp:WpfPlot Grid.Column="0" x:Name="DiffPlot"
+                                            MouseLeftButtonDown="OnDiffPlotMouseDown"
+                                            MouseMove="OnDiffPlotMouseMove" />
+                                <DataGrid Grid.Column="1" x:Name="DiffGrid" AutoGenerateColumns="True"
+                                          AutoGeneratingColumn="OnDiffGridAutoGeneratingColumn"
+                                          SelectionChanged="OnDiffGridSelectionChanged"
+                                          SelectionMode="Single"
+                                          IsReadOnly="True" CanUserAddRows="False" Margin="6,0,0,0"
+                                          GridLinesVisibility="Horizontal" HeadersVisibility="Column" />
+                            </Grid>
+                        </DockPanel>
+
+                        <DockPanel x:Name="MarkersPane" Visibility="Collapsed">
+                            <WrapPanel DockPanel.Dock="Top" Margin="6,6,6,2">
+                                <TextBlock Text="Panels:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <ComboBox x:Name="MarkersPanelCombo" Width="240" IsEditable="True" IsReadOnly="True"
+                                          Text="(pick panels)"
+                                          ToolTip="One or more protein lists to evaluate together (your lists + PRISM's shipped panels). Tick several to union them into one heatmap. Manage lists from the Dynamic Range 'Protein lists...' editor.">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Margin="2,1" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock Text="Level:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersLevelCombo" Width="90" SelectionChanged="OnMarkersLevelChanged"
+                                          ToolTip="Protein- or peptide-level corrected matrix. Panels match by gene symbol, so protein level is usual.">
+                                    <ComboBoxItem>Protein</ComboBoxItem>
+                                    <ComboBoxItem>Peptide</ComboBoxItem>
+                                </ComboBox>
+                                <TextBlock Text="Group by:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersGroupByCombo" Width="150" SelectionChanged="OnMarkersGroupByChanged"
+                                          ToolTip="Metadata column that defines the groups (columns of the heatmap when showing group means)." />
+                                <TextBlock Text="View:" VerticalAlignment="Center" Margin="16,0,4,0" />
+                                <ComboBox x:Name="MarkersViewCombo" Width="130" SelectionChanged="OnMarkersViewChanged"
+                                          ToolTip="Heatmap columns: one per group (means) or one per sample.">
+                                    <ComboBoxItem>Group means</ComboBoxItem>
+                                    <ComboBoxItem>Per sample</ComboBoxItem>
+                                </ComboBox>
+                                <Button x:Name="MarkersReloadButton" Content="Reload" Padding="12,2" Margin="16,0,0,0"
+                                        Click="OnMarkersReload"
+                                        ToolTip="Re-read the corrected matrix and refresh the panel list." />
+                                <TextBlock x:Name="MarkersStatusText" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Foreground="#888" TextWrapping="Wrap" />
+                            </WrapPanel>
+                            <Border DockPanel.Dock="Bottom" Background="#F3F4F6" BorderBrush="#D0D4DA"
+                                    BorderThickness="1" CornerRadius="3" Margin="6,4,6,6" Padding="8,5">
+                                <TextBlock x:Name="MarkersNoteText" Foreground="#444" TextWrapping="Wrap"
+                                           FontSize="11.5"
+                                           Text="Pick a panel to evaluate its members across your groups." />
+                            </Border>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="3*" />
+                                    <RowDefinition Height="2*" />
+                                </Grid.RowDefinitions>
+                                <sp:WpfPlot Grid.Row="0" x:Name="MarkersHeatPlot" />
+                                <sp:WpfPlot Grid.Row="1" x:Name="MarkersBoxPlot" />
+                            </Grid>
                         </DockPanel>
                     </Grid>
                 </Grid>

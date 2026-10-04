@@ -15,6 +15,28 @@ test assembly (see `SkylinePrism.Tests.csproj`) and resolved via `AppContext.Bas
 > delete the fixture. To regenerate them anyway, check out the `v26.4.4` tag, which still has the
 > Python package.
 
+## Adding a golden for a new algorithm
+
+**Required for any change that computes a quantity a user will read** - see "New algorithms must be
+pinned to a golden" in `CLAUDE.md`. In short:
+
+- The generator is **checked in** and imports nothing from PRISM, so the golden cannot share a
+  mistake with the code under test.
+- The fixture's `reference` field **names the library and the call** that produced the numbers, not
+  just "reference implementation". A reader must be able to reproduce it without asking anyone.
+- Floats are written as **strings**, in shortest round-trip form, so the values do not depend on a
+  JSON parser's float handling.
+- The tolerance is stated per quantity with a reason. Closed-form arithmetic agrees to ~1e-13;
+  anything behind an iterative solve agrees to that solver's tolerance and no better.
+- Any place PRISM deliberately differs from the reference is written down, with why.
+
+`differential/generate.py` is the pattern to copy, and `differential/README.md` carries its
+per-quantity reference and tolerance table.
+
+**A golden failure is the gate working.** Find out which quantity moved and why before considering
+regeneration, and regenerate only the case in question - running a whole generator can silently
+rewrite its other fixtures from nothing more than a library version difference.
+
 ## `mini/merge/`
 Tiny byte-faithful slices of two real plate exports (`mini_plate1.csv`, `mini_plate2.csv`
 = header + first 2000 data rows of the corresponding

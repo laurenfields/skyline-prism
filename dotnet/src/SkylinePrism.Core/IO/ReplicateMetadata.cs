@@ -171,7 +171,7 @@ public sealed class ReplicateMetadata
         }
         var typeIdx = !string.IsNullOrWhiteSpace(sampleTypeColumn)
             ? FindColumn(header, new[] { sampleTypeColumn! })
-            : FindColumn(header, SampleTypeCols);
+            : FindSampleTypeColumn(header, lines, log);
         // For an explicit batch column, also match the "annotation_<Name>" form and the
         // annotation display name (Skyline may export either).
         var batchIdx = !string.IsNullOrWhiteSpace(batchColumn)
@@ -211,7 +211,15 @@ public sealed class ReplicateMetadata
                 values[name] = idx < f.Length ? f[idx].Trim() : "";
             md.ValuesByReplicate[rep] = values;
 
-            if (typeIdx >= 0 && f.Length > typeIdx)
+            // A Sample Type COLUMN is not a Sample Type ANNOTATION. Skyline's Replicates grid always
+            // offers the column and defaults every replicate to "Unknown", so a document whose sample
+            // types were never set exports a full column of unset cells. Recording those as
+            // "experimental" made the entry non-null, and the caller resolves
+            // TypeFor(...) ?? ClassifySampleType(...) - so sample_annotations.reference_pattern and
+            // qc_pattern became unreachable for exactly the documents they exist to serve, and every
+            // Ref/QC injection was reported experimental. Leave an unset row unrecorded instead, the
+            // same way the batch column below skips an empty or "#N/A" cell.
+            if (typeIdx >= 0 && f.Length > typeIdx && !IsUnsetSampleType(f[typeIdx]))
                 md.TypeByReplicate[rep] = MapSampleType(f[typeIdx]);
             if (batchIdx >= 0 && f.Length > batchIdx)
             {
@@ -234,7 +242,29 @@ public sealed class ReplicateMetadata
         return md;
     }
 
-    /// <summary>Skyline sample type -> PRISM sample type.</summary>
+    /// <summary>
+    /// Whether a Sample Type cell carries no annotation at all, as opposed to one that happens to
+    /// mean "ordinary sample".
+    ///
+    /// <para>"Unknown" is Skyline's DEFAULT for a replicate nobody has classified, not a statement
+    /// that the replicate is experimental - which is why it belongs here and not in
+    /// <see cref="MapSampleType"/>, whose job is to map a value the user did choose. Keeping the two
+    /// apart is what lets an unannotated document fall through to the name patterns while an
+    /// explicitly annotated one does not.</para>
+    /// </summary>
+    public static bool IsUnsetSampleType(string? skylineType)
+    {
+        var t = (skylineType ?? "").Trim();
+        return t.Length == 0
+            || t.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
+            || t.Equals("#N/A", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Skyline sample type -> PRISM sample type. Call <see cref="IsUnsetSampleType"/> first when the
+    /// answer decides whether an annotation exists: this maps "Unknown" and an empty cell to
+    /// "experimental", which is the right ANSWER but the wrong basis for "was anything annotated".
+    /// </summary>
     public static string MapSampleType(string? skylineType)
     {
         var t = (skylineType ?? "").Trim();
@@ -252,6 +282,77 @@ public sealed class ReplicateMetadata
             || t.Equals("Double Blank", StringComparison.OrdinalIgnoreCase))
             return "blank";
         return "experimental"; // Unknown and any unannotated/custom value
+    }
+
+    /// <summary>Every value Skyline's built-in Sample Type can take.</summary>
+    private static readonly string[] SkylineSampleTypes =
+        { "Unknown", "Standard", "Quality Control", "QC", "Solvent", "Blank", "Double Blank" };
+
+    /// <summary>
+    /// Pick the Sample Type column, which is NOT simply the first header that could be one.
+    ///
+    /// <para>A replicate annotation may be called "Sample Type" - and in clinical work it very often
+    /// is, meaning serum vs plasma. The export then carries two columns that both match: Skyline's
+    /// built-in <c>SampleType</c> (Unknown / Standard / Quality Control) and the user's annotation
+    /// (Serum / Plasma). Taking the first match bound to the annotation, whose values are not Skyline
+    /// sample types at all, so every replicate mapped to "experimental": a 96-replicate run lost all 6
+    /// references and all 6 QCs, ComBat lost its anchors, and the QC report had no controls to validate
+    /// against - with nothing logged, because a column HAD been found and every value HAD been
+    /// mapped.</para>
+    ///
+    /// <para>So when several headers match, prefer the one whose values are drawn from Skyline's own
+    /// vocabulary, and say which one was taken. Name order alone cannot decide this: the built-in and
+    /// the annotation are both free to be spelled either way.</para>
+    /// </summary>
+    private static int FindSampleTypeColumn(string[] header, string[] lines, Action<string>? log)
+    {
+        var matches = new List<int>();
+        foreach (var cand in SampleTypeCols)
+            for (var i = 0; i < header.Length; i++)
+                if (header[i].Trim().Equals(cand, StringComparison.OrdinalIgnoreCase) && !matches.Contains(i))
+                    matches.Add(i);
+
+        if (matches.Count <= 1)
+            return matches.Count == 1 ? matches[0] : -1;
+
+        var speaking = matches.Where(i => SpeaksSkylineSampleTypes(lines, i)).ToList();
+        var chosen = speaking.Count > 0 ? speaking[0] : matches[0];
+        var ignored = matches.Where(i => i != chosen).Select(i => $"'{header[i].Trim()}'");
+
+        log?.Invoke(
+            $"Replicates metadata: {matches.Count} columns could be the sample type; using "
+            + $"'{header[chosen].Trim()}' (column {chosen + 1})"
+            + (speaking.Count > 0
+                ? " - its values are Skyline sample types"
+                : " - NONE of them hold Skyline sample types, so this is a guess; set "
+                  + "metadata.sample_type_column if it is wrong")
+            + $". Ignoring {string.Join(", ", ignored)}.");
+        return chosen;
+    }
+
+    /// <summary>
+    /// Whether every value in <paramref name="col"/> that says anything is a Skyline sample type.
+    /// Empty and "#N/A" cells say nothing either way; a column of only those returns false, because
+    /// it gives no evidence that it is the built-in column.
+    /// </summary>
+    private static bool SpeaksSkylineSampleTypes(string[] lines, int col)
+    {
+        var seen = 0;
+        for (var i = 1; i < lines.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i]))
+                continue;
+            var f = SplitCsv(lines[i]);
+            if (f.Length <= col)
+                continue;
+            var v = f[col].Trim();
+            if (v.Length == 0 || v.Equals("#N/A", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!SkylineSampleTypes.Contains(v, StringComparer.OrdinalIgnoreCase))
+                return false;
+            seen++;
+        }
+        return seen > 0;
     }
 
     private static int FindColumn(string[] header, string[] candidates)

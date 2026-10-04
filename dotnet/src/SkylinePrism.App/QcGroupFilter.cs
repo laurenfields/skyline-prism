@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using SkylinePrism.Core.DifferentialAnalysis;
 
 namespace SkylinePrism.App;
 
@@ -20,11 +21,10 @@ public static class QcGroupFilter
     /// Values meaning "this sample is a control", in both vocabularies: the Replicates report carries
     /// Skyline's spellings, while PRISM's synthetic Sample Type column uses its own mapped names.
     /// </summary>
-    public static readonly string[] ControlValues =
-        { "Standard", "Quality Control", "QC", "reference", "qc" };
+    public static string[] ControlValues => ControlSampleTypes.Values;
 
     /// <summary>Comparer used throughout: annotation spellings vary in case between sources.</summary>
-    public static StringComparer Comparer => StringComparer.OrdinalIgnoreCase;
+    public static StringComparer Comparer => ControlSampleTypes.Comparer;
 
     /// <summary>
     /// Indices of the samples to plot. An EMPTY selection means "no filter" - every sample - which is how
@@ -56,8 +56,7 @@ public static class QcGroupFilter
             : string.Join(", ", selected);
 
     /// <summary>Whether a Group-by value denotes a control sample.</summary>
-    public static bool IsControlValue(string? value) =>
-        value is not null && ControlValues.Contains(value, Comparer);
+    public static bool IsControlValue(string? value) => ControlSampleTypes.IsControl(value);
 
     /// <summary>
     /// The control values present in <paramref name="available"/>. Empty when the column is not a

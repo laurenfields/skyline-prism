@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -1330,6 +1330,10 @@ public partial class MainWindow : Window
             InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
             InvalidateIonAccounting(); // and a new ion_accounting.parquet for the Ion accounting pane
+            InvalidateDifferential(); // and new corrected matrices + merged_data for the Differential pane
+            InvalidateMarkers();      // and the Markers pane, whose cache is keyed on (dir, level) -
+                                      // a re-run into the same directory matches it and would redraw
+                                      // the PREVIOUS run's matrix under the new run's caption
             RenderQc(); // draws on the UI thread (cheap; the ScottPlot control requires it)
             Log("Done.");
             ShowVisualization(VizPane.Qc); // land on the plots when the run finishes
@@ -1411,6 +1415,10 @@ public partial class MainWindow : Window
             _runCancellation?.Cancel();
         }
         SetRangeFollowActive(false); // stop polling Skyline's selection
+        // The enrichment poster owns its HttpClient (HttpJsonPoster sets _ownsClient when it builds
+        // one), and it is created lazily on the first query, so it may never have existed.
+        _diffPoster?.Dispose();
+        _diffPoster = null;
         base.OnClosing(e);
     }
 
@@ -1428,6 +1436,7 @@ public partial class MainWindow : Window
         InvalidateDensity();
         InvalidateDynamicRange();
         InvalidateIonAccounting();
+        InvalidateDifferential();
 
         // Whether the Ion accounting pane exists AT ALL depends on this directory carrying measured
         // ion accounting, so the rail has to be re-checked here and not only when a pane changes -
@@ -2075,6 +2084,19 @@ public partial class MainWindow : Window
     // window's: the Ion accounting pane holds a separate one for the directory IT is showing, so neither
     // pane can install annotations the other's cached data was not exported with.
     private ReplicateAnnotations _qcAnnotations = ReplicateAnnotations.Empty;
+
+    /// <summary>
+    /// Grouping columns that do NOT come from a Skyline Replicates report: the run's own
+    /// <c>sample_metadata.csv</c> (which contributes <c>batch</c>), plus any clinical CSV the
+    /// Differential pane has joined.
+    ///
+    /// <para>This is what let the QC PCA be used at all on a CLI-produced run. The Replicates
+    /// report is written only when PRISM exported it from a Skyline document, so without it the
+    /// Group-by dropdown offered nothing but Sample Type - and a batch-correction tool that cannot
+    /// color its PCA by batch is the wrong way round. A second PCA was built elsewhere in the
+    /// window partly to work around exactly this.</para>
+    /// </summary>
+    private SampleAnnotationTable _qcExtraAnnotations = SampleAnnotationTable.Empty;
     private bool _suppressQcRender;
 
     // Loads the QC parquet matrices into _qcData. Safe to call on a background thread (no UI access
@@ -2089,12 +2111,17 @@ public partial class MainWindow : Window
             // Reset BEFORE the reads, beside the matrices: a failure below must not leave the previous
             // directory's annotations installed under this directory's data.
             _qcAnnotations = ReplicateAnnotations.Empty;
+            _qcExtraAnnotations = SampleAnnotationTable.Empty;
             LoadQcMatrix("raw|peptide", Path.Combine(outputDir, "peptides_rollup.parquet"), isLinear: false);
             LoadQcMatrix("corrected|peptide", Path.Combine(outputDir, "corrected_peptides.parquet"), isLinear: true);
             LoadQcMatrix("raw|protein", Path.Combine(outputDir, "proteins_raw.parquet"), isLinear: false);
             LoadQcMatrix("corrected|protein", Path.Combine(outputDir, "corrected_proteins.parquet"), isLinear: true);
             _markerReport = MarkerNormalizationReport.Read(outputDir);
             _qcAnnotations = ReplicateAnnotations.Read(Path.Combine(outputDir, "skyline-reports"), Log);
+            // sample_type is left out: the QC pane already offers it as "Sample Type" from
+            // _qcTypes, and the same grouping under two spellings is only confusing.
+            _qcExtraAnnotations = SampleAnnotationTable.Read(
+                Path.Combine(outputDir, "sample_metadata.csv"), "sample_id", "sample", "sample_type");
         }
         catch (Exception ex)
         {
@@ -2159,12 +2186,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// The zero-based component a PC dropdown is pointing at, or <paramref name="fallback"/> before
+    /// the combo has been populated (the first render happens during window construction).
+    /// </summary>
+    private static int SelectedPcIndex(System.Windows.Controls.ComboBox combo, int fallback)
+    {
+        var text = (combo?.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Content as string;
+        return int.TryParse(text, out var n) && n >= 1 ? n - 1 : fallback;
+    }
+
+    /// <summary>
     /// A QC sample's value in a Group-by column, from the QC pane's own annotation snapshot; the
     /// synthetic Sample Type column falls back to sample_metadata.csv when no Replicates report is available.
     /// </summary>
+    // Source order is deliberate: the document's own Replicates report first (it is what the
+    // person analysing the data curated in Skyline), then the run's sample_metadata.csv and any
+    // joined clinical table, then the sample type. Each step only runs when the one before it had
+    // nothing, so a richer source adds columns without overriding an annotation Skyline exported.
     private string SampleAnnotation(string sampleId, string column)
     {
         var value = _qcAnnotations.ValueOf(sampleId, column);
+        if (!string.IsNullOrEmpty(value))
+            return value;
+        value = _qcExtraAnnotations.ValueOf(sampleId, column);
         if (!string.IsNullOrEmpty(value))
             return value;
         if (column.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase))
@@ -2176,14 +2220,14 @@ public partial class MainWindow : Window
     private void PopulateGroupCombos()
     {
         _suppressQcRender = true;
-        var columns = _qcAnnotations.Columns.Count > 0
-            ? _qcAnnotations.Columns.ToList()
-            : new List<string> { "Sample Type" };
+        // QcGroupColumns, not inline: which columns this offers is the whole point of reading
+        // sample_metadata.csv and of publishing a clinical join here, and both are silent when
+        // wrong. See QcGroupColumnsTests.
+        var columns = QcGroupColumns.Offer(_qcAnnotations.Columns, _qcExtraAnnotations.Columns);
         QcGroupByCombo.Items.Clear();
         foreach (var c in columns)
             QcGroupByCombo.Items.Add(c);
-        var def = columns.FindIndex(c => c.Replace(" ", "").Equals("SampleType", StringComparison.OrdinalIgnoreCase));
-        QcGroupByCombo.SelectedIndex = def >= 0 ? def : 0;
+        QcGroupByCombo.SelectedIndex = QcGroupColumns.DefaultIndex(columns);
         PopulateValueCombo();
         _suppressQcRender = false;
     }
@@ -2304,8 +2348,15 @@ public partial class MainWindow : Window
 
     private void OnQcChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (!_suppressQcRender)
-            RenderQc();
+        // IsInitialized, not just the suppress flag: the PC pickers preselect a component in XAML
+        // (<ComboBoxItem IsSelected="True">), so WPF raises SelectionChanged from that ComboBox's
+        // EndInit - part way through InitializeComponent, when QcPlot and QcImage are declared below
+        // it and their fields are still null. RenderQc reaches them through ShowQcMessage on an empty
+        // run, which threw an NRE out of the window's constructor: a startup crash, not a handler
+        // error. See XamlInitializationOrderTests.
+        if (!IsInitialized || _suppressQcRender)
+            return;
+        RenderQc();
     }
 
     // PCA / CV / Intensity are live ScottPlot; the rest are the qc_report.html plots rendered as
@@ -2355,6 +2406,14 @@ public partial class MainWindow : Window
     {
         var isRt = kind is "RT-lowess" or "RT-binned CV" or "RT-bin boxplot";
         var beforeAfter = kind == "RT-binned CV";
+
+        // The component pair means nothing to a CV or intensity plot, so it is hidden rather than
+        // grayed: a disabled control still invites a click, and this row is already crowded.
+        var isPca = kind == "PCA";
+        var pcVisibility = isPca ? Visibility.Visible : Visibility.Collapsed;
+        QcPcLabel.Visibility = pcVisibility;
+        QcPcXCombo.Visibility = pcVisibility;
+        QcPcYCombo.Visibility = pcVisibility;
         if (isRt && QcLevelCombo.SelectedIndex != 0)
         {
             _suppressQcRender = true;
@@ -2471,7 +2530,10 @@ public partial class MainWindow : Window
                     break;
                 case "CV distribution": DrawCv(plt, matrix, colorLabels, level, view, groupLabel); break;
                 case "Intensity distribution": DrawIntensity(plt, matrix, colorLabels, level, view, groupLabel); break;
-                default: _hoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view, groupLabel); break;
+                default:
+                    _hoverPoints = DrawPca(plt, matrix, colorLabels, sampleNames, level, view,
+                        groupLabel, SelectedPcIndex(QcPcXCombo, 0), SelectedPcIndex(QcPcYCombo, 1));
+                    break;
             }
         }
         catch (Exception ex)
@@ -2660,15 +2722,31 @@ public partial class MainWindow : Window
 
     private static List<(Coordinates Loc, string Name)> DrawPca(
         Plot plt, double[,] featuresBySamples, List<string> types, List<string> names,
-        string level, string view, string group)
+        string level, string view, string group, int pcX, int pcY)
     {
-        var nF = featuresBySamples.GetLength(0);
         var nS = featuresBySamples.GetLength(1);
-        var samplesByFeatures = new double[nS, nF];
-        for (var f = 0; f < nF; f++)
-            for (var s = 0; s < nS; s++)
-                samplesByFeatures[s, f] = featuresBySamples[f, s];
-        var scores = Pca.Fit2D(samplesByFeatures);
+        // Pca.Fit on the features x samples matrix, NOT a transpose into Fit2D. The transpose was
+        // a full second copy of the largest object in the pipeline - 5.7 GB on a 100-document
+        // peptide matrix, on the large object heap - built only to be read one feature at a time,
+        // which is the layout it started in. Avoiding exactly that is why the overload exists.
+        //
+        // Standardize + impute-to-feature-mean stay the QC defaults: with hundreds of samples,
+        // dropping every feature with one gap would discard most of the matrix, and without
+        // scaling the few most abundant proteins would set the axes by themselves.
+        var want = Math.Max(pcX, pcY) + 1;
+        var fit = Pca.Fit(featuresBySamples, new PcaOptions { Components = want });
+        var nComp = fit.Scores.GetLength(1);
+        if (nComp == 0)
+        {
+            PlotRenderer.DrawEmptyState(plt, "Not enough data for a PCA.");
+            return new List<(Coordinates Loc, string Name)>();
+        }
+
+        // Asking for PC6 of a five-sample run is a reasonable thing to do by accident; fall back
+        // to what exists rather than throwing out of a draw.
+        var ax = Math.Min(pcX, nComp - 1);
+        var ay = Math.Min(pcY, nComp - 1);
+        var scores = fit.Scores;
         var groups = new Dictionary<string, (List<double> X, List<double> Y)>();
         var points = new List<(Coordinates Loc, string Name)>(nS);
         for (var i = 0; i < nS; i++)
@@ -2676,9 +2754,9 @@ public partial class MainWindow : Window
             var t = types[i];
             if (!groups.TryGetValue(t, out var g))
                 groups[t] = g = (new List<double>(), new List<double>());
-            g.X.Add(scores[i, 0]);
-            g.Y.Add(scores[i, 1]);
-            points.Add((new Coordinates(scores[i, 0], scores[i, 1]), names[i]));
+            g.X.Add(scores[i, ax]);
+            g.Y.Add(scores[i, ay]);
+            points.Add((new Coordinates(scores[i, ax], scores[i, ay]), names[i]));
         }
         var colorIndex = 0;
         foreach (var (label, g) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -2692,8 +2770,11 @@ public partial class MainWindow : Window
         }
         plt.ShowLegend();
         // No title in the tool - the View/Level/Group/Plot selectors above already describe the plot.
-        plt.XLabel("PC1");
-        plt.YLabel("PC2");
+        // The variance each component carries goes on its axis, which is the one number that says
+        // whether the separation on screen is worth anything.
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        plt.XLabel($"PC{ax + 1} ({(fit.VarianceRatio[ax] * 100).ToString("0.0", inv)}%)");
+        plt.YLabel($"PC{ay + 1} ({(fit.VarianceRatio[ay] * 100).ToString("0.0", inv)}%)");
         return points;
     }
 

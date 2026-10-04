@@ -336,11 +336,13 @@ pre { background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 6px; paddin
 
     /// <summary>
     /// "Analysis Information": which PRISM produced these numbers, when, on what machine, from what
-    /// inputs, and with which settings. The provenance facts come from the run's parameters.json - not
-    /// from the binary rendering the page, which may be a later `prism qc` - while the settings come
-    /// from the config handed to the report.
+    /// inputs, and with which settings. The provenance facts (version, date, host, source files,
+    /// isolation scheme) come from the run's parameters.json - not from the binary rendering the page,
+    /// which may be a later `prism qc` - while the processing-parameter table and re-runnable YAML come
+    /// from the config handed to the report. Internal rather than private so the quantification report
+    /// renders the SAME header from the same code - a second copy would drift.
     /// </summary>
-    private static void AppendRunInfo(
+    internal static void AppendRunInfo(
         StringBuilder sb, Provenance.RunInfo? info, PrismConfig config, string generatedAt)
     {
         sb.Append("<div class=\"box\"><h2>Analysis Information</h2>");

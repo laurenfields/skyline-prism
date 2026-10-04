@@ -1,7 +1,9 @@
-using SkylinePrism.Core.IO;
+﻿using SkylinePrism.Core.IO;
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using SkylinePrism.Cli;
 using Xunit;
 
@@ -238,6 +240,257 @@ public class CliIntegrationTests
             Cleanup(outDir);
             Cleanup(inputDir);
         }
+    }
+
+    /// <summary>
+    /// `prism differential` end to end: run the pipeline, then ask a contrast of its output.
+    /// </summary>
+    /// <remarks>
+    /// One pipeline run serves every assertion below - it is about a second on the mini fixture, but
+    /// a contrast is microseconds, so paying for it once per fact would be most of the test time.
+    /// </remarks>
+    [Fact]
+    public void Differential_TestsAContrastAgainstAFinishedRun()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+
+            var csv = Path.Combine(outDir, "differential.csv");
+            var (code, output) = Invoke(
+                "differential", "-d", outDir, "--group-by", "sample_type", "-a", "qc", "-b", "experimental");
+
+            Assert.Equal(0, code);
+            Assert.True(File.Exists(csv), "the default results path is inside the output directory");
+
+            // The status line names the method that produced the numbers - with a menu this size it
+            // is the only thing that makes a saved console log interpretable.
+            // The prior's SOURCE is part of the headline, and the mini fixture has QC and reference
+            // replicates, so the default is to fit on them rather than on the contrast groups.
+            Assert.Contains("moderated t (intensity-trend prior from controls), unpaired", output,
+                StringComparison.Ordinal);
+            Assert.Contains("sample_type = experimental vs qc", output, StringComparison.Ordinal);
+            Assert.Contains("Benjamini-Hochberg", output, StringComparison.Ordinal);
+
+            var lines = File.ReadAllLines(csv);
+
+            // The header outlives the shell it was produced in, so it carries the contrast direction.
+            Assert.StartsWith("# contrast: sample_type = experimental vs qc", lines[0], StringComparison.Ordinal);
+            Assert.Contains("positive log2FC is higher in experimental", lines[0], StringComparison.Ordinal);
+            Assert.StartsWith("# method:", lines[1], StringComparison.Ordinal);
+            // The rule is recorded, and recorded as NOT having filtered the rows - every tested
+            // feature is in the file, so a reader must not take the header as a description of
+            // which rows survived.
+            Assert.Contains(lines, l => l.StartsWith("# hit rule", StringComparison.Ordinal)
+                                        && l.Contains("NOT filtered", StringComparison.Ordinal));
+
+            // Found by its content rather than its index, so adding another comment line is not a
+            // test failure - the index is what broke when the hit rule was added.
+            var headerIndex = Array.FindIndex(lines, l => l.StartsWith("feature_id,", StringComparison.Ordinal));
+            Assert.Equal(
+                "feature_id,label,gene,protein,accession,log2fc,fc,ave_expr,statistic,"
+                + "p_value,adj_p_value,mean_a,mean_b",
+                lines[headerIndex]);
+
+            var rows = lines.Skip(headerIndex + 1).Where(l => l.Length > 0).ToList();
+            Assert.NotEmpty(rows);
+
+            // Rows come out most significant first, and the p-values are real numbers in invariant
+            // culture - a decimal comma would silently shift every column one to the right.
+            var pValues = rows
+                .Select(r => double.Parse(r.Split(',')[9], CultureInfo.InvariantCulture))
+                .ToList();
+            Assert.Equal(pValues.OrderBy(v => v), pValues);
+            Assert.All(pValues, v => Assert.InRange(v, 0.0, 1.0));
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// Each arm is the UNION of its levels, so a level added to an arm can only grow it.
+    /// </summary>
+    [Fact]
+    public void Differential_PoolsSeveralLevelsIntoOneArm()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+
+            var (oneCode, one) = Invoke(
+                "differential", "-d", outDir, "-g", "sample_type", "-a", "qc", "-b", "experimental",
+                "-o", Path.Combine(outDir, "one.csv"));
+            var (bothCode, both) = Invoke(
+                "differential", "-d", outDir, "-g", "sample_type", "-a", "qc,reference",
+                "-b", "experimental", "-o", Path.Combine(outDir, "both.csv"));
+
+            Assert.Equal(0, oneCode);
+            Assert.Equal(0, bothCode);
+            Assert.Contains("= experimental vs qc", one, StringComparison.Ordinal);
+            Assert.Contains("= experimental vs qc + reference", both, StringComparison.Ordinal);
+
+            // Same arm B, larger arm A: the A count must rise and B must not move.
+            var (aOne, bOne) = ArmCounts(one);
+            var (aBoth, bBoth) = ArmCounts(both);
+            Assert.True(aBoth > aOne, $"pooling should grow arm A ({aOne} -> {aBoth})");
+            Assert.Equal(bOne, bBoth);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// The arm sizes the status line reports, as (A, B).
+    /// </summary>
+    /// <remarks>
+    /// The line is "n = &lt;B label&gt; &lt;nB&gt; vs &lt;A label&gt; &lt;nA&gt;" - B first, matching
+    /// the contrast line above it, with each count next to the arm it belongs to. It used to be a
+    /// bare "n = nA vs nB" under a line reading "B vs A", which invited reading the first number as
+    /// the arm named first.
+    /// </remarks>
+    private static (int A, int B) ArmCounts(string output)
+    {
+        // The labels can contain spaces ("qc + reference"), so they are matched lazily and the
+        // pattern is anchored on the semicolon that ends the counts.
+        var m = Regex.Match(output, @"n = .+? (\d+) vs .+? (\d+);");
+        Assert.True(m.Success, $"the status line should report both arm sizes; got: {output}");
+        // Group 1 is B (printed first), group 2 is A.
+        return (int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture),
+                int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// The refusals. Each one is a thing a user can type that would otherwise produce a plausible
+    /// answer to a different question than the one asked.
+    /// </summary>
+    [Theory]
+    // A level on both sides puts the same samples on both sides of the contrast.
+    [InlineData("both arms", "-g", "sample_type", "-a", "qc,experimental", "-b", "experimental")]
+    // A typo in a level name, named by the arm it emptied.
+    [InlineData("Arm B matched no samples", "-g", "sample_type", "-a", "qc", "-b", "nosuchlevel")]
+    // A column that is not in the metadata at all.
+    [InlineData("No metadata column", "-g", "nosuchcolumn", "-a", "qc", "-b", "experimental")]
+    // Paired without the column that says which samples are a pair.
+    [InlineData("needs --subject", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--design", "paired")]
+    // ... and the reverse, which would otherwise report an unpaired result for a paired-looking command.
+    [InlineData("--subject needs --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--subject", "batch")]
+    // --pair-by is kept as an alias, so it must reach the same refusal rather than being ignored.
+    [InlineData("--subject needs --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--pair-by", "batch")]
+    // A trend needs its numeric column...
+    [InlineData("needs --trend-over", "--design", "trend")]
+    // ...and a within-subject trend needs a subject column as well.
+    [InlineData("needs --subject", "--design", "trend-within-subject", "--trend-over", "batch")]
+    // A trend column without a trend design would otherwise be silently ignored.
+    [InlineData("--trend-over needs --design trend", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--trend-over", "batch")]
+    // A covariate handed to a test with no design matrix to put it in.
+    [InlineData("--adjust-for needs --test moderated", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--test", "welch", "--adjust-for", "batch")]
+    // Adjusting for the contrast itself leaves nothing to test.
+    [InlineData("is the term being tested", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--adjust-for", "sample_type")]
+    // The same rule on a trend, where the tested term is the trend column rather than the group-by.
+    // Unguarded this built [1, x, x] and died on a rank check naming neither flag.
+    [InlineData("is the term being tested", "--design", "trend", "--trend-over", "batch",
+        "--adjust-for", "batch")]
+    // A test the design cannot run is refused rather than silently swapped for the moderated t.
+    [InlineData("does not apply to --design trend", "--design", "trend", "--trend-over", "batch",
+        "--test", "mann-whitney")]
+    [InlineData("does not apply to --design paired", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--design", "paired", "--subject", "batch", "--test", "welch")]
+    [InlineData("Unknown --test", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--test", "ttest")]
+    [InlineData("Unknown --correction", "-g", "sample_type", "-a", "qc", "-b", "experimental",
+        "--correction", "fdr")]
+    [InlineData("--level must be", "-g", "sample_type", "-a", "qc", "-b", "experimental", "--level", "gene")]
+    public void Differential_RefusesAndSaysWhy(string expected, params string[] args)
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+
+            var (code, output) = Invoke(new[] { "differential", "-d", outDir }.Concat(args).ToArray());
+
+            Assert.NotEqual(0, code);
+            Assert.Contains(expected, output, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(outDir, "differential.csv")),
+                "a refused contrast must not leave a results file behind");
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    /// <summary>
+    /// The variance prior is fitted on the control replicates by default, and says so - and
+    /// --prior-from-groups restores the older behavior for reproducing an earlier result.
+    /// </summary>
+    /// <remarks>
+    /// The default matters: a prior taken from the contrast groups of a real study describes
+    /// measurement noise plus the biology those groups carry, and shrinks the effects being looked
+    /// for. This pins that the default is the control-based one and that the two are distinguishable
+    /// from the output alone.
+    /// </remarks>
+    [Fact]
+    public void Differential_FitsThePriorOnControlsByDefault_AndNamesTheSource()
+    {
+        var outDir = TempDir();
+        try
+        {
+            Assert.Equal(0, Run(outDir));
+            string[] Args(params string[] extra) => new[]
+            {
+                "differential", "-d", outDir, "-g", "sample_type", "-a", "qc", "-b", "experimental",
+                "-o", Path.Combine(outDir, "d.csv"),
+            }.Concat(extra).ToArray();
+
+            var byDefault = Invoke(Args()).Output;
+            var byGroups = Invoke(Args("--prior-from-groups")).Output;
+            var byControls = Invoke(Args("--prior-from-controls")).Output;
+
+            Assert.Contains("intensity-trend prior from controls", byDefault, StringComparison.Ordinal);
+            Assert.Contains("intensity-trend prior from controls", byControls, StringComparison.Ordinal);
+            Assert.Contains("intensity-trend prior from design groups", byGroups, StringComparison.Ordinal);
+
+            // Asking for both at once is a contradiction, not a precedence puzzle.
+            var both = Invoke(Args("--prior-from-controls", "--prior-from-groups"));
+            Assert.NotEqual(0, both.Code);
+            Assert.Contains("opposite things", both.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(outDir);
+        }
+    }
+
+    [Fact]
+    public void Differential_WithoutTheRequiredFlags_PrintsUsage()
+    {
+        var (code, output) = Invoke("differential", "-d", "nowhere");
+
+        Assert.Equal(2, code);
+        Assert.Contains("Usage: prism differential", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Differential_IsListedAndDocumented()
+    {
+        var usage = Invoke("--help").Output;
+        Assert.Contains("differential", usage, StringComparison.Ordinal);
+
+        var help = Invoke("differential", "--help").Output;
+        Assert.Contains("--group-by", help, StringComparison.Ordinal);
+        Assert.Contains("--prior-from-controls", help, StringComparison.Ordinal);
+        Assert.Contains("--correction", help, StringComparison.Ordinal);
     }
 
     /// <summary>

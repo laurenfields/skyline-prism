@@ -1,4 +1,4 @@
-# The Skyline external tool
+﻿# The Skyline external tool
 
 PRISM ships as a Skyline external tool: a Windows window that runs the pipeline on one or more Skyline
 documents and then shows interactive plots of the result. Installation is in the
@@ -34,10 +34,12 @@ its own state — zoom, ticked replicates, matrices already read — while you a
 
 | Pane | What it is for |
 |------|----------------|
-| **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation) |
+| **QC Plots** | Normalization and batch-correction diagnostics (CV, PCA, intensity, RT, correlation). The PCA groups by the Replicates report, `sample_metadata.csv` (`batch`) and any attached clinical CSV, and any component pair up to PC6 |
 | **Spectrum density** | How many precursors a single DIA spectrum had to resolve at once |
 | **Dynamic Range** | Log10 abundance against abundance rank, over the corrected matrices |
 | **Ion accounting** | How many ions reached the detector, and what share of them a peptide sequence explains |
+| **Differential** | limma moderated-t contrast (volcano, peptide detection, enrichment) between two sample groups |
+| **Markers** | Row z-scored heatmap + per-group boxplot for a protein panel |
 
 A pane with nothing to draw yet shows a sentence saying why, on a panel with no axes — deliberately,
 so an empty result cannot be misread as a flat measurement.
@@ -190,13 +192,13 @@ their membership:
 
 | Category | Panels | What it is for |
 |---|---|---|
-| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial content`, `White matter`, `Grey matter` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion, dissected tissue |
+| **Normalizers** | `EV markers (core)`, `Glomerulus`, `Histones (proteomic ruler)`, `Ribosomal proteins`, `Mitochondrial content`, `White matter`, `Gray matter` | Proportional to how much material was captured, and *not* to the phenotype. Each answers a different "per unit of": marked material, glomerulus, **cell** (histones), biosynthetic capacity, mitochondrion, dissected tissue |
 | **Plasma and blood** | `Classic plasma proteins`, `Free soluble acidic plasma proteins`, `Immunoglobulin and complement`, `Lipoproteins (LDL/VLDL/HDL)`, `Platelet microparticles`, `EV markers (extended)` | What is in the sample matrix. Good for highlighting; usable as a denominator only where the biology under study does not move them |
 | **Endothelial** | Arterial, venous, capillary, pan-endothelial, brain/BBB, liver sinusoidal, kidney glomerular | Vascular bed identity — which endothelium a signal comes from |
 | **Epithelial** | Pan-epithelial, kidney tubule, intestine, lung | Epithelial identity, kept separate from endothelial: different tissues that happen to alliterate |
 | **Readouts and contamination** | `Hemolysis`, `Fibrinogen`, `Keratin contamination`, `Tubular contamination`, `Common contaminants (cRAP)`, `Housekeeping proteins` | Their abundance **is** the problem being looked for, so dividing by it removes the evidence |
 | **Pathways and processes** | Oxidative phosphorylation, glycolysis, TCA cycle, proteasome, lysosome, spliceosome/hnRNP, extracellular matrix, actin cytoskeleton, antigen presentation, acute phase response, chaperones, redox, DNA damage repair, autophagy, unfolded protein response, innate immune signaling, apoptosis, fatty acid oxidation, cell cycle, epithelial-mesenchymal transition, hypoxia response, glucose and lipid metabolism, insulin signaling | For seeing where a process sits on a plot. Normalizing to one would remove the biology under study |
-| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin` (identity); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result. `White matter`/`Grey matter` sit under Normalizers, with the caution below |
+| **Brain and neurodegeneration** | `Neuronal markers`, `Astrocyte markers`, `Microglia markers`, `Oligodendrocyte and myelin` (identity); `Alzheimer's disease`, `Parkinson's disease` (+ RAB substrates, lysosomal), `ALS and FTD`, `Huntington's disease`, `Synaptic proteins`, `Brain fluid-like proteins` (display) | Cell types can be denominators; the disease panels cannot — in a study of them, their abundance *is* the result. `White matter`/`Gray matter` sit under Normalizers, with the caution below |
 
 **Readouts and pathways are refused by `marker_normalization`** rather than merely discouraged — naming
 one gives an error explaining why. Both fail for the same reason: their abundance is the signal, not the
@@ -470,6 +472,190 @@ The tab reads the merged data from the output directory, so it works for a run t
 finished *and* for any previous run's output directory, with no Skyline connection. Either layout
 opens: the partitioned `merged_data/` directory, or the single `merged_data.parquet` written before
 dotnet-v26.12.0.
+
+---
+
+## Differential
+
+A local differential-abundance workflow over the corrected matrix, run entirely inside the tool — no
+notebook, no Python, no network except the optional enrichment call. It reads
+`corrected_proteins.parquet` / `corrected_peptides.parquet` and `sample_metadata.csv` from the output
+directory, so it works on a finished run or any previous run's output directory, with or without a live
+Skyline connection.
+
+Pick the **Level** (protein or peptide), a **Group by** metadata column, and the values to contrast
+(**A** vs **B**); a positive log2 fold change means higher in B. Both arms are tick lists, so either
+can be the **union** of several values — `experimental + reference` against `qc` as one arm, say. A
+value ticked in both arms is refused rather than dropped from one, because which side lost it would
+change the answer.
+
+**Adjust for** ticks any metadata column as a covariate — numeric columns are mean-centered,
+categorical ones dummy-coded — which is how a disease-vs-control contrast is run with batch (or sex,
+PMI, ...) held. Only the moderated t can honor a covariate; it is the only test with a design matrix
+to put one in, so the control grays out for the others rather than letting a ticked covariate look
+like it was applied.
+
+**Design** says how the samples are related:
+
+| Design | What it fits |
+|---|---|
+| **Unpaired** (default) | Two independent groups. |
+| **Trend, independent** | Fits a slope against a **numeric** column - a timepoint, a dose, a numeric stage - and tests whether it differs from zero. No arms. Assumes one sample per subject. |
+| **Trend, within subject** | The same slope where the same subjects are followed across that column, fitted as `[1, x, subject dummies]` - the paired design generalized from a two-level column to a numeric one. Use this whenever a subject contributes more than one sample, or the standard error is understated. |
+| **Paired** | Matches each subject's two samples by a **Subject** column and tests the within-subject change. The moderated t fits it as `[1, group, subject dummies]` — a *fixed*-effect subject block, as the lab's toolkit does, which takes each subject's overall level out of the residual. That is the whole point: a within-subject shift gets tested against within-subject noise rather than against the spread between people. Subjects present in only one arm, or with more than one sample in an arm, are left out and counted in the status line. |
+
+A trend design replaces **Group by / A / B** with a single **Trend over** picker, which lists only
+the metadata columns whose every value parses as a number - a slope needs one. With no such column in
+the run, both trend entries are hidden and disabled. **Detection** is hidden too: it compares
+observed-versus-not between two groups, and a trend has none. Clicking a point opens the feature's
+**trajectory** - abundance against the trend column with the fitted line, plus one faint line per
+subject under a within-subject design, which is that design's whole point made visible.
+
+**Test** picks the estimator, and the list follows the design:
+
+| Test | Notes |
+|---|---|
+| **Moderated t** (default) | limma empirical Bayes. Borrows variance information across features, which is what makes it the right default on the small-n designs proteomics usually has. The only test that uses a variance prior, and the only one that can adjust for covariates. |
+| **Welch t** / **Student t** | Ordinary two-sample t, independent per feature — what a reader means by "a t-test", and less powerful here. Welch does not assume equal variances; Student pools them. Unpaired only. |
+| **Mann-Whitney** | Rank test, assumes nothing about the distribution, reports a *median* shift rather than a mean difference. Unpaired only. |
+| **Paired t** | One-sample t on the within-subject differences. Paired only. |
+| **Wilcoxon** | Signed-rank on those differences; reports a median shift. Paired only. |
+
+> [!NOTE]
+> Both rank tests use the normal approximation with a tie correction. scipy's defaults switch to an
+> exact permutation distribution on small samples (below n = 9 for Mann-Whitney, up to n = 50 for
+> Wilcoxon), which PRISM does not implement — so on a very small group its p-value will differ from a
+> default-argument scipy run. Note also that scipy's two rank tests disagree with each other about the
+> continuity correction, and PRISM follows each one's own convention.
+
+**Correct** chooses the multiple-testing correction: Benjamini-Hochberg (default), Benjamini-Yekutieli,
+Holm, Bonferroni, or None. BY is the one to reach for at peptide level, where peptides from one protein
+are strongly correlated — the dependence BH's assumptions do not cover.
+
+**Prior** chooses the empirical-Bayes variance prior, and the choice is not cosmetic:
+
+| Prior | What it fits |
+|---|---|
+| **Intensity trend** (default) | The lab's own, matching `proteomics-toolkit`'s `moderation="intensity_trend"`: a LOWESS of within-group variance against within-group mean intensity on the **raw linear** scale, one point per (feature, group), replacing only the prior *scale*. |
+| **Global** | One prior for every feature - Smyth (2004). |
+| **limma-trend** | limma's `trend=TRUE`: a natural cubic spline against mean **log2** expression, which also re-estimates the prior *degrees of freedom*. |
+| **Peptide count** | DEqMS (Zhu 2020): a LOWESS against `log(peptide count)`. What it adds is that a protein rolled up from many peptides is better determined than one rolled up from few *at the same intensity* — information abundance alone does not carry. Protein level only, so it is hidden at peptide level. |
+
+**Intensity trend and limma-trend are different estimators despite the similar names** - different
+smoother, different scale, different unit of observation, and only one of them moves the prior degrees
+of freedom. They disagree by a median 3-7% on p-values, so a hit list should say which one produced it.
+
+**from controls** fits the prior on the run's QC and reference replicates instead of on the contrast
+groups. A design group's within-group spread is part biology and part measurement, and only the second
+is what a variance prior is meant to describe; including the first inflates the prior and over-shrinks
+genuine signal. The controls take no part in the contrast itself, and each control type is its own
+group — pooling QC with reference would count the systematic gap between two different materials as
+measurement noise. The box is unavailable on a run with fewer than two control replicates.
+
+Whichever combination is chosen, **the status line names the method that produced the result**, along
+with the sample counts the test actually used and anything it could not honor (a covariate a rank test
+cannot take, a prior that could not be fitted and fell back). With a menu this size that line is the
+record of what a hit list came from.
+The status line names the prior that ran. The **View** selector gives three things over the same
+contrast:
+
+- **Volcano** — moderated-t log2 fold change against -log10 p, with a ranked hit table beside it.
+  Clicking a point, or a row in the table, opens a per-feature boxplot of that feature's log2 abundance
+  split by the two groups.
+- **Detection** — a per-peptide test of whether a peptide is *detected* (from the transition-level
+  `merged_data` `DetectionQValue`, not the dense abundance) at a different rate between the two groups.
+  This is the genuine on/off signal the dense corrected matrix cannot give. Which test runs follows the
+  design: Fisher exact when unpaired, **McNemar's exact test** over the matched pairs when the design is
+  paired, and a Firth-penalized logistic regression when covariates are set. Under McNemar only the
+  *discordant* pairs carry information — a subject detected in both conditions, or in neither, is its own
+  control and says nothing — so the two discordant counts are in the table beside the rates; a result
+  resting on three pairs should not look like one resting on thirty. Ticking a covariate under a paired
+  design falls back to the unpaired GLM, because adjusting a paired binary outcome needs conditional
+  logistic regression, which is not implemented; the status line says so rather than letting it pass.
+- **Enrichment** — g:Profiler functional enrichment of the significant hits against the tested
+  background.
+
+  > [!IMPORTANT]
+  > **This sends data off the machine, to a third party.** Running it POSTs gene symbols to
+  > `biit.cs.ut.ee` (g:Profiler) and, on the disease-association view, to
+  > `api.platform.opentargets.org` — and not only the significant hits: the enrichment *background*
+  > is every gene quantified in the run, so the full tested gene list is submitted with each query.
+  > Nothing else about the samples goes with it — no abundances, no replicate names, no clinical
+  > annotations — but the gene list itself describes the experiment. Nothing is sent until the view
+  > is opened; no other part of PRISM makes a network request. If your data is under an agreement
+  > that restricts sending derived data to third parties, do not use this view.
+
+> [!NOTE]
+> **The sample PCA is in the QC Plots pane, not here.** There were briefly two - this pane had its own
+> because the QC one could only be grouped by a Skyline Replicates report, which a run from the CLI does
+> not have. The QC pane now groups by that report *plus* the run's own `sample_metadata.csv` (so `batch`
+> is always available) *plus* any clinical CSV attached below, and lets you pick which component pair to
+> plot, so there is one PCA and it can do what both could.
+
+Read every view against the same caveats: the corrected matrix is dense, so an "undetected" peptide is
+imputed baseline rather than missing and a fold change can reflect baseline noise (the Detection view is
+the on/off signal); peptide-level q-values are anti-conservative because peptides from one protein are
+correlated; and enrichment only re-describes whatever hit list it was handed. The
+statistics all live in `SkylinePrism.Core.DifferentialAnalysis`, are covered by the cross-platform test
+suite, and are pinned to scipy/statsmodels/inmoose by committed goldens - see
+[differential-analysis.md](differential-analysis.md), which also records where PRISM and the lab's
+`proteomics-toolkit` agree and where they do not.
+
+> [!NOTE]
+> **The same contrasts run headlessly.** `prism differential -d <output-dir> --group-by <column>
+> -a <level...> -b <level...>` takes the whole menu this pane offers - level, design, pairing column,
+> test, variance prior, covariates, correction - and writes a results CSV. It shares the arm
+> resolution and the estimators with this pane, so the two cannot disagree. See
+> [differential-analysis.md](differential-analysis.md#from-the-command-line).
+
+### The quant report
+
+**Quant report...** (beside **Run**) writes a self-contained `quant_report.html` to a `quant/` folder
+in the output directory — the quantification counterpart to the QC report. It runs the pane's current
+contrast across every view and bundles them into one page that shares the QC report's Analysis
+Information header, so the report names the version, date, host and inputs of the run behind the
+numbers. It records the analysis parameters as a table and re-runnable YAML, then renders a section per
+view (differential, detection, enrichment, and each panel ticked in the Markers pane) with embedded
+plots.
+
+Beside the HTML it writes the underlying tables as CSVs, including the **raw per-sample abundances in
+linear scale** (`differential_values.csv`, `markers_<panel>_values.csv`) so the export stands on its
+own for reanalysis — see [output_files.md](output_files.md#quant-report-differential-pane) for the full
+list. Enrichment needs network access; a view with nothing to show (no network, no ticked panels, a
+trend design with no two-group detection) is omitted with a note rather than failing the report. The
+report opens in your browser when it finishes.
+
+The report's detection section is the **unpaired Fisher exact test** whatever the design; unlike this
+pane's Detection view it does not yet switch to McNemar for a paired design or to the Firth GLM when
+covariates are ticked, and the section says so whenever the contrast is one where the two differ.
+
+### Attaching a clinical CSV
+
+The **Clinical CSV** input at the top of the window (beside the metadata report) joins an external
+clinical table to the samples. The identifier column is detected by value — the column whose entries best
+match the sample names, preferring a near one-to-one match so a low-cardinality column cannot win by
+coincidence — and every other column is added to the metadata, so it becomes available in **Group by**
+and **Adjust for** across the Differential and Markers panes. If nothing matches at least half the
+samples, nothing is added and the status line says so.
+
+---
+
+## Markers
+
+Evaluates a **protein panel** — a marker set — against the corrected matrix. Pick one or more panels from
+**Panels** (the same lists the Dynamic Range plot uses: your own plus PRISM's shipped panels; tick
+several to union them), a **Level**, a **Group by** column, and a **View**:
+
+- The **heatmap** shows each matched member's abundance, **row z-scored on log2**, as marker × group
+  (group means) or marker × sample (per-sample). Blue-white-red is centered at zero; the colorbar is the
+  scale.
+- The **boxplot** below shows, per group, each sample's mean marker z-score — the panel's overall level in
+  that group.
+
+The status line reports how many of the panel's members matched a feature (`found N/total`), and the note
+bar lists the members that were not detected in this run. Matching is by gene symbol (and accession/name),
+so it is a protein-level view by nature; peptide level matches sparsely. Panels are managed from the
+Dynamic Range pane's **Protein lists...** editor; click **Reload** here to pick up newly-saved lists.
 
 ---
 

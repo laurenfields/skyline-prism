@@ -148,6 +148,13 @@ the merged data, which keeps identically named reference/QC injections from diff
 Double-clicking the installed `SkylinePrism.exe` opens the same window in **standalone mode** — a plain
 PRISM GUI with no Skyline running. See [dotnet/README.md](dotnet/README.md) for details.
 
+Once a run finishes, the **Visualization** tab holds the interactive views: QC plots, Spectrum density,
+Dynamic Range (with protein lists and two-way selection with the document tree), Ion accounting, a
+**Differential** analysis pane (limma moderated-t volcano, sample PCA, peptide detection-frequency test,
+and g:Profiler enrichment, with covariate adjustment and per-feature boxplots), and a **Markers** pane
+(row z-scored heatmap + per-group boxplot for any protein panel). An external clinical metadata CSV can
+be attached at the top of the window and joined to the samples for grouping and covariate adjustment.
+
 **[docs/skyline-tool.md](docs/skyline-tool.md)** covers what the window does once a run finishes: the
 Dynamic Range and Spectrum density plots, protein lists, two-way selection with the document tree,
 stopping a run, and the environment variables.
@@ -182,6 +189,7 @@ warning.
 | `prism run` | Run the full pipeline (rollup → normalize → batch-correct → QC) |
 | `prism merge` | Merge Skyline transition reports into one peptide-partitioned parquet dataset |
 | `prism qc` | (Re)generate `qc_report.html` from an existing output directory |
+| `prism differential` | Differential abundance on a finished output directory - two arms, or a slope against a numeric column |
 | `prism ion-accounting` | Count acquired ions from the instrument files and the fraction assigned to a peptide |
 | `prism isolation-scheme` | Read the acquisition's DIA isolation windows from a data file and record them |
 | `prism compare` | Compare control-sample CVs between two runs |

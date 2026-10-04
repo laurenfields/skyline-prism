@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using SkylinePrism.Core.Config;
+using SkylinePrism.Core.DifferentialAnalysis;
 using SkylinePrism.Core.IO;
 using SkylinePrism.Core.Pipeline;
 using SkylinePrism.Core.Qc;
@@ -39,6 +41,7 @@ public static class Program
                 "run" => CmdRun(rest),
                 "merge" => CmdMerge(rest),
                 "qc" => CmdQc(rest),
+                "differential" => CmdDifferential(rest),
                 "ion-accounting" => CmdIonAccounting(rest),
                 "isolation-scheme" => CmdIsolationScheme(rest),
                 "compare" => CmdCompare(rest),
@@ -184,6 +187,348 @@ public static class Program
             dir, config, savePlots: config.QcReport.SavePlots, log: Console.WriteLine);
         Console.WriteLine($"QC report written to: {path}");
         return 0;
+    }
+
+    /// <summary>
+    /// Two-group differential abundance against a finished output directory - the whole statistical
+    /// menu the Differential pane offers, from a headless shell.
+    /// </summary>
+    /// <remarks>
+    /// Its own command, and never part of <c>prism run</c>: a contrast is a question asked OF a
+    /// finished result, and the same result answers many of them. It reads
+    /// <c>corrected_{peptides,proteins}.parquet</c> and <c>sample_metadata.csv</c> and writes
+    /// nothing back, so it cannot disturb the run it reads.
+    ///
+    /// <para>Arms are resolved by <see cref="ContrastArms"/>, the same code the GUI uses, so a
+    /// selection made in the pane and one typed here cannot mean different samples.</para>
+    /// </remarks>
+    private static int CmdDifferential(string[] args)
+    {
+        var opts = ParseOptions(args, multiValue: new HashSet<string> { "-a", "--group-a", "-b", "--group-b", "--adjust-for" });
+        var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
+        var groupBy = opts.GetSingleOrNull("-g", "--group-by");
+        // Both spellings on both arms: a level with a space in it is one -a argument, several levels
+        // are several, and a comma-separated list is what a reader reaches for first.
+        var aLevels = SplitLevels(opts.GetList("-a", "--group-a"));
+        var bLevels = SplitLevels(opts.GetList("-b", "--group-b"));
+        var trendRequested = IsTrendRequested(opts);
+        if (dir is null || (!trendRequested && (groupBy is null || aLevels.Count == 0 || bLevels.Count == 0)))
+        {
+            Console.Error.WriteLine(
+                "Usage: prism differential -d <output-dir> --group-by <column> -a <level...> -b <level...>");
+            Console.Error.WriteLine(
+                "   or: prism differential -d <output-dir> --design trend --trend-over <column>");
+            Console.Error.WriteLine("Run 'prism differential --help' for the full option list.");
+            return 2;
+        }
+
+        var level = (opts.GetSingleOrNull("--level") ?? "protein").ToLowerInvariant() switch
+        {
+            "peptide" or "peptides" => FeatureLevel.Peptide,
+            "protein" or "proteins" => FeatureLevel.Protein,
+            var other => throw new ArgumentException($"--level must be protein or peptide, not '{other}'"),
+        };
+
+        var dataset = DifferentialDataset.Load(dir, level);
+        if (trendRequested)
+            return RunDifferentialTrend(opts, dataset, level, dir);
+        if (!dataset.MetadataColumns.Contains(groupBy!))
+            throw new ArgumentException(
+                $"No metadata column '{groupBy}'. Available: {string.Join(", ", dataset.MetadataColumns)}");
+
+        var arms = ContrastArms.Resolve(dataset.MetadataValues(groupBy!), aLevels, bLevels);
+        if (!arms.Ok)
+        {
+            Console.Error.WriteLine($"Error: {arms.Error}");
+            var present = dataset.MetadataValues(groupBy!)
+                .Where(v => !string.IsNullOrEmpty(v)).Distinct(StringComparer.Ordinal)
+                .OrderBy(v => v, StringComparer.Ordinal);
+            Console.Error.WriteLine($"Values of '{groupBy}': {string.Join(", ", present)}");
+            return 2;
+        }
+
+        var options = DifferentialOptionsFrom(opts, dataset, groupBy!);
+        var result = Differential.Run(dataset.ExprLog2, dataset.FeatureIds, arms.A, arms.B, options);
+
+        var aLabel = ContrastArms.Describe(aLevels);
+        var bLabel = ContrastArms.Describe(bLevels);
+        Console.WriteLine($"{options.Describe(result.VariancePrior)}: {groupBy} = {bLabel} vs {aLabel}");
+        // Named, not positional. The line above reads "B vs A" while NA/NB are A then B, so a bare
+        // "n = 16 vs 160" under it invites reading the first number as the arm named first.
+        Console.WriteLine(
+            $"  n = {bLabel} {result.NB} vs {aLabel} {result.NA}; "
+            + $"{result.NFeaturesTested} of {result.NFeaturesTotal} "
+            + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
+        foreach (var m in result.Messages.Concat(result.Warnings))
+            Console.WriteLine($"  {m}");
+
+        // The count is the headline, so say what it counts: the same list under BY and under BH is
+        // two different claims, and a bare "41 significant" records neither.
+        var rule = SignificanceRuleFrom(opts);
+        var hits = result.Rows.Count(rule.IsSignificant);
+        Console.WriteLine(
+            $"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe()}, {DifferentialCsv.CorrectionName(options.Correction)})");
+
+        var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
+        DifferentialCsv.Write(outPath, result, dataset, options, rule, groupBy!, aLabel, bLabel);
+        Console.WriteLine($"Results written to: {outPath}");
+        return 0;
+    }
+
+    /// <summary>Whether the flags ask for a trend design.</summary>
+    private static bool IsTrendRequested(ParsedOptions opts) =>
+        (opts.GetSingleOrNull("--design") ?? string.Empty).ToLowerInvariant()
+            is "trend" or "trend-within-subject" or "trend-repeated";
+
+    /// <summary>
+    /// <c>prism differential --design trend</c>: fit a slope against a numeric column.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the two-arm path for the same reason the pane's is - there are no arms to
+    /// resolve or name - while sharing the options builder, the hit rule and the CSV writer, so a
+    /// trend result is the same file shape as any other.
+    /// </remarks>
+    private static int RunDifferentialTrend(
+        ParsedOptions opts, DifferentialDataset dataset, FeatureLevel level, string dir)
+    {
+        var options = DifferentialOptionsFrom(opts, dataset, groupBy: string.Empty);
+        var trendOver = options.TrendColumn!;
+        var raw = dataset.MetadataValues(trendOver);
+        var x = new double[raw.Length];
+        for (var i = 0; i < raw.Length; i++)
+            x[i] = raw[i] is { } v
+                && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+                ? d
+                : double.NaN;
+
+        var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
+        var result = Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, x, options);
+        var rule = SignificanceRuleFrom(opts);
+
+        var (xLow, xHigh) = DifferentialCsv.TrendEndpoints(x);
+        var span = $"{xLow} to {xHigh}";
+        var n = result.NSubjects > 0
+            ? $"{result.NA} samples in {result.NSubjects} subjects"
+            : $"{result.NA} samples";
+
+        Console.WriteLine($"{options.Describe(result.VariancePrior)}: {trendOver} {span}");
+        Console.WriteLine(
+            $"  n = {n}; {result.NFeaturesTested} of {result.NFeaturesTotal} "
+            + $"{(level == FeatureLevel.Peptide ? "peptides" : "proteins")} tested");
+        foreach (var m in result.Messages.Concat(result.Warnings))
+            Console.WriteLine($"  {m}");
+
+        var effectName = $"log2 change across {trendOver}";
+        var hits = result.Rows.Count(rule.IsSignificant);
+        Console.WriteLine($"  {hits} hit{(hits == 1 ? "" : "s")} ({rule.Describe(effectName)}, "
+            + $"{DifferentialCsv.CorrectionName(options.Correction)})");
+
+        var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
+        DifferentialCsv.Write(outPath, result, dataset, options, rule, trendOver,
+            aLabel: xLow, bLabel: xHigh, effectName: effectName);
+        Console.WriteLine($"Results written to: {outPath}");
+        return 0;
+    }
+
+    /// <summary>Levels from repeated flags and/or comma-separated lists, in the order given.</summary>
+    private static List<string> SplitLevels(IEnumerable<string> raw) =>
+        raw.SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+           .ToList();
+
+    private static double ParseDouble(string? text, double fallback) =>
+        text is not null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? v : fallback;
+
+    private static string TestName(DifferentialTest test) => test switch
+    {
+        DifferentialTest.WelchT => "welch",
+        DifferentialTest.StudentT => "student",
+        DifferentialTest.MannWhitney => "mann-whitney",
+        DifferentialTest.PairedT => "paired-t",
+        DifferentialTest.Wilcoxon => "wilcoxon",
+        _ => "moderated",
+    };
+
+    private static string DesignName(DifferentialDesign design) => design switch
+    {
+        DifferentialDesign.Paired => "paired",
+        DifferentialDesign.LinearTrend => "trend",
+        DifferentialDesign.LinearTrendWithinSubject => "trend-within-subject",
+        _ => "unpaired",
+    };
+
+    /// <summary>
+    /// The hit rule, from the same flags the pane offers as controls.
+    /// </summary>
+    /// <remarks>
+    /// <c>--alpha</c> keeps its old meaning as the p-value cut. It used to be applied to the
+    /// adjusted p unconditionally; <c>--raw-p</c> now moves it to the uncorrected one, and the
+    /// printed rule says which, so a logged run cannot be mistaken for a corrected one.
+    /// </remarks>
+    private static SignificanceRule SignificanceRuleFrom(ParsedOptions opts) => new()
+    {
+        PThreshold = ParseDouble(opts.GetSingleOrNull("--alpha"), 0.05),
+        UseAdjusted = opts.GetSingleOrNull("--raw-p") is null,
+        Log2FcThreshold = ParseDouble(opts.GetSingleOrNull("--min-log2fc"), 1.0),
+    };
+
+    /// <summary>The statistical selections, read from the flags the same way the pane reads combos.</summary>
+    private static DifferentialOptions DifferentialOptionsFrom(
+        ParsedOptions opts, DifferentialDataset dataset, string groupBy)
+    {
+        var design = (opts.GetSingleOrNull("--design") ?? "unpaired").ToLowerInvariant() switch
+        {
+            "unpaired" => DifferentialDesign.Unpaired,
+            "paired" => DifferentialDesign.Paired,
+            "trend" => DifferentialDesign.LinearTrend,
+            "trend-within-subject" or "trend-repeated" => DifferentialDesign.LinearTrendWithinSubject,
+            var other => throw new ArgumentException(
+                $"--design must be unpaired, paired, trend or trend-within-subject, not '{other}'"),
+        };
+        var test = (opts.GetSingleOrNull("--test") ?? "moderated").ToLowerInvariant() switch
+        {
+            "moderated" or "moderated-t" => DifferentialTest.ModeratedT,
+            "welch" or "welch-t" => DifferentialTest.WelchT,
+            "student" or "student-t" => DifferentialTest.StudentT,
+            "paired-t" => DifferentialTest.PairedT,
+            "wilcoxon" => DifferentialTest.Wilcoxon,
+            "mann-whitney" or "mannwhitney" => DifferentialTest.MannWhitney,
+            var other => throw new ArgumentException($"Unknown --test '{other}'"),
+        };
+        var prior = (opts.GetSingleOrNull("--prior") ?? "intensity-trend").ToLowerInvariant() switch
+        {
+            "intensity-trend" => VariancePrior.IntensityTrend,
+            "global" => VariancePrior.Global,
+            "limma-trend" => VariancePrior.LimmaTrend,
+            "peptide-count" => VariancePrior.PeptideCount,
+            var other => throw new ArgumentException($"Unknown --prior '{other}'"),
+        };
+        var correction = (opts.GetSingleOrNull("--correction") ?? "bh").ToLowerInvariant() switch
+        {
+            "bh" or "benjamini-hochberg" => MultipleTesting.BenjaminiHochberg,
+            "by" or "benjamini-yekutieli" => MultipleTesting.BenjaminiYekutieli,
+            "holm" => MultipleTesting.Holm,
+            "bonferroni" => MultipleTesting.Bonferroni,
+            "none" => MultipleTesting.None,
+            var other => throw new ArgumentException($"Unknown --correction '{other}'"),
+        };
+
+        string?[]? subjects = null;
+        // One column, two designs: it matches each subject's two samples under --design paired, and
+        // gives each subject its own level under --design trend-within-subject. --subject is the
+        // name that reads correctly for both; --pair-by stays as its alias.
+        var pairBy = opts.GetSingleOrNull("--subject", "--pair-by");
+        var needsSubject = design is DifferentialDesign.Paired
+            or DifferentialDesign.LinearTrendWithinSubject;
+        if (needsSubject)
+        {
+            if (pairBy is null)
+                throw new ArgumentException(
+                    $"--design {DesignName(design)} needs --subject <column> to group samples by.");
+            if (!dataset.MetadataColumns.Contains(pairBy))
+                throw new ArgumentException($"No metadata column '{pairBy}' to group subjects by.");
+            subjects = dataset.MetadataValues(pairBy);
+        }
+        else if (pairBy is not null)
+        {
+            // Silently ignoring it would report an unpaired result for a command that reads paired.
+            throw new ArgumentException(
+                "--subject needs --design paired or --design trend-within-subject.");
+        }
+
+        var isTrend = design is DifferentialDesign.LinearTrend
+            or DifferentialDesign.LinearTrendWithinSubject;
+        var trendOver = opts.GetSingleOrNull("--trend-over");
+        if (isTrend)
+        {
+            if (trendOver is null)
+                throw new ArgumentException(
+                    "A trend design needs --trend-over <column>, the numeric column to fit against.");
+            if (!dataset.MetadataColumns.Contains(trendOver))
+                throw new ArgumentException($"No metadata column '{trendOver}' to fit a trend against.");
+        }
+        else if (trendOver is not null)
+        {
+            throw new ArgumentException("--trend-over needs --design trend or --design trend-within-subject.");
+        }
+
+        var covariates = new List<Covariate>();
+        foreach (var name in SplitLevels(opts.GetList("--adjust-for")))
+        {
+            if (!dataset.MetadataColumns.Contains(name))
+                throw new ArgumentException($"No metadata column '{name}' to adjust for.");
+            // The tested term, whichever it is. On a trend the guard used to compare against an
+            // EMPTY groupBy, so --trend-over week --adjust-for week built [1, week, week] - exactly
+            // singular - and died on a rank check naming neither flag.
+            var tested = trendOver ?? groupBy;
+            if (!string.IsNullOrEmpty(tested) && string.Equals(name, tested, StringComparison.Ordinal))
+                throw new ArgumentException(
+                    $"'{name}' is the term being tested; adjusting for it would leave nothing to test.");
+            covariates.Add(Covariate.FromMetadata(name, dataset.MetadataValues(name)));
+        }
+        if (covariates.Count > 0 && test != DifferentialTest.ModeratedT)
+            throw new ArgumentException(
+                "--adjust-for needs --test moderated; the other tests have no design matrix to put a "
+                + "covariate in.");
+
+        // A test that the chosen design cannot run is REFUSED, never quietly swapped. The pane hides
+        // the inapplicable entries so the question cannot arise there; the CLI has no such filter,
+        // and without this it accepted --design trend --test mann-whitney, ran the moderated t, and
+        // then printed "Mann-Whitney U" over the result because Describe() reads what was ASKED for.
+        var allowed = design switch
+        {
+            DifferentialDesign.Unpaired => new[]
+            {
+                DifferentialTest.ModeratedT, DifferentialTest.WelchT, DifferentialTest.StudentT,
+                DifferentialTest.MannWhitney,
+            },
+            DifferentialDesign.Paired => new[]
+            {
+                DifferentialTest.ModeratedT, DifferentialTest.PairedT, DifferentialTest.Wilcoxon,
+            },
+            // A trend has no two samples to compare, only a slope.
+            _ => new[] { DifferentialTest.ModeratedT },
+        };
+        if (Array.IndexOf(allowed, test) < 0)
+            throw new ArgumentException(
+                $"--test {TestName(test)} does not apply to --design {DesignName(design)}. "
+                + $"That design runs: {string.Join(", ", allowed.Select(TestName))}.");
+
+        // The prior's per-feature SCALE comes from the run's QC and reference replicates whenever
+        // it has any. That is the default, not an option, because the design groups of a real study
+        // contain the biology the analysis exists to find: a prior fitted on them describes
+        // measurement noise plus that biology, and shrinks genuine effects toward nothing. Control
+        // injections are nominal replicates, so their spread IS the measurement variance the prior
+        // is meant to describe. The prior degrees of freedom stay global either way, so the amount
+        // of shrinkage remains calibrated to the study samples.
+        IReadOnlyList<IReadOnlyList<int>>? priorGroups = null;
+        var fromGroups = opts.GetSingleOrNull("--prior-from-groups") is not null;
+        var fromControls = opts.GetSingleOrNull("--prior-from-controls") is not null;
+        if (fromGroups && fromControls)
+            throw new ArgumentException(
+                "--prior-from-controls and --prior-from-groups ask for opposite things.");
+
+        if (!fromGroups && dataset.MetadataColumns.Contains("sample_type"))
+            priorGroups = ControlSampleTypes.PriorGroups(dataset.MetadataValues("sample_type"));
+
+        // Asked for explicitly, an absent source is an error rather than a silent fallback.
+        if (fromControls && priorGroups is null)
+            throw new ArgumentException(
+                "--prior-from-controls found no control type with two or more replicates.");
+
+        return new DifferentialOptions
+        {
+            Design = design,
+            Test = test,
+            Prior = prior,
+            Correction = correction,
+            SubjectLabels = subjects,
+            TrendColumn = trendOver,
+            PeptideCounts = dataset.PeptideCounts,
+            PriorGroupColumns = priorGroups,
+            Covariates = covariates.Count > 0 ? covariates : null,
+            MinPerGroup = (int)ParseDouble(opts.GetSingleOrNull("--min-per-group"), 2),
+        };
     }
 
     /// <summary>
@@ -511,6 +856,7 @@ public static class Program
         "run" => RunHelp,
         "merge" => MergeHelp,
         "qc" => QcHelp,
+        "differential" => DifferentialHelp,
         "ion-accounting" => IonAccountingHelp,
         "isolation-scheme" => IsolationSchemeHelp,
         "compare" => CompareHelp,
@@ -532,6 +878,9 @@ public static class Program
             # Merge several Skyline reports into one parquet
             prism merge plate1.csv plate2.csv -o data.parquet
 
+            # Test disease against control at protein level
+            prism differential -d output/ --group-by condition -a Control -b Disease
+
             # Emit an annotated configuration template
             prism config-template -o config.yaml
 
@@ -541,6 +890,7 @@ public static class Program
             run                Run the full PRISM pipeline (rollup, normalize, batch-correct, QC)
             merge              Merge Skyline transition reports into one parquet
             qc                 (Re)generate the QC report from an existing output directory
+            differential       Two-group differential abundance on a finished output directory
             ion-accounting     Count acquired ions and the fraction assigned to a peptide
             isolation-scheme   Read the acquisition's DIA isolation windows and record them
             compare            Compare control-sample CVs between two runs
@@ -604,6 +954,93 @@ public static class Program
             -c, --config <FILE>   YAML configuration (optional; QC report settings only)
                 --no-save-plots   Embed the plots only; do not write qc_plots/*.png
             -h, --help            Show this help
+        """;
+
+    private const string DifferentialHelp = """
+        prism differential - Two-group differential abundance on a finished output directory
+
+        Tests one contrast against the corrected peptide or protein matrix a `prism run`
+        already produced, and writes a results table. Reads the output directory and
+        writes nothing back into it except the results file, so it cannot disturb the run.
+
+        This is the same engine, and the same statistical menu, as the Skyline tool's
+        Differential pane; the arms are resolved by the same code, so a contrast set up
+        in the pane and one typed here mean the same samples.
+
+        Usage: prism differential -d <output-dir> --group-by <column> -a <level...> -b <level...>
+
+        Required:
+            -d, --dir DIR          Output directory from `prism run`
+            -g, --group-by COL     Metadata column defining the groups
+            -a, --group-a LEVEL... Level(s) forming arm A (the reference arm)
+            -b, --group-b LEVEL... Level(s) forming arm B (the treatment arm)
+
+        Each arm takes several levels - repeat the flag, list them space-separated, or
+        comma-separate them - and the arm is their union. A level cannot be in both arms.
+        A positive log2FC means higher in B.
+
+        A TREND design has no arms: it fits a slope against --trend-over instead, and
+        reports the modeled change across that column's observed range rather than the
+        raw slope, so --min-log2fc means the same thing as it does on a two-arm contrast
+        whatever units the column is in. Use trend-within-subject whenever the same
+        subjects are followed across that column - treating one subject's repeated
+        samples as independent understates the standard error.
+
+        Options:
+            --level LEVEL          protein (default) or peptide
+            --design DESIGN        unpaired (default), paired, trend, trend-within-subject
+            --subject COL          Metadata column identifying the subject (alias: --pair-by).
+                                   Required by --design paired, which matches each subject's two
+                                   samples, and by --design trend-within-subject, which gives each
+                                   subject its own level
+            --trend-over COL       The NUMERIC column to fit a slope against; required by, and only
+                                   valid with, a trend design
+            --test TEST            moderated (default), welch, student, paired-t,
+                                   wilcoxon, mann-whitney
+            --prior PRIOR          Variance prior for the moderated t: intensity-trend
+                                   (default, matches the lab's proteomics-toolkit),
+                                   global, limma-trend, peptide-count
+            --prior-from-controls  Fit the variance prior on the QC and reference replicates.
+                                   This is the DEFAULT whenever the run has two or more replicates
+                                   of a control type; passing it makes that explicit and turns a
+                                   missing control set into an error rather than a fallback
+            --prior-from-groups    Fit the variance prior on the contrast groups instead. Their
+                                   spread includes the biological variation the analysis is looking
+                                   for, so the prior describes measurement noise plus that biology
+                                   and shrinks genuine effects toward nothing - use only to
+                                   reproduce an older result
+            --adjust-for COL...    Covariates to adjust the contrast for (moderated only)
+            --correction METHOD    bh (default), by, holm, bonferroni, none
+            --alpha A              p-value threshold for the printed hit count (default 0.05)
+            --raw-p                Apply --alpha to the RAW p rather than the adjusted one. For
+                                   judging a pilot too small for anything to survive correction;
+                                   the printed rule always says which p was used
+            --min-log2fc X         Minimum |log2 fold change| for a hit (default 1, i.e. two-fold).
+                                   0 turns the effect-size filter off and lets p alone decide
+            --min-per-group N      Minimum samples per arm (default 2)
+            -o, --output FILE      Results CSV (default <output-dir>/differential.csv)
+
+        EXAMPLES:
+            # Disease against control, protein level, default moderated t
+            prism differential -d output/ --group-by condition -a Control -b Disease
+
+            # Two severity levels pooled into one arm, adjusted for sex and age
+            prism differential -d output/ --group-by stage -a Control Mild -b Severe \
+                --adjust-for sex,age
+
+            # A within-subject design: each subject's pre and post sample
+            prism differential -d output/ --group-by timepoint -a Pre -b Post \
+                --design paired --pair-by subject --test paired-t
+
+            # A dose-response, one sample per subject
+            prism differential -d output/ --design trend --trend-over dose_mg
+
+            # A time course following the same subjects
+            prism differential -d output/ --design trend-within-subject                 --trend-over week --subject patient_id
+
+            # Peptide level, where BY is the correction to reach for
+            prism differential -d output/ --level peptide --group-by condition \
+                -a Control -b Disease --correction by
         """;
 
     private const string IonAccountingHelp = """
