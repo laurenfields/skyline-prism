@@ -207,7 +207,8 @@ public static class Program
     {
         var opts = ParseOptions(args,
             multiValue: new HashSet<string>
-                { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers", "--clinical" });
+                { "-a", "--group-a", "-b", "--group-b", "--adjust-for", "--markers", "--clinical",
+                  "--restrict-to" });
         var dir = opts.GetSingleOrNull("-d", "--dir") ?? opts.GetSingleOrNull("--output-dir");
         RefuseReportFlagsWithoutReport(opts);
         // Resolved before anything runs, so a mistyped panel name refuses the command rather than
@@ -325,6 +326,7 @@ public static class Program
             MarkerPanels = panels,
             MarkerGroupBy = opts.GetSingleOrNull("--markers-group-by"),
             EnrichmentPoster = poster,
+            Restrictions = ParseRestrictions(opts),
         });
 
         Console.WriteLine($"Quant report written to: {report.HtmlPath}");
@@ -420,7 +422,57 @@ public static class Program
             is "trend" or "trend-within-subject" or "trend-repeated";
 
     /// <summary>
-    /// <c>prism differential --design trend</c>: fit a slope against a numeric column.
+    /// The sample columns a trend runs over: every sample, less those excluded by each
+    /// <c>--restrict-to COLUMN=VALUE[,VALUE...]</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>A trend pools every sample that has an x, which silently merges studies that share a
+    /// timepoint scale - two arms of one cohort both measured at week 4 become one slope through
+    /// both. Restricting is the only way to fit the one that was meant.</para>
+    /// <para>Expressed by dropping the COLUMN rather than by NaN-ing its x, because NaN arrives at
+    /// <see cref="TrendSamples.Resolve"/> as "no value in the trend column" - so a deliberate subset
+    /// was counted and reported as missing data. The pane drops columns for the same reason, so the
+    /// two front ends agree on which samples a restriction keeps and on what they say about it.</para>
+    /// </remarks>
+    private static int[] RestrictTrend(ParsedOptions opts, DifferentialDataset dataset)
+    {
+        var request = new QuantRequest
+        {
+            OutputDir = string.Empty,
+            Dataset = dataset,
+            Options = new DifferentialOptions(),
+            Rule = SignificanceRule.Default,
+            Restrictions = ParseRestrictions(opts),
+        };
+        // Through the same resolver the quant report uses, so `prism differential` and the report it
+        // can write never select different samples from one set of flags.
+        return QuantAnalysis.TrendColumnsFor(request, dataset);
+    }
+
+    /// <summary>
+    /// <c>--restrict-to COLUMN=VALUE[,VALUE...]</c>, validated against the run's own metadata.
+    /// </summary>
+    private static IReadOnlyList<QuantRestriction> ParseRestrictions(ParsedOptions opts)
+        => opts.GetList("--restrict-to").Select(ParseOneRestriction).ToList();
+
+    private static QuantRestriction ParseOneRestriction(string spec)
+    {
+        var eq = spec.IndexOf('=');
+        if (eq <= 0 || eq == spec.Length - 1)
+            throw new ArgumentException($"--restrict-to wants COLUMN=VALUE[,VALUE...], not '{spec}'.");
+
+        var column = spec[..eq].Trim();
+        var keep = spec[(eq + 1)..].Split(',')
+            .Select(v => v.Trim()).Where(v => v.Length > 0).ToList();
+        if (keep.Count == 0)
+            throw new ArgumentException($"--restrict-to '{spec}' names no values to keep.");
+        return new QuantRestriction(column, keep);
+    }
+
+    /// <summary>
+    /// <c>prism differential --design trend</c>: fit a slope against a trend axis - a numeric column,
+    /// or one reading of a text column (<see cref="TrendAxis"/>) - over the samples
+    /// <c>--restrict-to</c> keeps.
     /// </summary>
     /// <remarks>
     /// Separate from the two-arm path for the same reason the pane's is - there are no arms to
@@ -433,13 +485,21 @@ public static class Program
     {
         var options = DifferentialOptionsFrom(opts, dataset, groupBy: string.Empty);
         var trendOver = options.TrendColumn!;
-        var x = dataset.NumericValues(trendOver);
-
-        var columns = Enumerable.Range(0, dataset.SampleIds.Length).ToArray();
+        var axis = TrendAxis.Find(trendOver, dataset.MetadataColumns, dataset.MetadataValues)!;
+        var x = TrendAxis.Read(dataset.MetadataValues(axis.Column), axis);
+        var columns = RestrictTrend(opts, dataset);
+        var restricted = dataset.SampleIds.Length - columns.Length;
+        if (restricted > 0)
+            Console.WriteLine(
+                $"--restrict-to: {restricted} sample(s) outside the kept values were left out.");
         var result = Differential.RunTrend(dataset.ExprLog2, dataset.FeatureIds, columns, x, options);
         var rule = SignificanceRuleFrom(opts);
 
-        var (xLow, xHigh) = DifferentialCsv.TrendEndpoints(x);
+        // Over the samples the fit USED, not the whole column. The endpoints become the span in the
+        // results header, which states that log2fc is the modeled change across it - so reading them
+        // from excluded samples would describe the numbers by a range the model never saw. Before
+        // --restrict-to the two were the same set and the distinction did not arise.
+        var (xLow, xHigh) = DifferentialCsv.TrendEndpoints(columns.Select(c => x[c]).ToList());
         var span = $"{xLow} to {xHigh}";
         var n = result.NSubjects > 0
             ? $"{result.NA} samples in {result.NSubjects} subjects"
@@ -459,7 +519,7 @@ public static class Program
 
         var outPath = opts.GetSingleOrNull("-o", "--output") ?? Path.Combine(dir, "differential.csv");
         DifferentialCsv.Write(outPath, result, dataset, options, rule, trendOver,
-            aLabel: xLow, bLabel: xHigh, effectName: effectName);
+            aLabel: xLow, bLabel: xHigh, effectName: effectName, restrictions: ParseRestrictions(opts));
         Console.WriteLine($"Results written to: {outPath}");
 
         // A trend has no arms; the report takes its column and range from the options and the data.
@@ -574,17 +634,53 @@ public static class Program
         var isTrend = design is DifferentialDesign.LinearTrend
             or DifferentialDesign.LinearTrendWithinSubject;
         var trendOver = opts.GetSingleOrNull("--trend-over");
+        // Kept, not just checked: the tested COLUMN is what --adjust-for is compared with below, and
+        // trendOver may be a label naming one reading of a column rather than the column itself.
+        TrendAxisOption? axis = null;
         if (isTrend)
         {
             if (trendOver is null)
                 throw new ArgumentException(
-                    "A trend design needs --trend-over <column>, the numeric column to fit against.");
-            if (!dataset.MetadataColumns.Contains(trendOver))
-                throw new ArgumentException($"No metadata column '{trendOver}' to fit a trend against.");
+                    "A trend design needs --trend-over <axis>, the column to fit the slope against.");
+            // Resolved through TrendAxis, not by a bare column check, so the CLI accepts exactly the
+            // axes the pane offers - including one read out of a text column, named for the number it
+            // takes ("Longitudinal Draw Description (Week)").
+            axis = TrendAxis.Find(trendOver, dataset.MetadataColumns, dataset.MetadataValues);
+            if (axis is null)
+            {
+                var offered = TrendAxis.AllFor(dataset.MetadataColumns, dataset.MetadataValues);
+                var readings = offered.Where(a => string.Equals(a.Column, trendOver, StringComparison.Ordinal)).ToList();
+                // Every axis, not the first few: a cut list can leave out exactly the one meant, and
+                // nothing else on the command line shows the rest. A column offering two readings is
+                // named for what it is - a choice the command has to make - rather than "not found".
+                throw new ArgumentException(readings.Count > 1
+                    ? $"'{trendOver}' can be read as more than one axis: "
+                      + string.Join(", ", readings.Select(a => $"'{a.Label}'"))
+                      + ". They are different quantities; name the one you mean with --trend-over."
+                    : $"No trend axis '{trendOver}'. "
+                      + (offered.Count == 0
+                          ? "This run has no column a slope can be fitted against."
+                          : "Available: " + string.Join(", ", offered.Select(o => $"'{o.Label}'")) + "."));
+            }
         }
         else if (trendOver is not null)
         {
             throw new ArgumentException("--trend-over needs --design trend or --design trend-within-subject.");
+        }
+
+        // Refused rather than ignored, for the reason every other misplaced flag here is: a command
+        // that quietly drops a restriction fits the slope through samples the user excluded and
+        // reports it as if they had not.
+        if (!isTrend && opts.GetList("--restrict-to").Count > 0)
+        {
+            throw new ArgumentException(
+                "--restrict-to needs --design trend or --design trend-within-subject. On a two-arm "
+                + "contrast, choose the samples with -a and -b.");
+        }
+
+        if (isTrend)
+        {
+            QuantAnalysis.ValidateRestrictions(ParseRestrictions(opts), dataset, "--restrict-to");
         }
 
         var covariates = new List<Covariate>();
@@ -594,8 +690,10 @@ public static class Program
                 throw new ArgumentException($"No metadata column '{name}' to adjust for.");
             // The tested term, whichever it is. On a trend the guard used to compare against an
             // EMPTY groupBy, so --trend-over week --adjust-for week built [1, week, week] - exactly
-            // singular - and died on a rank check naming neither flag.
-            var tested = trendOver ?? groupBy;
+            // singular - and died on a rank check naming neither flag. And it is the axis's COLUMN:
+            // the label of a reading ("Visit (Week)") names no column, so comparing with it let
+            // --adjust-for Visit through, whose categories encode the very timepoints being tested.
+            var tested = axis?.Column ?? groupBy;
             if (!string.IsNullOrEmpty(tested) && string.Equals(name, tested, StringComparison.Ordinal))
                 throw new ArgumentException(
                     $"'{name}' is the term being tested; adjusting for it would leave nothing to test.");
@@ -1134,8 +1232,19 @@ public static class Program
                                    Required by --design paired, which matches each subject's two
                                    samples, and by --design trend-within-subject, which gives each
                                    subject its own level
-            --trend-over COL       The NUMERIC column to fit a slope against; required by, and only
-                                   valid with, a trend design
+            --trend-over AXIS      The column to fit a slope against; required by, and only valid
+                                   with, a trend design. A column of plain numbers is named directly
+                                   ("Week"). A column whose values EMBED a number is named for the
+                                   number it takes - "Longitudinal Draw Description (Week)" reads 8
+                                   out of "V2_Week 8", "(V)" reads 2 - because those are different
+                                   quantities and only one is the axis. Pass an unknown name to see
+                                   the list.
+            --restrict-to COL=V[,V...]
+                                   Fit the trend on only the samples whose COL is one of these
+                                   values; repeatable. Without it a trend pools every sample that
+                                   has a value on the axis, which merges two studies that share a
+                                   timepoint scale into one slope. Trend designs only - on a two-arm
+                                   contrast, -a and -b already choose the samples.
             --test TEST            moderated (default), welch, student, paired-t,
                                    wilcoxon, mann-whitney
             --prior PRIOR          Variance prior for the moderated t: intensity-trend

@@ -8,6 +8,20 @@ using SkylinePrism.Core.Qc;
 namespace SkylinePrism.Core.DifferentialAnalysis;
 
 /// <summary>
+/// One restriction on the samples a trend is fitted over: keep those whose <paramref name="Column"/>
+/// holds one of <paramref name="Values"/>.
+/// </summary>
+public sealed record QuantRestriction(string Column, IReadOnlyList<string> Values)
+{
+    /// <summary><c>Study = Verapamil</c>; several values listed, since any of them is kept.</summary>
+    public string Describe() => $"{Column} = {string.Join(", ", Values)}";
+
+    /// <summary>Several restrictions, which narrow together: <c>Study = Verapamil; Arm = Drug</c>.</summary>
+    public static string Describe(IEnumerable<QuantRestriction> restrictions) =>
+        string.Join("; ", restrictions.Where(r => r.Values.Count > 0).Select(r => r.Describe()));
+}
+
+/// <summary>
 /// One quantification analysis to run and report: a resolved contrast (two arms, or a trend under
 /// <see cref="DifferentialOptions.TrendColumn"/>) plus which of the other views to include.
 /// </summary>
@@ -38,6 +52,20 @@ public sealed class QuantRequest
     /// within-subject design. The labels alone cannot name it, and the reproducing command needs it.
     /// </summary>
     public string? SubjectColumn { get; init; }
+
+    /// <summary>
+    /// Trend designs: which samples to fit over, as the metadata values to keep. Empty for all.
+    /// </summary>
+    /// <remarks>
+    /// Carried as COLUMNS AND VALUES rather than as a list of sample indices, because the report has
+    /// to write the command that reproduces it and <c>--restrict-to Study=...</c> is the only form a
+    /// command line can carry. The indices are derived from these in one place, so the samples a
+    /// report describes and the samples its command would select cannot differ.
+    ///
+    /// <para>A LIST, because restrictions narrow together - a study AND an on-drug window - and one
+    /// pair would have quietly kept whichever the caller happened to pass last.</para>
+    /// </remarks>
+    public IReadOnlyList<QuantRestriction> Restrictions { get; init; } = Array.Empty<QuantRestriction>();
 
     /// <summary>Two-arm contrasts: arm A's dataset columns, as resolved by <see cref="ContrastArms.Resolve"/>.</summary>
     public IReadOnlyList<int> GroupA { get; init; } = Array.Empty<int>();
@@ -125,6 +153,79 @@ public static class QuantAnalysis
         return options with { Covariates = null };
     }
 
+    /// <summary>
+    /// Refuse a restriction that names a column the run does not have, or a value that column never
+    /// holds.
+    /// </summary>
+    /// <remarks>
+    /// Here, on the shared path, and not only in the CLI: a request built any other way - the pane, any
+    /// caller of this API - would otherwise have an unknown column skipped, fitting over every sample
+    /// while its recorded command claimed the restriction, or an absent value keep nothing and report
+    /// "nothing to fit", which sends the reader to their data instead of to the restriction.
+    /// </remarks>
+    /// <param name="what">How the message names the restriction: the CLI's flag, or the pane's control.</param>
+    public static void ValidateRestrictions(
+        IReadOnlyList<QuantRestriction> restrictions, DifferentialDataset ds, string what = "Restrict to")
+    {
+        foreach (var r in restrictions)
+        {
+            if (!ds.MetadataColumns.Contains(r.Column))
+                throw new ArgumentException($"{what}: no metadata column '{r.Column}'.");
+
+            var present = ds.MetadataValues(r.Column)
+                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!)
+                .Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToList();
+            foreach (var want in r.Values.Where(w => !present.Contains(w, StringComparer.Ordinal)))
+                throw new ArgumentException(
+                    $"{what}: '{r.Column}' has no value '{want}'. Present: "
+                    + string.Join(", ", present.Select(p => $"'{p}'")) + ".");
+        }
+    }
+
+    /// <summary>
+    /// The sample columns <paramref name="restrictions"/> keep - every sample when there are none -
+    /// intersected, so several narrow together rather than the last one winning. Possibly none.
+    /// </summary>
+    /// <remarks>
+    /// The one place a restriction becomes samples: the pane's own trend, the report and the CLI all
+    /// come through here, so the samples a view shows and the samples its report and command fit
+    /// cannot differ. The restriction drops the COLUMN rather than NaN-ing its x, because NaN reaches
+    /// <see cref="TrendSamples.Resolve"/> as "no value in the trend column" - which would report a
+    /// deliberate subset as missing data.
+    /// </remarks>
+    public static int[] KeptColumns(IReadOnlyList<QuantRestriction> restrictions, DifferentialDataset ds)
+    {
+        var kept = Enumerable.Range(0, ds.SampleIds.Length).ToHashSet();
+        foreach (var r in restrictions)
+        {
+            if (r.Values.Count == 0 || !ds.MetadataColumns.Contains(r.Column))
+                continue;
+            var values = ds.MetadataValues(r.Column);
+            kept.IntersectWith(Enumerable.Range(0, ds.SampleIds.Length)
+                .Where(i => i < values.Length && values[i] is { } v
+                    && r.Values.Contains(v, StringComparer.Ordinal)));
+        }
+
+        return kept.OrderBy(i => i).ToArray();
+    }
+
+    /// <summary>
+    /// The sample columns a trend runs over: those <see cref="QuantRequest.Restrictions"/> keep, after
+    /// refusing a restriction the run cannot honor (<see cref="ValidateRestrictions"/>) and one that
+    /// keeps no sample at all.
+    /// </summary>
+    public static int[] TrendColumnsFor(QuantRequest request, DifferentialDataset ds)
+    {
+        ValidateRestrictions(request.Restrictions, ds);
+        var kept = KeptColumns(request.Restrictions, ds);
+        if (kept.Length == 0)
+            throw new ArgumentException(
+                "Restricting the trend kept no samples: "
+                + string.Join("; ", request.Restrictions.Select(r => $"{r.Column}={string.Join(",", r.Values)}")),
+                nameof(request));
+        return kept;
+    }
+
     /// <summary>Run every view and write the report.</summary>
     public static QuantAnalysisResult Run(QuantRequest request)
     {
@@ -155,18 +256,35 @@ public static class QuantAnalysis
         DifferentialResult res;
         string groupBy, aLabel, bLabel, contrastLabel, effectName;
         QuantContrast contrast;
+        int[]? trendColumns = null;
+        var restricted = request.Restrictions.Where(r => r.Values.Count > 0).ToList();
         if (isTrend)
         {
             var trendOver = options.TrendColumn
                 ?? throw new ArgumentException("A trend design needs Options.TrendColumn.", nameof(request));
-            var x = ds.NumericValues(trendOver);
-            res = request.Differential ?? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds,
-                Enumerable.Range(0, ds.SampleIds.Length).ToArray(), x, options);
+            // Through TrendAxis, not NumericValues: TrendColumn carries the axis LABEL, which on a
+            // column whose values embed a number ("Longitudinal Draw Description (Week)") is not a
+            // column name at all - NumericValues would return every sample NaN and the trend would
+            // report that it had nothing to fit.
+            var axis = TrendAxis.Find(trendOver, ds.MetadataColumns, ds.MetadataValues)
+                ?? throw new ArgumentException(
+                    $"No trend axis '{trendOver}' in this run.", nameof(request));
+            var x = TrendAxis.Read(ds.MetadataValues(axis.Column), axis);
+            trendColumns = TrendColumnsFor(request, ds);
+            res = request.Differential
+                ?? Differential.RunTrend(ds.ExprLog2, ds.FeatureIds, trendColumns, x, options);
             groupBy = trendOver;
-            (aLabel, bLabel) = DifferentialCsv.TrendEndpoints(x);
-            contrastLabel = $"trend over {trendOver}";
+            // Over the samples the fit used: the endpoints become the span the results header says
+            // log2fc is the change across, so an excluded sample's x would misdescribe every row.
+            (aLabel, bLabel) = DifferentialCsv.TrendEndpoints(
+                trendColumns.Select(c => x[c]).ToList());
             effectName = $"log2 change across {trendOver}";
-            contrast = new QuantContrast(null, null, null, trendOver);
+            // The restriction is part of WHAT was compared, so it goes wherever the contrast is
+            // recorded - the report's title, quant_parameters, differential.csv's header - and not
+            // only into the reproducing command. Without it two reports restricted to different
+            // studies described themselves identically.
+            contrast = new QuantContrast(null, null, null, trendOver, restricted.Count > 0 ? restricted : null);
+            contrastLabel = contrast.Describe();
         }
         else
         {
@@ -274,6 +392,15 @@ public static class QuantAnalysis
         else
         {
             var groups = ds.MetadataValues(markerColumn);
+            // Over the samples the trend was fitted on: a sample with no group is one the panels leave
+            // out, so a restriction is applied the same way. Every sample here would put a study the
+            // report excluded into its marker plots, with nothing saying so.
+            if (trendColumns is not null && restricted.Count > 0)
+            {
+                var kept = trendColumns.ToHashSet();
+                groups = groups.Select((g, i) => kept.Contains(i) ? g : null).ToArray();
+            }
+
             var identities = Enumerable.Range(0, ds.FeatureIds.Length).Select(ds.IdentityOf).ToArray();
             foreach (var panel in request.MarkerPanels)
                 markers.Add(new MarkerReportSection(panel.Name, markerColumn,
@@ -332,6 +459,7 @@ public static class QuantAnalysis
             GroupBy = groupBy,
             ALabel = aLabel,
             BLabel = bLabel,
+            Restrictions = restricted,
             Dataset = ds,
             ContrastColumns = valueColumns,
             Detection = detection,

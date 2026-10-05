@@ -55,11 +55,13 @@ public static class QuantCommand
             into.AddRange(new[] { flag, string.Join(",", list) });
         }
 
-        void Check(string value, string what, bool splitsOnComma)
+        // leadingDashOk: a value that travels inside a larger argument (COLUMN=VALUE) never starts it,
+        // so its own first character cannot be read as a flag.
+        void Check(string value, string what, bool splitsOnComma, bool leadingDashOk = false)
         {
             if (value.Length == 0)
                 problems.Add($"{what} is empty");
-            else if (value[0] == '-')
+            else if (value[0] == '-' && !leadingDashOk)
                 problems.Add($"{what} '{value}' starts with '-', which the command line reads as a flag");
             else if (splitsOnComma && value.Contains(','))
                 problems.Add($"{what} '{value}' contains a comma, which the command line splits on");
@@ -91,6 +93,22 @@ public static class QuantCommand
         if (isTrend)
         {
             Single(args, "--trend-over", o.TrendColumn ?? string.Empty, "the trend column");
+            // Recorded, or the command reproduces the analysis over a DIFFERENT set of samples -
+            // every sample with a value on the axis rather than the subset that was fitted - and
+            // nothing in its output would say so.
+            foreach (var r in request.Restrictions.Where(r => r.Values.Count > 0))
+            {
+                Check(r.Column, "the restrict column", splitsOnComma: false);
+                // The CLI splits COLUMN=VALUE at the FIRST '=', so a column holding one would come back
+                // as a different column and value.
+                if (r.Column.Contains('=', StringComparison.Ordinal))
+                    problems.Add($"the restrict column '{r.Column}' contains '=', which --restrict-to splits on");
+                foreach (var v in r.Values)
+                    Check(v, "a restricted value", splitsOnComma: true, leadingDashOk: true);
+                // One flag per restriction, the form the CLI intersects - a single flag carrying two
+                // columns would have to invent a separator the parser does not take.
+                args.AddRange(new[] { "--restrict-to", r.Column + "=" + string.Join(",", r.Values) });
+            }
         }
         else
         {
