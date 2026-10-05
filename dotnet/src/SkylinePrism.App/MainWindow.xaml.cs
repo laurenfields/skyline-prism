@@ -252,6 +252,7 @@ public partial class MainWindow : Window
         if (RunButton is not null)
             RunButton.IsEnabled = !_isRunning && _inputs.Count > 0
                 && !string.IsNullOrWhiteSpace(OutputDirBox?.Text);
+        UpdatePublishEnabled();
 
         // Adding and removing an input both reach here, which makes it the one place the ComBat
         // default has to follow.
@@ -1291,6 +1292,7 @@ public partial class MainWindow : Window
             return;
 
         OpenReportButton.IsEnabled = false;
+        PublishButton.IsEnabled = false;
         LogBox.Clear();
         ShowAnalysis(AnalysisPane.Log); // show progress as it runs
 
@@ -1344,6 +1346,7 @@ public partial class MainWindow : Window
             });
             _lastReportPath = reportPath;
             OpenReportButton.IsEnabled = reportExists;
+            UpdatePublishEnabled();
             PopulateGroupCombos(); // fill Group-by / value from the Replicates report
             InvalidateDensity();      // new merged_data.parquet: reload the Spectrum density tab when shown
             InvalidateDynamicRange(); // and new corrected matrices for the Dynamic Range tab
@@ -3077,6 +3080,81 @@ public partial class MainWindow : Window
     }
 
     private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+
+    /// <summary>
+    /// Publishing reads a finished output directory, not a run, so it follows the Output directory box:
+    /// available whenever that directory holds a QC or quant report and nothing is running. Tying it
+    /// to a completed run, as Open QC Report is, left it disabled for the usual case - opening an
+    /// output directory produced earlier to publish it.
+    /// </summary>
+    private void UpdatePublishEnabled() => _ = UpdatePublishEnabledAsync();
+
+    // Each look at the Output directory's reports is numbered, and only the latest may set the button.
+    private int _publishProbe;
+
+    // The directory the button's state was last decided for.
+    private string? _publishProbedDir;
+
+    /// <summary>How long the Output directory box must be still before its reports are looked for.</summary>
+    private static readonly TimeSpan PublishProbeDelay = TimeSpan.FromMilliseconds(300);
+
+    /// <remarks>
+    /// The Output directory box's TextChanged reaches here on every keystroke, and on a network share -
+    /// a UNC path half typed, a server that is slow to answer - one File.Exists can block for seconds.
+    /// So the look waits until the box has been still for <see cref="PublishProbeDelay"/>, runs off the
+    /// UI thread, and is dropped if a newer one has started meanwhile.
+    /// </remarks>
+    private async Task UpdatePublishEnabledAsync()
+    {
+        if (PublishButton is null)
+            return;
+        var probe = ++_publishProbe;
+        var dir = OutputDirBox?.Text?.Trim();
+        if (_isRunning || string.IsNullOrEmpty(dir))
+        {
+            PublishButton.IsEnabled = false;
+            _publishProbedDir = null;
+            return;
+        }
+
+        // Another directory is not the one the button was enabled for: off until it has been looked at,
+        // or a click in the wait would publish whatever the box holds now. The same directory looked at
+        // again (a report just written beside it) keeps its state meanwhile, so the button does not flicker.
+        if (!string.Equals(dir, _publishProbedDir, StringComparison.OrdinalIgnoreCase))
+            PublishButton.IsEnabled = false;
+
+        try
+        {
+            await Task.Delay(PublishProbeDelay);
+            if (probe != _publishProbe)
+                return;
+            var hasReport = await Task.Run(() =>
+                File.Exists(Path.Combine(dir, "qc_report.html")) || File.Exists(Path.Combine(dir, "quant", "quant_report.html")));
+            if (probe == _publishProbe)
+            {
+                PublishButton.IsEnabled = hasReport && !_isRunning;
+                _publishProbedDir = dir;
+            }
+        }
+        catch (Exception)
+        {
+            // Started and not awaited: a look that fails leaves the button as it was rather than taking
+            // the tool down (UiThreadSafetyTests).
+        }
+    }
+
+    /// <summary>
+    /// Opens the Publish to Panorama window on the current output directory - the same publish as
+    /// <c>prism publish</c>, which its Show Command Line gives.
+    /// </summary>
+    private void OnPublishToPanorama(object sender, RoutedEventArgs e)
+    {
+        var dir = OutputDirBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+            return;
+        PanoramaPublishWindow.Open(this, dir);
+        UpdatePublishEnabled();
+    }
 
     private void OnOpenReport(object sender, RoutedEventArgs e)
     {
