@@ -55,9 +55,11 @@ public enum DifferentialDesign
     /// <para>One correlation is estimated for every feature at once: a REML estimate per feature,
     /// averaged on the atanh scale with 15% trimmed from each end (Smyth, Michaud &amp; Scott 2005).
     /// The contrast is then fitted by generalized least squares at that correlation and moderated
-    /// as usual. It is not a per-feature mixed model; Hoffman &amp; Roussos 2021 (dream) report
-    /// that sharing one correlation inflates type I error slightly, and that ignoring the
-    /// correlation altogether is much worse.</para>
+    /// as usual. It is not a per-feature mixed model. Hoffman &amp; Roussos 2021 (dream,
+    /// doi:10.1093/bioinformatics/btaa687) show its costs: a slight increase in type I error at
+    /// larger sample sizes in their simulations, and under-correction - so more false positives -
+    /// for any feature whose own intra-subject correlation is above the shared one. They also show
+    /// that ignoring the correlation altogether does not control the false-positive rate.</para>
     /// <para>A subject may appear in both groups; the correlation then also covers a within-subject
     /// contrast, as in limma. Moderated t only: the simple tests have no way to use it.</para>
     /// </remarks>

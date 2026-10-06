@@ -58,8 +58,10 @@ public sealed class DetectionAnalysisResult
     internal DetectionAnalysisResult(DetectionMethod method, IReadOnlyList<DetectionRow> rows,
         int nA, int nB, int droppedSamples, UnpairedReason unpairedReason,
         IReadOnlyList<DetectionPairedRow>? pairedRows = null, int pairsNotInMerged = 0,
-        IReadOnlyList<string>? pairMessages = null, DetectionGlmResult? glm = null)
+        IReadOnlyList<string>? pairMessages = null, DetectionGlmResult? glm = null,
+        int samplesWithoutSubject = 0)
     {
+        SamplesWithoutSubject = samplesWithoutSubject;
         Method = method;
         Rows = rows;
         NA = nA;
@@ -90,6 +92,13 @@ public sealed class DetectionAnalysisResult
 
     /// <summary>Arm samples that are absent from merged_data and so took no part.</summary>
     public int DroppedSamples { get; }
+
+    /// <summary>
+    /// Picked samples a blocked design left out for having no subject - the same ones the
+    /// differential leaves out. Counted apart from <see cref="DroppedSamples"/>, which are samples
+    /// missing from merged_data.
+    /// </summary>
+    public int SamplesWithoutSubject { get; }
 
     /// <summary>Why a paired design ran an unpaired test, or <see cref="Detection.UnpairedReason.None"/>.</summary>
     public UnpairedReason UnpairedReason { get; }
@@ -157,11 +166,13 @@ public static class DetectionAnalysis
         // A blocked design tests the samples that have a subject - the same ones the differential
         // fits and the plots draw - so the two sections of one report agree on n.
         var repeatsASubject = false;
+        var withoutSubject = 0;
         if (design == DifferentialDesign.BlockedBySubject && subjectLabels is not null)
         {
             var blocked = BlockedSamples.Resolve(subjectLabels, groupA, groupB);
             (groupA, groupB) = (blocked.A, blocked.B);
             repeatsASubject = BlockedSamples.RepeatsASubject(blocked);
+            withoutSubject = blocked.Dropped;
         }
 
         var detIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -228,12 +239,12 @@ public static class DetectionAnalysis
                     r.RateA, r.RateB, r.P, r.Q)).ToList()
                 : new List<DetectionRow>();
             return new DetectionAnalysisResult(DetectionMethod.FirthGlm, rows, aCols.Count, bCols.Count,
-                dropped, unpaired, glm: glm);
+                dropped, unpaired, glm: glm, samplesWithoutSubject: withoutSubject);
         }
 
         var fisher = DetectionTest.Run(detection.Matrix, detection.PeptideIds, aCols, bCols);
         return new DetectionAnalysisResult(DetectionMethod.FisherExact, fisher, aCols.Count, bCols.Count,
-            dropped, unpaired, pairsNotInMerged: matchedButMissing);
+            dropped, unpaired, pairsNotInMerged: matchedButMissing, samplesWithoutSubject: withoutSubject);
     }
 
     /// <summary>

@@ -101,6 +101,12 @@ the 15%-trimmed mean on the atanh scale. `correlation_bounds` hits both ends, an
 and a warning - every block of size 1, and a block already encoded in the design (the paired
 design) - are under `degenerate`.
 
+**The same comparison on a real cohort** is `check_blocked_cohort.py`. It hands the matrix PRISM
+tested to limma (through `Rscript`) and compares the result with the `differential.csv` PRISM wrote
+for the same contrast under `--prior global --correction none`. The docstring has the commands. The
+cohort quoted in `docs/differential-analysis.md` is not committed, but the script runs on any PRISM
+output directory, so the claim can be re-checked on any data at hand.
+
 **Not the same method as `proteomics-toolkit`'s mixed model.** The toolkit fits a per-feature
 `statsmodels` `mixedlm` with a random subject intercept: one correlation per feature, no consensus
 across features, no empirical-Bayes moderation, and normal-approximation p-values. It is a

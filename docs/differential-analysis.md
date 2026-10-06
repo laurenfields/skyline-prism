@@ -234,8 +234,10 @@ function). PRISM replays statmod's REML iterations step for step - including the
 and 1e-6 stopping rule limma passes it, which leave limma short of the REML optimum by up to 2.4e-3
 on the atanh scale - so the per-feature correlations agree with limma's to about 4e-14 and
 everything downstream to about 1e-12. On a 7,602-peptide, 63-sample, 15-patient ALS CSF cohort
-(sex, F vs M) the whole result agreed with limma to 2e-14 on log2FC and 5e-12 on p, at a
-correlation of 0.441.
+(sex, F vs M, global prior) the whole result agreed with limma to 2e-14 on log2FC and 5e-12 on p,
+at a correlation of 0.441. That cohort is not committed; the comparison is, as
+`dotnet/tests/fixtures/differential/check_blocked_cohort.py`, and repeats on any PRISM output
+directory and subject column (see the fixture README).
 
 On simulated null data with a correlation of 0.5 and 3-6 samples per subject, the blocked design's
 false-positive rate at 0.05 was 4.3% where the unpaired one's was 22.8%
@@ -243,10 +245,15 @@ false-positive rate at 0.05 was 4.3% where the unpaired one's was 22.8%
 
 What it is not:
 
-- **Not a per-feature mixed model.** One correlation serves every feature. Hoffman & Roussos 2021
-  (dream, *Bioinformatics* 37(2):192-201) report that this inflates type I error slightly, and that
-  ignoring the correlation is much worse. `proteomics-toolkit`'s mixed model (a per-feature
-  `statsmodels` `mixedlm`) is that other estimator, and the two are not expected to agree.
+- **Not a per-feature mixed model.** One correlation serves every feature, and that has a cost.
+  Hoffman & Roussos 2021 (dream, *Bioinformatics* 37(2):192-201,
+  [doi:10.1093/bioinformatics/btaa687](https://doi.org/10.1093/bioinformatics/btaa687)) report a
+  slight increase in `duplicateCorrelation`'s type I error at larger sample sizes in their
+  simulations, and point out that a feature whose own intra-subject correlation is above the shared
+  one is under-corrected, which raises its false-positive rate. They also show that methods which
+  ignore the correlation do not control the false-positive rate at all. `proteomics-toolkit`'s mixed
+  model (a per-feature `statsmodels` `mixedlm`) is a per-feature estimator of that other kind, and
+  the two are not expected to agree.
 - **The intensity-trend prior on a blocked fit has no external golden.** limma has no intensity
   trend and the toolkit has no blocked fit. The prior's shape comes from the controls (or design
   groups) as always, and its level and `d0` are calibrated to the GLS residual variances by the same

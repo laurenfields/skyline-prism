@@ -710,12 +710,13 @@
                                 nothing to check when the value IS the number. -->
                                 <TextBlock x:Name="DiffTrendPreviewText"                                        Margin="2,3,0,0" FontSize="11" Foreground="#666" TextWrapping="Wrap"
                                 Visibility="Collapsed" />
-                                <!-- One control, two designs: it is the subject column in both the
-                                paired case (match each subject's two samples) and the
-                                within-subject trend (absorb each subject's level). -->
+                                <!-- One control, three designs: it is the subject column in the
+                                paired case (match each subject's two samples), the blocked case
+                                (treat each subject's samples as correlated) and the within-subject
+                                trend (absorb each subject's level). -->
                                 <TextBlock x:Name="DiffPairByLabel" Text="Subject:" Margin="0,10,0,3" Foreground="#555" />
                                 <ComboBox x:Name="DiffPairByCombo" SelectionChanged="OnDiffPairByChanged"
-                                ToolTip="The metadata column identifying the subject - usually a patient or donor id. Under a paired design it matches each subject's two samples; under a within-subject trend it gives each subject its own level, so the slope is estimated within subject rather than across people." />
+                                ToolTip="The metadata column identifying the subject - usually a patient or donor id. Under a paired design it matches each subject's two samples; under 'Blocked by subject' it marks which samples come from the same subject, so they are modelled as correlated rather than as independent; under a within-subject trend it gives each subject its own level, so the slope is estimated within subject rather than across people." />
                                 <!-- Restrict to: a trend pools every sample that has an x, which
                                 silently merges two studies that share a timepoint scale. Sits
                                 where the Group by / A / B triple does on a two-arm contrast -

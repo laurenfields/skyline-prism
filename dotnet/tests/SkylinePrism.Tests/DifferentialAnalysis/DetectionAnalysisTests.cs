@@ -78,6 +78,8 @@ public class DetectionAnalysisTests
         Assert.Equal(DetectionMethod.FisherExact, r.Method);
         Assert.Equal(UnpairedReason.RepeatedSubjects, r.UnpairedReason);
         Assert.Equal((keptA.Count, b.Count), (r.NA, r.NB));
+        Assert.Equal(1, r.SamplesWithoutSubject);
+        Assert.Equal(0, r.DroppedSamples);
         var expected = DetectionTest.Run(det.Matrix, det.PeptideIds, InDet(ds, det, keptA), InDet(ds, det, b));
         Assert.Equal(expected, r.Rows);
         var (usedA, usedB) = PairedSamples.ColumnsUsed(DifferentialDesign.BlockedBySubject, subjects, a, b);

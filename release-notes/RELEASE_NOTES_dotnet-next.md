@@ -15,7 +15,8 @@ as the GitHub Release description and fails if it is missing.
   shared by every feature (`duplicateCorrelation`), then generalized least squares
   (`lmFit(block=, correlation=)`) and the usual moderation under any variance prior. Pinned to R's
   limma 3.68.5 by a new golden (`blocked.json`, from `generate_blocked.R`); on a 7,602-peptide ALS CSF
-  cohort the result matched limma to 5e-12 on p. On simulated null data with a correlation of 0.5 the
+  cohort the result matched limma to 5e-12 on p (`check_blocked_cohort.py` repeats that comparison
+  on any output directory). On simulated null data with a correlation of 0.5 the
   false-positive rate at 0.05 was 4.3%, against 22.8% for the unpaired test. Results, the CSV header
   and the quant report name the correlation and count subjects per arm. The detection view says that
   its tests do not account for repeated samples under this design.

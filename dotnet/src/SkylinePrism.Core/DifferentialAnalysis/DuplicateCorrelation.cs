@@ -55,9 +55,13 @@ public sealed class DuplicateCorrelationResult
 /// <para>One shortcut, and why it changes nothing: statmod rotates the residual space with the
 /// Householder Q of <c>lm.fit</c> and then takes an SVD; this takes any orthonormal basis of the
 /// same space (from an SVD of the design). Where two singular values are equal the individual
-/// squared projections then differ between the two, but every quantity the fit reads - the least
-/// squares start, the score, the information, the comparisons between deviances - depends on them
-/// only through their sum within each run of equal values, which is basis-free.</para>
+/// squared projections then differ between the two, but the least squares start, the score, the
+/// information and every comparison between two deviances depend on them only through their sum
+/// within each run of equal values, which is basis-free (the <c>log y</c> terms cancel in a
+/// difference). Two things read a single deviance or a single response and so are not basis-free:
+/// the stop on <c>deviance / max(mu) &lt; 1e-15</c>, and the zero test in <see cref="Deviance"/>.
+/// Both need an exact fit or a zero residual, which real data does not produce; on the golden the
+/// per-feature values agree with limma to 4e-14.</para>
 /// <para>Missing values are handled as limma handles them: each feature is fitted on its finite
 /// values only. The differential path never sends one, because it tests complete features only.</para>
 /// </remarks>

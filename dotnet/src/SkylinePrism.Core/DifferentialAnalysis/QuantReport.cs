@@ -164,6 +164,9 @@ public static class QuantReport
             if (det.DroppedSamples > 0)
                 sb.Append($"<p class=\"note\">{det.DroppedSamples} contrast sample(s) are not in "
                     + "merged_data and took no part.</p>");
+            if (det.SamplesWithoutSubject > 0)
+                sb.Append($"<p class=\"note\">{det.SamplesWithoutSubject} contrast sample(s) have no "
+                    + "subject and were left out, as the differential leaves them out.</p>");
 
             if (!det.Identifiable)
             {
@@ -380,6 +383,8 @@ public static class QuantReport
             + QuantAnalysis.DetectionQ.ToString("0.##", Inv));
         if (DetectionAnalysis.UnpairedNote(det.UnpairedReason) is { } unpaired)
             w.WriteLine("# " + unpaired);
+        if (det.SamplesWithoutSubject > 0)
+            w.WriteLine($"# {det.SamplesWithoutSubject} contrast sample(s) have no subject and were left out");
 
         const string shared = "peptide,detected_a,n_a,detected_b,n_b,rate_a,rate_b";
         switch (det.Method)

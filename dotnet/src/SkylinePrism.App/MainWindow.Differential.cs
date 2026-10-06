@@ -1670,6 +1670,8 @@ public partial class MainWindow
         var droppedNote = result.DroppedSamples > 0
             ? $" ({result.DroppedSamples} samples not in merged_data)"
             : string.Empty;
+        if (result.SamplesWithoutSubject > 0)
+            droppedNote += $" ({result.SamplesWithoutSubject} samples with no subject left out)";
 
         switch (result.Method)
         {
