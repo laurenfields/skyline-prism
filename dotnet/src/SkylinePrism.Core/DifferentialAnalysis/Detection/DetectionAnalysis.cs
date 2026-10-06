@@ -154,6 +154,16 @@ public static class DetectionAnalysis
         if (design is DifferentialDesign.LinearTrend or DifferentialDesign.LinearTrendWithinSubject)
             throw new ArgumentException("Detection compares two groups, and a trend design has none.");
 
+        // A blocked design tests the samples that have a subject - the same ones the differential
+        // fits and the plots draw - so the two sections of one report agree on n.
+        var repeatsASubject = false;
+        if (design == DifferentialDesign.BlockedBySubject && subjectLabels is not null)
+        {
+            var blocked = BlockedSamples.Resolve(subjectLabels, groupA, groupB);
+            (groupA, groupB) = (blocked.A, blocked.B);
+            repeatsASubject = BlockedSamples.RepeatsASubject(blocked);
+        }
+
         var detIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < detection.SampleIds.Length; i++)
             detIndex[detection.SampleIds[i]] = i;
@@ -203,7 +213,7 @@ public static class DetectionAnalysis
             matchedButMissing = pairs.Count;
         }
 
-        var unpaired = design == DifferentialDesign.BlockedBySubject && RepeatsASubject(subjectLabels, groupA, groupB)
+        var unpaired = repeatsASubject
             ? UnpairedReason.RepeatedSubjects
             : !paired ? UnpairedReason.None
             : covariates is not null ? UnpairedReason.Covariates
@@ -283,20 +293,6 @@ public static class DetectionAnalysis
             + "pair has both its samples in merged_data - so this uses every sample in the arms that is.",
         _ => null,
     };
-
-    /// <summary>Whether any subject has more than one sample across the two arms.</summary>
-    private static bool RepeatsASubject(IReadOnlyList<string?>? subjectLabels,
-        IReadOnlyList<int> groupA, IReadOnlyList<int> groupB)
-    {
-        if (subjectLabels is null)
-            return false;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var c in groupA.Concat(groupB))
-            if (c >= 0 && c < subjectLabels.Count && !string.IsNullOrWhiteSpace(subjectLabels[c])
-                && !seen.Add(subjectLabels[c]!.Trim()))
-                return true;
-        return false;
-    }
 
     /// <summary>
     /// The test as a reader would name it, for status lines, the report and CSV headers.

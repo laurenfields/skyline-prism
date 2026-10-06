@@ -660,7 +660,6 @@ public partial class MainWindow
         var paired = design == DifferentialDesign.Paired;
         var trend = design is DifferentialDesign.LinearTrend
             or DifferentialDesign.LinearTrendWithinSubject;
-        var withinSubject = design == DifferentialDesign.LinearTrendWithinSubject;
         var blocked = design == DifferentialDesign.BlockedBySubject;
 
         // A trend design needs an axis to fit against. With none in the run, both trend entries are

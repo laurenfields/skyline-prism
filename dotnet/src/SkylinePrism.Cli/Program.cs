@@ -275,7 +275,8 @@ public static partial class Program
         if (result.DescribePriorFit() is { } priorFit)
             Console.WriteLine($"  {priorFit}");
         if (result.DescribeBlocking() is { } blocking)
-            Console.WriteLine($"  blocked by subject: {blocking}; {result.DescribeArms()}");
+            Console.WriteLine($"  blocked by subject: {blocking}; subjects {bLabel} {result.SubjectsB} vs "
+                + $"{aLabel} {result.SubjectsA}");
         foreach (var m in result.Messages.Concat(result.Warnings))
             Console.WriteLine($"  {m}");
 

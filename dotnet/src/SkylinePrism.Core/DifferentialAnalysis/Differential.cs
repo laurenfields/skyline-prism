@@ -345,8 +345,10 @@ public static class Differential
                     "A blocked design needs a subject column: the metadata column that identifies "
                     + "each subject, so that subject's samples can be treated as correlated.");
 
-            (groupAColumns, groupBColumns, subjectOf) = BlockedSamples(
-                options.SubjectLabels, groupAColumns, groupBColumns, pairingMessages);
+            var selection = BlockedSamples.Resolve(options.SubjectLabels, groupAColumns, groupBColumns);
+            if (selection.Dropped > 0)
+                pairingMessages.Add($"{selection.Dropped} sample(s) have no subject and were left out.");
+            (groupAColumns, groupBColumns, subjectOf) = (selection.A, selection.B, selection.SubjectOf);
         }
 
         if (options.Test is DifferentialTest.PairedT or DifferentialTest.Wilcoxon)
@@ -409,32 +411,6 @@ public static class Differential
         return Moderate(exprLog2FeaturesBySamples, featureIds, cols, design, options,
             PriorGroups(options, cols, nA, nB), covariatesUsed, messages,
             nA, nB, trendRange: double.NaN, nSubjects: 0, block: subjectOf);
-    }
-
-    /// <summary>
-    /// The arms of a blocked contrast, less any sample with no subject, and each remaining sample's
-    /// subject in the order [A..., B...].
-    /// </summary>
-    /// <remarks>
-    /// A sample with no subject is left out rather than made a subject of its own: a blank in the
-    /// subject column is far more often a missing annotation than a genuinely unrelated sample, and
-    /// a guess either way changes the correlation. How many were left out is said.
-    /// </remarks>
-    private static (List<int> A, List<int> B, List<string> SubjectOf) BlockedSamples(
-        IReadOnlyList<string?> subjectLabels, IReadOnlyList<int> groupA, IReadOnlyList<int> groupB,
-        List<string> messages)
-    {
-        static bool Labeled(IReadOnlyList<string?> labels, int c) =>
-            c >= 0 && c < labels.Count && !string.IsNullOrWhiteSpace(labels[c]);
-
-        var a = groupA.Where(c => Labeled(subjectLabels, c)).ToList();
-        var b = groupB.Where(c => Labeled(subjectLabels, c)).ToList();
-        var dropped = groupA.Count + groupB.Count - a.Count - b.Count;
-        if (dropped > 0)
-            messages.Add($"{dropped} sample(s) have no subject and were left out.");
-
-        var subjectOf = a.Concat(b).Select(c => subjectLabels[c]!.Trim()).ToList();
-        return (a, b, subjectOf);
     }
 
     /// <summary>

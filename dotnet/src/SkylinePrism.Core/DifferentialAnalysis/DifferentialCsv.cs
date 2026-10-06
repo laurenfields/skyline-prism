@@ -53,7 +53,10 @@ public static class DifferentialCsv
             ? $"# n: {result.NA} samples"
               + (result.NSubjects > 0 ? $" in {result.NSubjects} subjects" : string.Empty)
               + $"; tested {result.NFeaturesTested} of {result.NFeaturesTotal}"
-            : $"# n: {result.DescribeArms()}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
+            : result.IsBlocked
+                ? $"# n: {result.NA} ({result.SubjectsA} subjects) vs {result.NB} ({result.SubjectsB} subjects); "
+                  + $"tested {result.NFeaturesTested} of {result.NFeaturesTotal}"
+                : $"# n: {result.NA} vs {result.NB}; tested {result.NFeaturesTested} of {result.NFeaturesTotal}");
         // EVERY tested feature is in this file, not just the hits - so the rule is recorded as the
         // one the run reported against, not as a filter that was applied to the rows below.
         w.WriteLine($"# hit rule (rows are NOT filtered by it): {rule.Describe(effectName)}");

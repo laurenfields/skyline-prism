@@ -195,10 +195,9 @@ public static class LinearModel
                 + "(the correlation matrix is not positive definite).", nameof(correlation));
         }
 
-        var lower = chol.Factor;
-        var whitenedDesign = lower.Solve(DenseMatrix.OfArray(designSamplesByCoef)).ToArray();
-        var whitenedData = lower.Solve(DenseMatrix.OfArray(dataFeaturesBySamples).Transpose())
-            .Transpose().ToArray();
+        var lower = chol.Factor.ToArray();
+        var whitenedDesign = ForwardSubstitute(lower, designSamplesByCoef, rowsAreSamples: true);
+        var whitenedData = ForwardSubstitute(lower, dataFeaturesBySamples, rowsAreSamples: false);
 
         var fit = Fit(whitenedData, whitenedDesign);
         var amean = new double[nFeatures];
@@ -211,5 +210,37 @@ public static class LinearModel
         }
 
         return new LinearModelFit(fit.Coefficients, fit.Sigma, amean, fit.StdevUnscaled, fit.DfResidual);
+    }
+
+    /// <summary>
+    /// <c>L^-1 B</c> for lower-triangular <paramref name="lower"/>, by forward substitution, one
+    /// column of <c>B</c> at a time. <paramref name="b"/> holds samples along its rows when
+    /// <paramref name="rowsAreSamples"/> (a design), or along its columns (a features x samples
+    /// matrix, returned in the same orientation).
+    /// </summary>
+    private static double[,] ForwardSubstitute(double[,] lower, double[,] b, bool rowsAreSamples)
+    {
+        var n = lower.GetLength(0);
+        var k = rowsAreSamples ? b.GetLength(1) : b.GetLength(0);
+        var result = new double[b.GetLength(0), b.GetLength(1)];
+        var x = new double[n];
+        for (var j = 0; j < k; j++)
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var sum = rowsAreSamples ? b[i, j] : b[j, i];
+                for (var m = 0; m < i; m++)
+                    sum -= lower[i, m] * x[m];
+                x[i] = sum / lower[i, i];
+            }
+
+            for (var i = 0; i < n; i++)
+                if (rowsAreSamples)
+                    result[i, j] = x[i];
+                else
+                    result[j, i] = x[i];
+        }
+
+        return result;
     }
 }

@@ -196,11 +196,13 @@ public static class DuplicateCorrelation
                 x[i, c] = design[rows[i], c];
 
         var svd = x.Svd(computeVectors: true);
-        // R's lm.fit decides rank with a pivoted QR at tolerance 1e-7 relative to each column; on a
-        // design PRISM builds (full column rank by construction) the two agree. A relative cut on
-        // the singular values is the SVD equivalent.
+        // Rank by the same rule as LinAlg.MatrixRank (numpy's: max singular value x max(n, p) x eps),
+        // because that is the guard LinearModel.Fit applies before the GLS. R's lm.fit uses a pivoted
+        // QR at 1e-7 instead, and the two differ only on a nearly collinear design; there a looser
+        // cut here would estimate the correlation for a model one column smaller than the one fitted.
         var smax = svd.S.Count > 0 ? svd.S.Maximum() : 0.0;
-        var rank = svd.S.Count(s => s > smax * 1e-7);
+        var tol = smax * Math.Max(n, p) * 2.220446049250313e-16;
+        var rank = svd.S.Count(s => s > tol);
         var u = svd.U;
         var basis = new double[n, n - rank];
         for (var i = 0; i < n; i++)

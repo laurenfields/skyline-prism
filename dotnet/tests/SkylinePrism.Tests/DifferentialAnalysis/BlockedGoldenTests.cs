@@ -22,6 +22,13 @@ public class BlockedGoldenTests
 
     public static IEnumerable<object[]> Cases() => Golden.CaseNames(File);
 
+    /// <summary>
+    /// Every case but <c>missing_values</c>, whose features have different residual df - which only
+    /// limma's per-feature path produces, and PRISM never fits.
+    /// </summary>
+    public static IEnumerable<object[]> CompleteCases() =>
+        Cases().Where(c => (string)c[0] != "missing_values");
+
     private static string[] Block(JsonElement c) =>
         c.GetProperty("block").EnumerateArray().Select(e => e.GetString()!).ToArray();
 
@@ -106,15 +113,12 @@ public class BlockedGoldenTests
 
     /// <summary>
     /// eBayes on the GLS fit, both priors, composed from PRISM's own squeezeVar exactly as eBayes
-    /// composes it. <c>missing_values</c> is left out: its features have different residual df,
-    /// which only limma's per-feature path produces.
+    /// composes it.
     /// </summary>
     [Theory]
-    [MemberData(nameof(Cases))]
+    [MemberData(nameof(CompleteCases))]
     public void ModeratedT_MatchesEBayes(string name)
     {
-        if (name == "missing_values")
-            return;
         var c = Golden.Case(File, name);
         var fit = LinearModel.FitBlocked(Golden.Mat(c, "expr"), Golden.Mat(c, "design"), Block(c),
             Golden.Num(c, "consensus_correlation"));

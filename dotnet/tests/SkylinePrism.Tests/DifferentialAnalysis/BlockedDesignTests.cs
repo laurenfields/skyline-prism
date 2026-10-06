@@ -207,6 +207,41 @@ public class BlockedDesignTests
         Assert.True(Rate(unpaired) > 0.15, $"unpaired false-positive rate {Rate(unpaired):0.000}");
     }
 
+    /// <summary>
+    /// The CSV's <c># n:</c> line counts subjects only for a blocked result; every other design's
+    /// header is exactly what it was before the blocked design existed.
+    /// </summary>
+    [Fact]
+    public void CsvHeader_CountsSubjectsOnlyWhenBlocked()
+    {
+        var (ds, _, a, b) = DetectionAnalysisTests.Setup();
+        var subjects = DetectionAnalysisTests.Subjects(ds, a, b);
+        var unpairedOptions = new DifferentialOptions { Prior = VariancePrior.Global };
+        var blockedOptions = Blocked(subjects, VariancePrior.Global);
+        var unpaired = Differential.Run(ds.ExprLog2, ds.FeatureIds, a, b, unpairedOptions);
+        var blocked = Differential.Run(ds.ExprLog2, ds.FeatureIds, a, b, blockedOptions);
+
+        string Header(DifferentialResult r, DifferentialOptions o)
+        {
+            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"prism-blocked-{Guid.NewGuid():N}.csv");
+            try
+            {
+                DifferentialCsv.Write(path, r, ds, o, SignificanceRule.Default, "g", "A", "B");
+                return string.Join("\n", System.IO.File.ReadLines(path).TakeWhile(l => l.StartsWith('#')));
+            }
+            finally
+            {
+                System.IO.File.Delete(path);
+            }
+        }
+
+        Assert.Contains($"# n: {a.Count} vs {b.Count}; tested", Header(unpaired, unpairedOptions));
+        var blockedHeader = Header(blocked, blockedOptions);
+        Assert.Contains($"# n: {blocked.NA} ({blocked.SubjectsA} subjects) vs {blocked.NB} ({blocked.SubjectsB} subjects)",
+            blockedHeader);
+        Assert.Contains("# blocked by subject: intra-subject correlation", blockedHeader);
+    }
+
     [Fact]
     public void Detection_UnderTheBlockedDesign_SaysItDoesNotAccountForRepeats()
     {

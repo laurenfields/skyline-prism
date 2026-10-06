@@ -137,8 +137,8 @@ public static class PairedSamples
     {
         if (design == DifferentialDesign.BlockedBySubject && subjectLabels is not null)
         {
-            bool Labeled(int c) => c >= 0 && c < subjectLabels.Count && !string.IsNullOrWhiteSpace(subjectLabels[c]);
-            return (pickedA.Where(Labeled).ToList(), pickedB.Where(Labeled).ToList());
+            var blocked = BlockedSamples.Resolve(subjectLabels, pickedA, pickedB);
+            return (blocked.A.ToList(), blocked.B.ToList());
         }
 
         if (design != DifferentialDesign.Paired || subjectLabels is null)
