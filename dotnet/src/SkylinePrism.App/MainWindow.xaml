@@ -818,11 +818,19 @@
                                         <TextBlock x:Name="DiffCovariatesLabel" Text="Adjust for:" Margin="0,10,0,3" Foreground="#555" />
                                         <ComboBox x:Name="DiffCovariatesCombo" DropDownClosed="OnDiffTickListClosed" IsEditable="True" IsReadOnly="True"
                                         Text="(none)"
-                                        ToolTip="Covariates to adjust the contrast for (Sex, PMI, batch...). Tick any metadata column; numeric columns are centered, categorical ones dummy-coded. A ticked covariate switches Detection to the Firth GLM.">
+                                        ToolTip="Covariates to adjust the contrast for (Sex, PMI, batch...). Tick any metadata column. The word beside each is the type it is fitted as: numeric columns are centered (one straight-line effect), categorical ones dummy-coded (a shift per level). A column of numbers is categorical when its name contains a word such as patient, subject, id, batch or plate, or when it holds whole numbers with at most 10 distinct values; click the type to switch it. A ticked covariate switches Detection to the Firth GLM.">
                                         <ComboBox.ItemTemplate>
                                         <DataTemplate>
-                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                        Margin="2,1" />
+                                        <DockPanel Margin="2,1" LastChildFill="True">
+                                        <!-- The type, switchable in place. A flat button rather than
+                                        another combo: there are only two values, and a combo inside a
+                                        tick list's drop-down closes the outer one when it opens. -->
+                                        <Button DockPanel.Dock="Right" Content="{Binding KindText}" ToolTip="{Binding KindHelp}"
+                                        ToolTipService.ShowOnDisabled="True" IsEnabled="{Binding CanSwitch}"
+                                        Click="OnDiffCovariateKindClick" Margin="8,0,0,0" Padding="4,0"
+                                        Background="Transparent" BorderThickness="0" Foreground="#555" FontSize="11" />
+                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                        </DockPanel>
                                         </DataTemplate>
                                         </ComboBox.ItemTemplate>
                                         </ComboBox>

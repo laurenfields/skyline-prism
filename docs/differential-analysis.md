@@ -206,6 +206,39 @@ A trend design has no design groups at all, so forcing `--prior-from-groups` the
 global prior with a message. With controls present - the ordinary case - the intensity trend is
 available on a trend design like any other.
 
+### Covariate types: a column of numbers is not always a number
+
+A covariate enters the design one of two ways: **numeric**, as one mean-centered column (a
+straight-line effect of its value), or **categorical**, as one indicator per level after the first
+(a separate shift per level). Up to dotnet-v26.28.0 every column whose values all parsed as numbers
+was numeric. That made an integer-coded subject ID a straight-line effect of an arbitrary ID number,
+and an integer-coded batch with three or more levels a linear trend across batches - both fitted
+with no word to the user. On a 63-sample longitudinal cohort, "adjusting" a sex contrast for patient
+IDs 1-15 this way changed the hit list from 86 peptides to 78, only 32 of them shared.
+
+The default is now (`CovariateTyping.Infer`):
+
+- text values: categorical;
+- numbers, where the column name contains one of the whole words patient, subject, donor, id,
+  batch, plate, cycle, set or run (split on spaces, punctuation, case changes and letter-digit
+  boundaries, so `File set` and `PatientID` match and `Onset site` does not): categorical;
+- whole numbers with at most 10 distinct values: categorical (a 0/1 column fits the same model either
+  way);
+- any other numbers: numeric (age, a clinical score, years from diagnosis).
+
+The type is shown and can be overridden: in the pane, beside each Adjust-for column; on the command
+line, `--covariate-type COLUMN=numeric|categorical`. Results name each covariate with the type it was
+fitted as (`adjusted for Patient (categorical)`), `quant_parameters` records `covariate_types`, and
+a recorded command carries `--covariate-type` for every covariate, so a later change to this rule
+cannot make it fit a different model.
+
+Two consequences are reported on the result rather than left to a rank-deficiency error:
+
+- **A categorical covariate nested in the groups** - every value in one arm only, as a patient ID is
+  under a sex contrast - would absorb the contrast as a fixed effect, so it is dropped and named. A
+  fixed covariate cannot account for a subject's repeated samples in a between-subject contrast.
+- **A column forced numeric whose name says it labels groups** is fitted as asked, with a warning.
+
 ### Paired is a fixed-effect subject block
 
 `[1, group, subject dummies]`, matching `statistical_analysis.py:1321`. It is not a random intercept
@@ -234,6 +267,9 @@ collapsed into a two-group contrast in one command:
 ```bash
 prism differential -d output/ --group-by stage -a Control Mild -b Severe --adjust-for sex,age
 ```
+
+Each `--adjust-for` column is fitted as the type the output names; `--covariate-type plate=numeric`
+overrides one (see "Covariate types" above).
 
 A level named on both sides is refused rather than dropped from one, because which side it was
 dropped from would change the answer and nothing in the output would record the choice.

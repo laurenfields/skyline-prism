@@ -58,7 +58,91 @@ public partial class MainWindow
     private DetectionMatrixData? _detectionData;
     private string? _detectionDir;
     private string? _clinicalCsvPath;
-    private List<QcGroupValue> _diffCovariateValues = new();
+    private List<DiffCovariateChoice> _diffCovariateValues = new();
+
+    /// <summary>
+    /// One Adjust-for entry: the column, whether it is ticked, and the type it will be fitted as -
+    /// inferred by <see cref="CovariateTyping.Infer"/> and switchable by clicking the type beside it.
+    /// </summary>
+    /// <remarks>
+    /// The type is on the row rather than in a separate control because it is a property of the
+    /// column, and a reader ticking "Patient" needs to see in the same glance that it will enter as
+    /// categories, not as one straight-line effect of an ID number - which is what every column of
+    /// numbers used to become, with nothing on screen to say so.
+    /// </remarks>
+    private sealed class DiffCovariateChoice : System.ComponentModel.INotifyPropertyChanged
+    {
+        private bool _isSelected;
+        private CovariateKind _kind;
+
+        public required string Name { get; init; }
+
+        /// <summary>The inferred type and why.</summary>
+        public required CovariateTypeGuess Inferred { get; init; }
+
+        /// <summary>Raised on any change, so the summary text and method line follow.</summary>
+        public Action? Changed { get; init; }
+
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set
+            {
+                if (_isSelected == value)
+                    return;
+                _isSelected = value;
+                Raise(nameof(IsSelected));
+                Changed?.Invoke();
+            }
+        }
+
+        public CovariateKind Kind
+        {
+            get => _kind;
+            set
+            {
+                if (_kind == value)
+                    return;
+                _kind = value;
+                Raise(nameof(Kind));
+                Raise(nameof(KindText));
+                Raise(nameof(KindHelp));
+                Changed?.Invoke();
+            }
+        }
+
+        /// <summary>Whether the type differs from the inferred one.</summary>
+        public bool Overridden => Kind != Inferred.Kind;
+
+        /// <summary>The type as shown on the row; a trailing * marks one that was switched.</summary>
+        public string KindText => CovariateTyping.Token(Kind) + (Overridden ? " *" : string.Empty);
+
+        /// <summary>Why it has this type, and how to change it.</summary>
+        public string KindHelp => !Inferred.AllNumeric
+            ? $"Categorical: {Inferred.Reason}, so it cannot be numeric."
+            : Overridden
+                ? $"Switched to {CovariateTyping.Token(Kind)}. It would be {CovariateTyping.Token(Inferred.Kind)} "
+                  + $"because {Inferred.Reason}. Click to switch back."
+                : $"{char.ToUpperInvariant(CovariateTyping.Token(Kind)[0])}{CovariateTyping.Token(Kind)[1..]} because "
+                  + $"{Inferred.Reason}. Click to fit it as "
+                  + $"{CovariateTyping.Token(Kind == CovariateKind.Numeric ? CovariateKind.Categorical : CovariateKind.Numeric)}.";
+
+        /// <summary>Only a column of numbers can be either.</summary>
+        public bool CanSwitch => Inferred.AllNumeric;
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        private void Raise(string name) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
+
+    /// <summary>Clicking a covariate's type switches it between numeric and categorical.</summary>
+    private void OnDiffCovariateKindClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is DiffCovariateChoice { CanSwitch: true } choice)
+            choice.Kind = choice.Kind == CovariateKind.Numeric ? CovariateKind.Categorical : CovariateKind.Numeric;
+        e.Handled = true;
+    }
 
     // The two contrast arms, as tick lists. An arm is a SET of metadata values whose samples are
     // pooled, not a single value - which is what lets two control classes be contrasted against the
@@ -851,8 +935,8 @@ public partial class MainWindow
             parts.Add(prior.ToLowerInvariant() + (fromControls ? " from controls" : string.Empty));
         }
 
-        var covariates = (DiffCovariatesCombo.ItemsSource as IEnumerable<QcGroupValue>)
-            ?.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        var covariates = (DiffCovariatesCombo.ItemsSource as IEnumerable<DiffCovariateChoice>)
+            ?.Where(v => v.IsSelected).Select(v => $"{v.Name} ({CovariateTyping.Token(v.Kind)})").ToList();
         if (covariates is { Count: > 0 })
             parts.Add("adjusted for " + string.Join(", ", covariates));
         if (Shown(DiffCorrectionCombo) is { } correction)
@@ -1055,7 +1139,8 @@ public partial class MainWindow
     {
         DiffACombo.Text = SummarizeArm(_diffAValues);
         DiffBCombo.Text = SummarizeArm(_diffBValues);
-        var covariates = _diffCovariateValues.Where(v => v.IsSelected).Select(v => v.Name).ToList();
+        var covariates = _diffCovariateValues.Where(v => v.IsSelected)
+            .Select(v => $"{v.Name} ({CovariateTyping.Token(v.Kind)})").ToList();
         DiffCovariatesCombo.Text = covariates.Count == 0 ? "(none)" : string.Join(", ", covariates);
         // The Restrict-to values are a tick list too, and were added without this - so a ticked study
         // closed to a blank box, reading as though nothing had been chosen.
@@ -1082,7 +1167,16 @@ public partial class MainWindow
         // Any metadata column can be a covariate except the sample id itself and the contrast column.
         _diffCovariateValues = _diffDataset.MetadataColumns
             .Where(c => c != groupByColumn && c != "sample")
-            .Select(c => new QcGroupValue { Name = c, Changed = UpdateDiffArmSummaries })
+            .Select(c =>
+            {
+                var inferred = CovariateTyping.Infer(c, _diffDataset.MetadataValues(c));
+                var choice = new DiffCovariateChoice
+                {
+                    Name = c, Inferred = inferred, Changed = OnDiffCovariateChoiceChanged,
+                };
+                choice.Kind = inferred.Kind;
+                return choice;
+            })
             .ToList();
         DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
     }
@@ -1114,7 +1208,22 @@ public partial class MainWindow
     private IReadOnlyList<Covariate>? SelectedCovariatesFor(IReadOnlyList<string> targetSampleIds) =>
         _diffDataset is null
             ? null
-            : DetectionAnalysis.CovariatesFor(_diffDataset, SelectedCovariateNames(), targetSampleIds);
+            : DetectionAnalysis.CovariatesFor(_diffDataset, SelectedCovariateNames(), targetSampleIds,
+                SwitchedCovariateKinds());
+
+    /// <summary>
+    /// The ticked covariates whose type was switched from the inferred one. Only those: a type that
+    /// was left alone is inferred again in Core, so the result records it as inferred, with the reason.
+    /// </summary>
+    private Dictionary<string, CovariateKind> SwitchedCovariateKinds() =>
+        _diffCovariateValues.Where(v => v.IsSelected && v.Overridden).ToDictionary(v => v.Name, v => v.Kind);
+
+    /// <summary>A tick or a type switch: refresh the closed-state text and the method line.</summary>
+    private void OnDiffCovariateChoiceChanged()
+    {
+        UpdateDiffArmSummaries();
+        UpdateDiffMethodSummary();
+    }
 
     /// <summary>The metadata columns ticked in Adjust for.</summary>
     private List<string> SelectedCovariateNames() =>
@@ -1451,8 +1560,8 @@ public partial class MainWindow
             .ToList();
 
         var nSig = res.Rows.Count(rule.IsSignificant);
-        var adj = res.CovariatesUsed.Count > 0
-            ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}"
+        var adj = res.CovariatesAdjusted.Count > 0
+            ? $"; adjusted for {string.Join(", ", res.CovariatesAdjusted)}"
             : string.Empty;
         var note = res.Messages.Count > 0 ? " " + string.Join(" ", res.Messages) : string.Empty;
         // A restriction removes samples from the column list (DiffTrendColumns), so TrendSamples never
@@ -1555,7 +1664,7 @@ public partial class MainWindow
             .ToList();
 
         var nSig = res.Rows.Count(rule.IsSignificant);
-        var adj = res.CovariatesUsed.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesUsed)}" : string.Empty;
+        var adj = res.CovariatesAdjusted.Count > 0 ? $"; adjusted for {string.Join(", ", res.CovariatesAdjusted)}" : string.Empty;
         // Name the method. With a menu this size the status line is the only record of what
         // produced a hit list, and any message Core raised (an unhonored covariate, a prior that
         // could not be fitted) belongs beside it rather than nowhere.
@@ -1640,7 +1749,7 @@ public partial class MainWindow
         try
         {
             result = await Task.Run(() => DetectionAnalysis.Run(det, dataset, a, b, design, subjects,
-                covariateNames, correction));
+                covariateNames, correction, SwitchedCovariateKinds()));
         }
         catch (DetectionSamplesNotFoundException ex)
         {
