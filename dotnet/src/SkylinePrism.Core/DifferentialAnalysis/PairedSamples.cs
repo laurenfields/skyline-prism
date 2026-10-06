@@ -129,11 +129,18 @@ public static class PairedSamples
     /// </summary>
     /// <remarks>
     /// A paired design where nothing could be matched gives the picked arms back: the test has then
-    /// fallen back too, and showing no samples at all would be the worse answer.
+    /// fallen back too, and showing no samples at all would be the worse answer. A blocked design
+    /// leaves out only the samples with no subject, as the test does.
     /// </remarks>
     public static (List<int> A, List<int> B) ColumnsUsed(DifferentialDesign design,
         IReadOnlyList<string?>? subjectLabels, IReadOnlyList<int> pickedA, IReadOnlyList<int> pickedB)
     {
+        if (design == DifferentialDesign.BlockedBySubject && subjectLabels is not null)
+        {
+            bool Labeled(int c) => c >= 0 && c < subjectLabels.Count && !string.IsNullOrWhiteSpace(subjectLabels[c]);
+            return (pickedA.Where(Labeled).ToList(), pickedB.Where(Labeled).ToList());
+        }
+
         if (design != DifferentialDesign.Paired || subjectLabels is null)
             return (pickedA.ToList(), pickedB.ToList());
 

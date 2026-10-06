@@ -31,6 +31,12 @@ public enum UnpairedReason
 
     /// <summary>Subjects were matched, but no matched pair has both its samples in merged_data.</summary>
     NoPairInMergedData,
+
+    /// <summary>
+    /// The design is blocked by subject and some subject has several samples in the arms, which the
+    /// detection tests - all of which count samples as independent - cannot take into account.
+    /// </summary>
+    RepeatedSubjects,
 }
 
 /// <summary>
@@ -197,7 +203,9 @@ public static class DetectionAnalysis
             matchedButMissing = pairs.Count;
         }
 
-        var unpaired = !paired ? UnpairedReason.None
+        var unpaired = design == DifferentialDesign.BlockedBySubject && RepeatsASubject(subjectLabels, groupA, groupB)
+            ? UnpairedReason.RepeatedSubjects
+            : !paired ? UnpairedReason.None
             : covariates is not null ? UnpairedReason.Covariates
             : matchedButMissing > 0 ? UnpairedReason.NoPairInMergedData
             : UnpairedReason.NoMatchedSubjects;
@@ -258,6 +266,10 @@ public static class DetectionAnalysis
     /// </remarks>
     public static string? UnpairedNote(UnpairedReason reason) => reason switch
     {
+        UnpairedReason.RepeatedSubjects =>
+            "Note: detection does NOT account for repeated samples - the test counts every sample as "
+            + "independent, and some subjects contribute several, so its p-values are too small. The "
+            + "blocked design's correlation has no counterpart in the detection tests.",
         UnpairedReason.Covariates =>
             "Note: adjusted detection is UNPAIRED - the paired form needs conditional logistic "
             + "regression, which is not implemented - so this uses every sample in the arms, "
@@ -271,6 +283,20 @@ public static class DetectionAnalysis
             + "pair has both its samples in merged_data - so this uses every sample in the arms that is.",
         _ => null,
     };
+
+    /// <summary>Whether any subject has more than one sample across the two arms.</summary>
+    private static bool RepeatsASubject(IReadOnlyList<string?>? subjectLabels,
+        IReadOnlyList<int> groupA, IReadOnlyList<int> groupB)
+    {
+        if (subjectLabels is null)
+            return false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var c in groupA.Concat(groupB))
+            if (c >= 0 && c < subjectLabels.Count && !string.IsNullOrWhiteSpace(subjectLabels[c])
+                && !seen.Add(subjectLabels[c]!.Trim()))
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// The test as a reader would name it, for status lines, the report and CSV headers.

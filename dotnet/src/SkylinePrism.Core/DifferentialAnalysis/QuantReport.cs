@@ -240,11 +240,13 @@ public static class QuantReport
         Kv(sb, "Method", options.Describe(res.VariancePrior));
         if (res.DescribePriorFitBody() is { } priorFit)
             Kv(sb, "Variance prior", priorFit);
+        if (res.DescribeBlocking() is { } blocking)
+            Kv(sb, "Blocked by subject", blocking);
         Kv(sb, "Multiple testing", DifferentialCsv.CorrectionName(options.Correction));
         Kv(sb, "Hit rule", rule.Describe(effectName));
         Kv(sb, "Groups", res.IsTrend
             ? $"n = {res.NA}" + (res.NSubjects > 0 ? $" ({res.NSubjects} subjects)" : string.Empty)
-            : $"A n = {res.NA}, B n = {res.NB}");
+            : res.DescribeArms());
         Kv(sb, "Features tested", $"{res.NFeaturesTested} of {res.NFeaturesTotal}");
         if (res.CovariatesUsed.Count > 0)
             Kv(sb, "Adjusted for", string.Join(", ", res.CovariatesUsed));
