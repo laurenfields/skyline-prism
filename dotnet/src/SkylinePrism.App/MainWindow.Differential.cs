@@ -661,13 +661,16 @@ public partial class MainWindow
             or DifferentialDesign.LinearTrendWithinSubject;
         var withinSubject = design == DifferentialDesign.LinearTrendWithinSubject;
 
-        // A trend design needs an axis to fit against. With none in the run, both trend entries are
-        // collapsed AND disabled - and if one was already selected (a clinical CSV was detached, say)
-        // the design falls back rather than leaving an invisible selection.
+        // A trend design needs an axis to fit against. With none - no run loaded, or a run with no
+        // numeric column - both trend entries are GRAYED, with a tooltip saying what would enable
+        // them, and a selected one falls back to Unpaired (a clinical CSV was detached, say).
+        // Grayed rather than collapsed: collapsed, the entries were on screen when the window opened
+        // (nothing had applied this rule yet) and vanished at the first click, with nothing to say
+        // they existed or how to get them back.
         var axes = DiffTrendAxes();
         PopulateTrendColumns(axes);
-        ShowTest(DiffDesignTrendItem, axes.Count > 0);
-        ShowTest(DiffDesignTrendSubjectItem, axes.Count > 0);
+        GrayUnlessTrendable(DiffDesignTrendItem, axes.Count > 0, TrendHelp);
+        GrayUnlessTrendable(DiffDesignTrendSubjectItem, axes.Count > 0, TrendBySubjectHelp);
         if (DiffDesignCombo.SelectedItem is ListBoxItem { IsEnabled: false })
         {
             using (SuppressDiff())
@@ -797,6 +800,39 @@ public partial class MainWindow
         DiffCovariatesCombo.IsEnabled = moderated;
     }
 
+    private const string TrendHelp =
+        "Fit a slope against a numeric column - a time, a dose, a numeric stage - instead of "
+        + "contrasting two arms. Every sample counts as independent, so use it when each subject gives "
+        + "one sample.";
+
+    private const string TrendBySubjectHelp =
+        "The same slope when the same subjects are followed across the column: each subject gets its "
+        + "own level, so the slope is estimated within subject. Treating one subject's repeated samples "
+        + "as independent understates the standard error.";
+
+    /// <summary>
+    /// A trend design entry: enabled with its own help when the run has an axis to fit against,
+    /// otherwise grayed with a tooltip that says what is missing and how to supply it.
+    /// </summary>
+    /// <remarks>
+    /// The tooltip is set here, not in the XAML, because its text depends on the reason - and the
+    /// XAML sets <c>ToolTipService.ShowOnDisabled</c>, without which WPF hides a disabled element's
+    /// tooltip at exactly the moment it is the only explanation (see DisabledControlHelpTests).
+    /// </remarks>
+    private void GrayUnlessTrendable(ListBoxItem item, bool hasAxis, string help)
+    {
+        item.Visibility = Visibility.Visible;
+        item.IsEnabled = hasAxis;
+        item.ToolTip = hasAxis
+            ? help
+            : _diffDataset is null
+                ? "Unavailable: no run is loaded. Set the output directory above to a finished PRISM run. "
+                  + "A trend needs a numeric column to fit a slope against."
+                : "Unavailable: this run has no numeric column to fit a slope against. Attach a clinical "
+                  + "CSV that has one (a time, a dose, a numeric stage), or annotate one in the Skyline "
+                  + "document and re-export." + Environment.NewLine + Environment.NewLine + help;
+    }
+
     private static void ShowTest(UIElement item, bool applies)
     {
         item.Visibility = applies ? Visibility.Visible : Visibility.Collapsed;
@@ -878,6 +914,9 @@ public partial class MainWindow
         {
             InvalidateDifferential();
             ClearDiffOutput();
+            // Applied now, not at the first click: until something ran it the Trend entries looked
+            // available, and then grayed the moment anything was clicked.
+            UpdateDiffControls();
             DiffStatusText.Text = "Set a PRISM output directory above to run a contrast.";
             return;
         }
@@ -927,6 +966,9 @@ public partial class MainWindow
             if (request == _diffRequest)
             {
                 InvalidateDifferential();
+                // No run, so nothing to fit a trend against: gray those entries now, as the
+                // no-directory case does, rather than leaving them looking available.
+                UpdateDiffControls();
                 DiffStatusText.Text = "Load failed: " + ex.Message;
             }
 
