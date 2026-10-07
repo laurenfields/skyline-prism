@@ -194,6 +194,25 @@ public class CovariateTypingTests
         Assert.DoesNotContain(res.Messages, m => m.Contains("nested"));
     }
 
+    /// <summary>
+    /// The pane's per-covariate note is what the run would report for that covariate - the same
+    /// builder, so the two cannot disagree - and says nothing for one that goes in as it is.
+    /// </summary>
+    [Fact]
+    public void CovariateNotes_AreWhatTheRunReports()
+    {
+        var (expr, ids) = Matrix();
+        var patient = Covariate.FromMetadata("Patient", Patients);
+        var batch = Covariate.FromMetadata("Batch", Repeat(("1", 2), ("2", 2), ("3", 2), ("1", 2), ("2", 2), ("3", 2)));
+
+        var run = Differential.Run(expr, ids, A, B, With(patient));
+        Assert.Equal(run.Messages, Differential.CovariateNotes(patient, A, B));
+        Assert.Empty(Differential.CovariateNotes(batch, A, B));
+
+        // A trend has no arms, so nothing is nested in them.
+        Assert.DoesNotContain(Differential.CovariateNotes(patient, A.Concat(B).ToArray()), m => m.Contains("nested"));
+    }
+
     [Fact]
     public void AConstantCategorical_IsSkippedAndSaid()
     {

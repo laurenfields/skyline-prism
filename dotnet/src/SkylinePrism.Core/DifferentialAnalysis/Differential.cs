@@ -852,6 +852,36 @@ public static class Differential
         return messages;
     }
 
+    /// <summary>
+    /// What the design will do with <paramref name="covariate"/> in a two-arm contrast over these
+    /// arms - skip it, drop it, warn about it - before anything is run: the messages
+    /// <see cref="Run(double[,], IReadOnlyList{string}, IReadOnlyList{int}, IReadOnlyList{int}, DifferentialOptions)"/>
+    /// would report for it, and none when it goes in as it is.
+    /// </summary>
+    /// <remarks>
+    /// Produced by the same design builder the run uses, on the covariate alone, so a note shown
+    /// beside a covariate cannot disagree with what the run then does with it. Alone, because the
+    /// point is to say what is wrong with THIS column; a clash between two covariates still surfaces
+    /// when the contrast runs.
+    /// </remarks>
+    public static IReadOnlyList<string> CovariateNotes(Covariate covariate,
+        IReadOnlyList<int> groupAColumns, IReadOnlyList<int> groupBColumns)
+    {
+        var cols = groupAColumns.Concat(groupBColumns).ToArray();
+        return BuildDesign(groupAColumns.Count, groupBColumns.Count, cols, new[] { covariate }).Messages;
+    }
+
+    /// <summary>
+    /// <see cref="CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int})"/> for a trend
+    /// fitted over <paramref name="sampleColumns"/>, which has no arms for a covariate to be nested in.
+    /// </summary>
+    public static IReadOnlyList<string> CovariateNotes(Covariate covariate, IReadOnlyList<int> sampleColumns)
+    {
+        // Any term that is not a 0/1 indicator tells the builder there are no arms.
+        var term = Enumerable.Range(0, sampleColumns.Count).Select(i => i - (sampleColumns.Count - 1) / 2.0).ToArray();
+        return BuildDesign(term, "the trend", sampleColumns.ToArray(), new[] { covariate }).Messages;
+    }
+
     private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages) BuildDesign(
         int nA, int nB, int[] cols, IReadOnlyList<Covariate>? covariates)
     {
@@ -974,7 +1004,7 @@ public static class Differential
                     {
                         messages.Add($"Covariate '{cat.Name}' is nested within the groups - each of its values "
                             + "occurs in one arm only - so as a fixed effect it would absorb the contrast, "
-                            + "which could then not be estimated. It was dropped. If it identifies subjects "
+                            + "which could then not be estimated. It is dropped. If it identifies subjects "
                             + "sampled more than once, no fixed covariate accounts for those repeated samples.");
                         continue;
                     }

@@ -13,7 +13,9 @@ as the GitHub Release description and fails if it is missing.
   straight-line effect of an arbitrary label - with nothing said. Now a column of numbers is
   categorical when its name contains a whole word such as patient, subject, id, batch, plate, cycle,
   set or run, or when it holds whole numbers with at most 10 distinct values; numeric otherwise.
-  The type is shown beside each Adjust-for column (click to switch it) and can be set with
+  Adjust for moved out of the collapsed Method section into Comparison, and each ticked column now
+  gets its own box with a Numeric | Categorical toggle, the reason for its type, and - before the
+  run - a note when the design will drop or skip it. The type can also be set with
   `--covariate-type COLUMN=numeric|categorical`; results, `quant_parameters` (`covariate_types`) and
   recorded commands name the type each covariate was fitted as. A categorical covariate nested in
   the groups - a patient ID under a sex contrast - is dropped by name instead of failing with a
@@ -30,4 +32,4 @@ as the GitHub Release description and fails if it is missing.
   at most 10 distinct values, or whose name contains patient, subject, donor, id, batch, plate,
   cycle, set or run, is now categorical by default where it used to be numeric, so an adjusted
   contrast using one gives different numbers than before. `--covariate-type COLUMN=numeric` (or
-  clicking the type in the pane) restores the old model for that column.
+  choosing Numeric on the column in the pane) restores the old model for that column.

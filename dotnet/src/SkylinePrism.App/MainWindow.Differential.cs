@@ -61,14 +61,15 @@ public partial class MainWindow
     private List<DiffCovariateChoice> _diffCovariateValues = new();
 
     /// <summary>
-    /// One Adjust-for entry: the column, whether it is ticked, and the type it will be fitted as -
-    /// inferred by <see cref="CovariateTyping.Infer"/> and switchable by clicking the type beside it.
+    /// One Adjust-for column: whether it is ticked, the type it will be fitted as (inferred by
+    /// <see cref="CovariateTyping.Infer"/>, switchable), and what the design will do with it.
     /// </summary>
     /// <remarks>
-    /// The type is on the row rather than in a separate control because it is a property of the
-    /// column, and a reader ticking "Patient" needs to see in the same glance that it will enter as
-    /// categories, not as one straight-line effect of an ID number - which is what every column of
-    /// numbers used to become, with nothing on screen to say so.
+    /// A ticked column gets its own row under the picker, out in the Comparison section rather than
+    /// folded inside Method, with its type as a two-way toggle and any problem written beside it
+    /// before anything runs. All of that used to be one word inside a closed drop-down, which is easy
+    /// to miss - and what it guards against, an ID number fitted as one straight-line effect, changes
+    /// every p-value without anything else on screen looking different.
     /// </remarks>
     private sealed class DiffCovariateChoice : System.ComponentModel.INotifyPropertyChanged
     {
@@ -80,8 +81,29 @@ public partial class MainWindow
         /// <summary>The inferred type and why.</summary>
         public required CovariateTypeGuess Inferred { get; init; }
 
-        /// <summary>Raised on any change, so the summary text and method line follow.</summary>
+        /// <summary>Raised on a tick, so the rows, the summary text and the method line follow.</summary>
         public Action? Changed { get; init; }
+
+        /// <summary>Raised when the type is switched; that changes the model, so the contrast reruns.</summary>
+        public Action? KindChanged { get; init; }
+
+        private string _note = string.Empty;
+
+        /// <summary>What the design will do with this column over the current arms; empty when it goes in as it is.</summary>
+        public string Note
+        {
+            get => _note;
+            set
+            {
+                if (_note == value)
+                    return;
+                _note = value;
+                Raise(nameof(Note));
+                Raise(nameof(NoteVisibility));
+            }
+        }
+
+        public Visibility NoteVisibility => string.IsNullOrEmpty(_note) ? Visibility.Collapsed : Visibility.Visible;
 
         public bool IsSelected
         {
@@ -105,27 +127,33 @@ public partial class MainWindow
                     return;
                 _kind = value;
                 Raise(nameof(Kind));
-                Raise(nameof(KindText));
-                Raise(nameof(KindHelp));
-                Changed?.Invoke();
+                Raise(nameof(KindIndex));
+                Raise(nameof(Reason));
+                KindChanged?.Invoke();
             }
         }
 
         /// <summary>Whether the type differs from the inferred one.</summary>
         public bool Overridden => Kind != Inferred.Kind;
 
-        /// <summary>The type as shown on the row; a trailing * marks one that was switched.</summary>
-        public string KindText => CovariateTyping.Token(Kind) + (Overridden ? " *" : string.Empty);
+        /// <summary>The segmented toggle's index: 0 numeric, 1 categorical.</summary>
+        public int KindIndex
+        {
+            get => Kind == CovariateKind.Numeric ? 0 : 1;
+            set
+            {
+                if (CanSwitch && value is 0 or 1)
+                    Kind = value == 0 ? CovariateKind.Numeric : CovariateKind.Categorical;
+            }
+        }
 
-        /// <summary>Why it has this type, and how to change it.</summary>
-        public string KindHelp => !Inferred.AllNumeric
-            ? $"Categorical: {Inferred.Reason}, so it cannot be numeric."
+        /// <summary>Why it has this type, in a line under the toggle.</summary>
+        public string Reason => !Inferred.AllNumeric
+            ? $"Categorical only: {Inferred.Reason}."
             : Overridden
-                ? $"Switched to {CovariateTyping.Token(Kind)}. It would be {CovariateTyping.Token(Inferred.Kind)} "
-                  + $"because {Inferred.Reason}. Click to switch back."
+                ? $"Switched by you; it would be {CovariateTyping.Token(Inferred.Kind)} because {Inferred.Reason}."
                 : $"{char.ToUpperInvariant(CovariateTyping.Token(Kind)[0])}{CovariateTyping.Token(Kind)[1..]} because "
-                  + $"{Inferred.Reason}. Click to fit it as "
-                  + $"{CovariateTyping.Token(Kind == CovariateKind.Numeric ? CovariateKind.Categorical : CovariateKind.Numeric)}.";
+                  + $"{Inferred.Reason}.";
 
         /// <summary>Only a column of numbers can be either.</summary>
         public bool CanSwitch => Inferred.AllNumeric;
@@ -136,12 +164,79 @@ public partial class MainWindow
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
 
-    /// <summary>Clicking a covariate's type switches it between numeric and categorical.</summary>
-    private void OnDiffCovariateKindClick(object sender, RoutedEventArgs e)
+    /// <summary>The ticked covariates, one row each, in the order they appear in the picker.</summary>
+    private readonly System.Collections.ObjectModel.ObservableCollection<DiffCovariateChoice> _diffCovariateRows = new();
+
+    /// <summary>A row's x: stop adjusting for that column, and rerun.</summary>
+    private async void OnDiffCovariateRemove(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is DiffCovariateChoice { CanSwitch: true } choice)
-            choice.Kind = choice.Kind == CovariateKind.Numeric ? CovariateKind.Categorical : CovariateKind.Numeric;
-        e.Handled = true;
+        try
+        {
+            if ((sender as FrameworkElement)?.DataContext is not DiffCovariateChoice choice)
+                return;
+            choice.IsSelected = false;
+            if (_diffDataset is not null && !_diffSuppress)
+                await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffCovariateRemove), ex);
+        }
+    }
+
+    /// <summary>A type switched on a row: the model changed, so rerun.</summary>
+    private async void OnDiffCovariateKindChanged()
+    {
+        try
+        {
+            RefreshDiffCovariateRows();
+            UpdateDiffMethodSummary();
+            if (_diffDataset is not null && !_diffSuppress)
+                await RunCurrentViewAsync();
+        }
+        catch (Exception ex)
+        {
+            ReportHandlerFailure(nameof(OnDiffCovariateKindChanged), ex);
+        }
+    }
+
+    /// <summary>
+    /// Rebuild the covariate rows from the ticks, and write each one's note - what the design will
+    /// do with it over the arms as they stand now (<see cref="Differential.CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int})"/>).
+    /// </summary>
+    /// <remarks>
+    /// Called whenever something the note depends on changes: a tick, a type, the arms, the design.
+    /// It reads metadata only, so it is cheap. With no arms picked yet there is nothing to be nested
+    /// in, and the note stays empty rather than guessing.
+    /// </remarks>
+    private void RefreshDiffCovariateRows()
+    {
+        var ticked = _diffCovariateValues.Where(v => v.IsSelected).ToList();
+        if (!ticked.SequenceEqual(_diffCovariateRows))
+        {
+            _diffCovariateRows.Clear();
+            foreach (var t in ticked)
+                _diffCovariateRows.Add(t);
+        }
+
+        if (_diffDataset is null)
+            return;
+        int[]? trendColumns = DiffIsTrend() ? DiffTrendColumns() : null;
+        List<int>? a = null, b = null;
+        if (trendColumns is null && !TryGetGroups(out _, out a, out b, out _, out _))
+            a = b = null;
+
+        foreach (var row in ticked)
+        {
+            var cov = DetectionAnalysis.CovariatesFor(_diffDataset, new[] { row.Name }, _diffDataset.SampleIds,
+                row.Overridden ? new Dictionary<string, CovariateKind> { [row.Name] = row.Kind } : null)!.Single();
+            IReadOnlyList<string> notes = trendColumns is { Length: > 0 }
+                ? Differential.CovariateNotes(cov, trendColumns)
+                : a is { Count: > 0 } && b is { Count: > 0 }
+                    ? Differential.CovariateNotes(cov, a, b)
+                    : Array.Empty<string>();
+            row.Note = string.Join(" ", notes);
+        }
     }
 
     // The two contrast arms, as tick lists. An arm is a SET of metadata values whose samples are
@@ -879,6 +974,8 @@ public partial class MainWindow
 
         DiffCovariatesLabel.IsEnabled = moderated;
         DiffCovariatesCombo.IsEnabled = moderated;
+        DiffCovariateRows.IsEnabled = moderated;
+        RefreshDiffCovariateRows();
     }
 
     private static void ShowTest(UIElement item, bool applies)
@@ -1139,14 +1236,15 @@ public partial class MainWindow
     {
         DiffACombo.Text = SummarizeArm(_diffAValues);
         DiffBCombo.Text = SummarizeArm(_diffBValues);
-        var covariates = _diffCovariateValues.Where(v => v.IsSelected)
-            .Select(v => $"{v.Name} ({CovariateTyping.Token(v.Kind)})").ToList();
-        DiffCovariatesCombo.Text = covariates.Count == 0 ? "(none)" : string.Join(", ", covariates);
+        // The rows below the picker carry the names and types, so the closed picker only counts.
+        var ticked = _diffCovariateValues.Count(v => v.IsSelected);
+        DiffCovariatesCombo.Text = ticked == 0 ? "(none - tick columns to add)" : $"{ticked} column{(ticked == 1 ? "" : "s")} - see below";
         // The Restrict-to values are a tick list too, and were added without this - so a ticked study
         // closed to a blank box, reading as though nothing had been chosen.
         DiffRestrictValuesCombo.Text = DiffRestrictValues() is { Count: > 0 } kept
             ? string.Join(", ", kept)
             : "(tick values to keep)";
+        RefreshDiffCovariateRows();
     }
 
     /// <summary>
@@ -1170,15 +1268,17 @@ public partial class MainWindow
             .Select(c =>
             {
                 var inferred = CovariateTyping.Infer(c, _diffDataset.MetadataValues(c));
-                var choice = new DiffCovariateChoice
+                // Kind before the callbacks, so setting it raises nothing.
+                return new DiffCovariateChoice
                 {
-                    Name = c, Inferred = inferred, Changed = OnDiffCovariateChoiceChanged,
+                    Name = c, Inferred = inferred, Kind = inferred.Kind,
+                    Changed = OnDiffCovariateChoiceChanged, KindChanged = OnDiffCovariateKindChanged,
                 };
-                choice.Kind = inferred.Kind;
-                return choice;
             })
             .ToList();
         DiffCovariatesCombo.ItemsSource = _diffCovariateValues;
+        DiffCovariateRows.ItemsSource = _diffCovariateRows;
+        RefreshDiffCovariateRows();
     }
 
     /// <summary>Ticked covariates, with values aligned to <paramref name="targetSampleIds"/>, or null if none.</summary>

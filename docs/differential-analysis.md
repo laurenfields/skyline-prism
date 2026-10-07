@@ -226,8 +226,9 @@ The default is now (`CovariateTyping.Infer`):
   way);
 - any other numbers: numeric (age, a clinical score, years from diagnosis).
 
-The type is shown and can be overridden: in the pane, beside each Adjust-for column; on the command
-line, `--covariate-type COLUMN=numeric|categorical`. Results name each covariate with the type it was
+The type is shown and can be overridden: in the pane, as a Numeric | Categorical toggle on each
+ticked Adjust-for column, which also shows before the run what the design will do with that column
+(`Differential.CovariateNotes`, the same builder the run uses); on the command line, `--covariate-type COLUMN=numeric|categorical`. Results name each covariate with the type it was
 fitted as (`adjusted for Patient (categorical)`), `quant_parameters` records `covariate_types`, and
 a recorded command carries `--covariate-type` for every covariate, so a later change to this rule
 cannot make it fit a different model.
