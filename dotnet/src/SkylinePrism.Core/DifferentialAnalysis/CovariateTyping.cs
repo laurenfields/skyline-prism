@@ -35,10 +35,15 @@ public sealed record CovariateTypeGuess(CovariateKind Kind, bool AllNumeric, str
 /// same problem - nothing makes batch 3 differ from batch 1 by twice what batch 2 does. Before this
 /// rule both were fitted numeric because their values parsed, with no word to the user.</para>
 /// <para>So a column of numbers is categorical when its name says it labels groups (a whole word
-/// from <see cref="CategoryWords"/>), or when its values are whole numbers taking at most
-/// <see cref="MaxCategoricalLevels"/> distinct values. Otherwise it stays numeric: age, a clinical
-/// score, years from diagnosis. A two-level 0/1 column comes out categorical, which fits exactly the
-/// same model as the centered numeric column it used to be.</para>
+/// from <see cref="CategoryWords"/>) AND its values look like labels - whole numbers, some of which
+/// repeat across samples, as a subject's ID repeats over its visits - or when its values are whole
+/// numbers taking at most <see cref="MaxCategoricalLevels"/> distinct values. Otherwise it stays
+/// numeric: age, a clinical score, years from diagnosis. A two-level 0/1 column comes out
+/// categorical, which fits exactly the same model as the centered numeric column it used to be.</para>
+/// <para>The name alone is not enough: "Patient age", "Run order" and "Cycle time" contain a listed
+/// word and are measurements. Decimals, or whole numbers that never repeat (an injection order),
+/// keep such a column numeric. A whole-number measurement that does repeat - an age in years, one
+/// per patient - still comes out categorical, and its row in the pane says why and switches it.</para>
 /// <para>Words are matched WHOLE, after splitting the name on punctuation, spaces, case changes and
 /// letter-digit boundaries: "File set" and "PatientID" match, "Onset site" does not.</para>
 /// </remarks>
@@ -54,27 +59,27 @@ public static class CovariateTyping
     /// <summary>The default type of <paramref name="name"/>, given its per-sample values (null = missing).</summary>
     public static CovariateTypeGuess Infer(string name, IReadOnlyList<string?> values)
     {
-        var present = values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!.Trim()).ToList();
+        var present = values.Where(v => !IsMissing(v)).Select(v => v!.Trim()).ToList();
         if (present.Count == 0)
             return new CovariateTypeGuess(CovariateKind.Categorical, false, "it has no values");
 
-        var nums = new List<double>(present.Count);
+        var finite = new List<double>(present.Count);
         foreach (var v in present)
         {
             if (!TryNumber(v, out var x))
                 return new CovariateTypeGuess(CovariateKind.Categorical, false,
                     $"it has values that are not numbers ('{v}')");
-            nums.Add(x);
+            finite.Add(x);
         }
 
-        if (CategoryWord(name) is { } word)
-            return new CovariateTypeGuess(CovariateKind.Categorical, true,
-                $"its name contains '{word}', which labels groups rather than measuring a quantity");
-
-        // A value spelled NaN parses, and means missing, as it always has here.
-        var finite = nums.Where(double.IsFinite).ToList();
         var levels = finite.Distinct().Count();
-        if (finite.All(x => x == Math.Floor(x)) && levels <= MaxCategoricalLevels)
+        var whole = finite.All(x => x == Math.Floor(x));
+        if (CategoryWord(name) is { } word && whole && levels < finite.Count)
+            return new CovariateTypeGuess(CovariateKind.Categorical, true,
+                $"its name contains '{word}' and its values are whole numbers that repeat across "
+                + "samples, as labels do");
+
+        if (whole && levels <= MaxCategoricalLevels)
             return new CovariateTypeGuess(CovariateKind.Categorical, true,
                 $"its values are whole numbers with only {levels} distinct value{(levels == 1 ? "" : "s")}");
 
@@ -92,6 +97,28 @@ public static class CovariateTyping
             .Select(w => w.ToLowerInvariant())
             .ToHashSet();
         return CategoryWords.FirstOrDefault(words.Contains);
+    }
+
+    /// <summary>The spellings of "no value" a metadata cell arrives in.</summary>
+    /// <remarks>
+    /// <c>#N/A</c> is what Skyline and Excel write into an empty cell - a QC pool has no age - and
+    /// left as a value it made the whole column text, so a numeric covariate became categories and,
+    /// under a contrast between subjects, was dropped as nested. Not "None": that is a real level
+    /// often enough (a treatment of none) to be left alone.
+    /// </remarks>
+    private static readonly HashSet<string> MissingTokens =
+        new(StringComparer.OrdinalIgnoreCase) { "#N/A", "N/A", "NA", "#NA", "NULL" };
+
+    /// <summary>
+    /// Whether a metadata value means "no value": blank, a missing-value token (<c>#N/A</c>, <c>NA</c>,
+    /// <c>NULL</c>), or a number that is not finite (<c>NaN</c>, <c>Infinity</c>).
+    /// </summary>
+    public static bool IsMissing(string? v)
+    {
+        if (string.IsNullOrWhiteSpace(v))
+            return true;
+        var t = v.Trim();
+        return MissingTokens.Contains(t) || (TryNumber(t, out var x) && !double.IsFinite(x));
     }
 
     /// <summary>An invariant-culture number, the one parse every covariate path uses.</summary>

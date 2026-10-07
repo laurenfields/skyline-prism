@@ -219,9 +219,13 @@ IDs 1-15 this way changed the hit list from 86 peptides to 78, only 32 of them s
 The default is now (`CovariateTyping.Infer`):
 
 - text values: categorical;
-- numbers, where the column name contains one of the whole words patient, subject, donor, id,
-  batch, plate, cycle, set or run (split on spaces, punctuation, case changes and letter-digit
-  boundaries, so `File set` and `PatientID` match and `Onset site` does not): categorical;
+- whole numbers that repeat across samples, where the column name contains one of the whole words
+  patient, subject, donor, id, batch, plate, cycle, set or run (split on spaces, punctuation, case
+  changes and letter-digit boundaries, so `File set` and `PatientID` match and `Onset site` does
+  not): categorical. The values have to look like labels as well: `Patient age` in decimals and
+  `Run order` (1, 2, 3, ... never repeating) stay numeric. A whole-number measurement that does
+  repeat, such as an age in years recorded once per patient, still comes out categorical, and its
+  row in the pane says so and switches it;
 - whole numbers with at most 10 distinct values: categorical (a 0/1 column fits the same model either
   way);
 - any other numbers: numeric (age, a clinical score, years from diagnosis).
@@ -232,6 +236,13 @@ ticked Adjust-for column, which also shows before the run what the design will d
 fitted as (`adjusted for Patient (categorical)`), `quant_parameters` records `covariate_types`, and
 a recorded command carries `--covariate-type` for every covariate, so a later change to this rule
 cannot make it fit a different model.
+
+A blank value, and one written as `#N/A`, `N/A`, `NA`, `NULL`, `NaN` or `Infinity`, is missing, for
+text columns as well as numbers (so a numeric column whose QC pools hold `#N/A` stays numeric); a covariate missing in a selected sample is skipped, and the result says so. (A blank in a
+text column used to be a level of its own.)
+
+When a categorical covariate's levels use up the residual degrees of freedom, the refusal names it
+and how many design columns it takes.
 
 Two consequences are reported on the result rather than left to a rank-deficiency error:
 
@@ -256,7 +267,8 @@ prism differential -d output/ --group-by condition -a Control -b Disease
 ```
 
 `prism differential` takes the whole menu above as flags - `--level`, `--design`, `--subject`,
-`--trend-over`, `--restrict-to`, `--test`, `--prior`, `--prior-from-controls`, `--adjust-for`, `--correction`,
+`--trend-over`, `--restrict-to`, `--test`, `--prior`, `--prior-from-controls`, `--adjust-for`,
+`--covariate-type`, `--correction`,
 `--alpha`, `--raw-p`, `--min-log2fc` - and writes a results
 CSV (`differential.csv` in the output directory unless `-o` says otherwise) whose header records the
 contrast, its direction and the method that produced it. `prism differential --help` lists every

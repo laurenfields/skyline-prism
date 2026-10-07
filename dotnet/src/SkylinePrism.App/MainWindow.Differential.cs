@@ -117,19 +117,34 @@ public partial class MainWindow
 
         if (_diffDataset is null)
             return;
-        int[]? trendColumns = DiffIsTrend() ? DiffTrendColumns() : null;
+        // The options the run would use, so the preview takes the same design path (pairing,
+        // subject block, trend selection) and reports what that path will do.
+        var options = DiffOptions(null);
+        var trend = DiffIsTrend();
+        int[]? trendColumns = trend ? DiffTrendColumns() : null;
+        var x = trend ? DiffTrendValues() : null;
+        var testedColumn = trend ? DiffTrendAxis()?.Column : null;
         List<int>? a = null, b = null;
-        if (trendColumns is null && !TryGetGroups(out _, out a, out b, out _, out _))
+        if (!trend && !TryGetGroups(out _, out a, out b, out _, out _))
             a = b = null;
 
         foreach (var row in ticked)
         {
+            if (testedColumn is not null && string.Equals(row.Name, testedColumn, StringComparison.Ordinal))
+            {
+                // WithoutTestedTerm removes it from the run; say so rather than preview a fit it gets no part in.
+                row.Note = "This is the column the trend is fitted against, so it is left out of the adjustment.";
+                continue;
+            }
+
             var cov = DetectionAnalysis.CovariatesFor(_diffDataset, new[] { row.Name }, _diffDataset.SampleIds,
                 row.Overridden ? new Dictionary<string, CovariateKind> { [row.Name] = row.Kind } : null)!.Single();
-            IReadOnlyList<string> notes = trendColumns is { Length: > 0 }
-                ? Differential.CovariateNotes(cov, trendColumns)
+            IReadOnlyList<string> notes = trend
+                ? trendColumns is { Length: > 0 } && x is not null
+                    ? Differential.CovariateNotes(cov, trendColumns, x, options)
+                    : Array.Empty<string>()
                 : a is { Count: > 0 } && b is { Count: > 0 }
-                    ? Differential.CovariateNotes(cov, a, b)
+                    ? Differential.CovariateNotes(cov, a, b, options)
                     : Array.Empty<string>();
             row.Note = string.Join(" ", notes);
         }

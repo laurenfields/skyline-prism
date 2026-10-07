@@ -1300,8 +1300,9 @@ public static partial class Program
             --covariate-type COL=TYPE
                                    Fit an --adjust-for column as numeric or categorical;
                                    repeatable. Without it a column of numbers is categorical when
-                                   its name contains a whole word such as patient, subject, donor,
-                                   id, batch, plate, cycle, set or run, or when its values are whole
+                                   it holds whole numbers that repeat across samples and its name
+                                   contains a whole word such as patient, subject, donor, id,
+                                   batch, plate, cycle, set or run, or when its values are whole
                                    numbers with at most 10 distinct values; numeric otherwise. The
                                    output names the type each covariate was fitted as
             --correction METHOD    bh (default), by, holm, bonferroni, none

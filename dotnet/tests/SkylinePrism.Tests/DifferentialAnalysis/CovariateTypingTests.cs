@@ -20,13 +20,16 @@ public class CovariateTypingTests
         runs.SelectMany(r => Enumerable.Repeat((string?)r.Value, r.Times)).ToArray();
 
     [Theory]
-    // A name word decides, whatever the values.
-    [InlineData("Patient (paper Table S3)", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15", CovariateKind.Categorical)]
-    [InlineData("PatientID", "101,102,103,104,105,106,107,108,109,110,111,112", CovariateKind.Categorical)]
-    [InlineData("subject_id", "1.5,2.5,3.5", CovariateKind.Categorical)]
+    // A name word, with whole numbers that repeat (a subject's ID over its visits): labels.
+    [InlineData("Patient (paper Table S3)", "1,1,1,2,2,3,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15", CovariateKind.Categorical)]
+    [InlineData("PatientID", "101,101,102,102,103,103,104,104,105,105,106,106,107,107,108,108,109,109,110,110,111,111", CovariateKind.Categorical)]
     [InlineData("File set", "1,2,3", CovariateKind.Categorical)]
     [InlineData("Digestion cycle", "1,2,3", CovariateKind.Categorical)]
-    [InlineData("Plate2", "1,2,3,4,5,6,7,8,9,10,11,12", CovariateKind.Categorical)]
+    [InlineData("Plate2", "1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12", CovariateKind.Categorical)]
+    // A name word on a measurement: decimals, or whole numbers that never repeat, stay numeric.
+    [InlineData("Patient age", "65.3,40.7,55.1,61.2,48.9,70.4,52.0,58.6,44.3,67.1,59.9", CovariateKind.Numeric)]
+    [InlineData("Run order", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20", CovariateKind.Numeric)]
+    [InlineData("Cycle time", "1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5,9.5,10.5,11.5", CovariateKind.Numeric)]
     // Whole words only: these contain a listed word inside another word.
     [InlineData("Onset site", "1.5,2.25,3.75,4.5,5.5,6.5,7.25,8.5,9.5,10.5,11.5", CovariateKind.Numeric)]
     [InlineData("Hybridization", "0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5,9.5,10.5", CovariateKind.Numeric)]
@@ -74,12 +77,13 @@ public class CovariateTypingTests
     [Fact]
     public void AnExplicitType_Wins_AndSaysWhatItReplaced()
     {
-        var cov = Covariate.FromMetadata("Patient", new string?[] { "1", "2", "3" }, CovariateKind.Numeric);
+        var ids = new string?[] { "1", "1", "2", "2", "3" };
+        var cov = Covariate.FromMetadata("Patient", ids, CovariateKind.Numeric);
         Assert.Equal(CovariateKind.Numeric, cov.Kind);
         Assert.StartsWith("set explicitly; it would otherwise be categorical", cov.TypeReason);
         Assert.Equal("Patient (numeric)", cov.Describe());
 
-        var inferred = Covariate.FromMetadata("Patient", new string?[] { "1", "2", "3" });
+        var inferred = Covariate.FromMetadata("Patient", ids);
         Assert.StartsWith("inferred: its name contains 'patient'", inferred.TypeReason);
     }
 
@@ -206,11 +210,91 @@ public class CovariateTypingTests
         var batch = Covariate.FromMetadata("Batch", Repeat(("1", 2), ("2", 2), ("3", 2), ("1", 2), ("2", 2), ("3", 2)));
 
         var run = Differential.Run(expr, ids, A, B, With(patient));
-        Assert.Equal(run.Messages, Differential.CovariateNotes(patient, A, B));
-        Assert.Empty(Differential.CovariateNotes(batch, A, B));
+        Assert.Equal(run.Messages, Differential.CovariateNotes(patient, A, B, With()));
+        Assert.Empty(Differential.CovariateNotes(batch, A, B, With()));
 
         // A trend has no arms, so nothing is nested in them.
-        Assert.DoesNotContain(Differential.CovariateNotes(patient, A.Concat(B).ToArray()), m => m.Contains("nested"));
+        var x = Enumerable.Range(0, 12).Select(i => (double)(i % 4)).ToArray();
+        Assert.DoesNotContain(Differential.CovariateNotes(patient, A.Concat(B).ToArray(), x, With() with
+        {
+            Design = DifferentialDesign.LinearTrend,
+        }), m => m.Contains("nested"));
+    }
+
+    /// <summary>
+    /// Under a paired design the preview takes the run's paired path, so a covariate the subject
+    /// block makes redundant is reported there too - it used to be previewed as unpaired, with
+    /// nothing to say, and then dropped by the run.
+    /// </summary>
+    [Fact]
+    public void CovariateNotes_UnderPaired_SayWhatThePairedRunDoes()
+    {
+        var (expr, ids) = Matrix();
+        // Subject k owns A[k] and B[k]; Sex is constant within each subject.
+        var subjects = new string?[12];
+        var sex = new string?[12];
+        for (var k = 0; k < 6; k++)
+        {
+            subjects[A[k]] = subjects[B[k]] = $"S{k}";
+            sex[A[k]] = sex[B[k]] = k % 2 == 0 ? "F" : "M";
+        }
+
+        var paired = With() with { Design = DifferentialDesign.Paired, SubjectLabels = subjects };
+        var cov = Covariate.FromMetadata("Sex", sex);
+        var run = Differential.Run(expr, ids, A, B, paired with { Covariates = new[] { cov } });
+        var notes = Differential.CovariateNotes(cov, A, B, paired);
+
+        Assert.Contains(notes, m => m.Contains("constant within each subject"));
+        Assert.All(notes, m => Assert.Contains(m, run.Messages));
+    }
+
+    /// <summary>When a covariate's levels use up the residual df, the refusal names it and its column count.</summary>
+    [Fact]
+    public void RunningOutOfDf_NamesTheCovariate()
+    {
+        var (expr, ids) = Matrix();
+        // Six levels spanning both arms: 5 indicators + intercept + group + ... leaves no residual df
+        // alongside a second such covariate.
+        var many = Covariate.FromMetadata("Batch", Repeat(("1", 1), ("2", 1), ("3", 1), ("4", 1), ("5", 1), ("6", 1),
+            ("1", 1), ("2", 1), ("3", 1), ("4", 1), ("5", 1), ("6", 1)), CovariateKind.Categorical);
+        // Spans both arms too, so it is not dropped as nested and its 5 columns count.
+        var more = Covariate.FromMetadata("Plate", Repeat(("a", 1), ("b", 1), ("c", 1), ("d", 1), ("e", 1), ("f", 1),
+            ("a", 1), ("b", 1), ("c", 1), ("d", 1), ("e", 1), ("f", 1)));
+
+        var ex = Assert.Throws<ArgumentException>(() => Differential.Run(expr, ids, A, B, With(many, more)));
+        Assert.Contains("Batch (categorical) takes 5 columns", ex.Message);
+        Assert.Contains("may be meant as numeric", ex.Message);
+    }
+
+    /// <summary>
+    /// The case that found it: a numeric column holding #N/A for the QC pools (which have no age)
+    /// was read as text, so it became categories.
+    /// </summary>
+    [Fact]
+    public void MissingValueTokens_AreMissing_NotText()
+    {
+        var age = new string?[] { "#N/A", "40.7", "47", "47.5", "n/a", "NA", "null", "65.3", "70.8", "53.6", "58.9", "61.6" };
+        Assert.Equal(CovariateKind.Numeric, CovariateTyping.Infer("Age at first visit", age).Kind);
+        var cov = Assert.IsType<NumericCovariate>(Covariate.FromMetadata("Age at first visit", age));
+        Assert.True(double.IsNaN(cov.Values[0]) && double.IsNaN(cov.Values[4]));
+        // "None" is left alone: it is a real level often enough.
+        Assert.Equal(CovariateKind.Categorical, CovariateTyping.Infer("Treatment", new string?[] { "None", "1", "2" }).Kind);
+        Assert.False(CovariateTyping.IsMissing("None"));
+    }
+
+    [Fact]
+    public void NonFiniteText_IsMissing()
+    {
+        var guess = CovariateTyping.Infer("Score", new string?[] { "NaN", "Infinity", null });
+        Assert.Equal("it has no values", guess.Reason);
+
+        var forced = Assert.IsType<NumericCovariate>(
+            Covariate.FromMetadata("Score", new string?[] { "1.5", "Infinity", "-Infinity", "2.5" }, CovariateKind.Numeric));
+        Assert.True(double.IsNaN(forced.Values[1]) && double.IsNaN(forced.Values[2]));
+
+        var cat = Assert.IsType<CategoricalCovariate>(
+            Covariate.FromMetadata("Batch", new string?[] { "1", "Infinity", "2" }, CovariateKind.Categorical));
+        Assert.Null(cat.Values[1]);
     }
 
     [Fact]

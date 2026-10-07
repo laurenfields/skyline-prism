@@ -71,9 +71,9 @@ public abstract class Covariate
             for (var i = 0; i < values.Length; i++)
             {
                 var v = values[i];
-                if (string.IsNullOrWhiteSpace(v))
+                if (CovariateTyping.IsMissing(v))
                     nums[i] = double.NaN;
-                else if (CovariateTyping.TryNumber(v.Trim(), out var x))
+                else if (CovariateTyping.TryNumber(v!.Trim(), out var x))
                     nums[i] = x;
                 else
                     throw new ArgumentException(
@@ -89,9 +89,9 @@ public abstract class Covariate
         for (var i = 0; i < values.Length; i++)
         {
             var v = values[i];
-            labels[i] = string.IsNullOrWhiteSpace(v) ? null
-                : guess.AllNumeric && CovariateTyping.TryNumber(v.Trim(), out var x)
-                    ? double.IsNaN(x) ? null : x.ToString("R", CultureInfo.InvariantCulture)
+            labels[i] = CovariateTyping.IsMissing(v) ? null
+                : guess.AllNumeric && CovariateTyping.TryNumber(v!.Trim(), out var x)
+                    ? x.ToString("R", CultureInfo.InvariantCulture)
                     : v;
         }
 
@@ -394,21 +394,8 @@ public static class Differential
             cols[nA + i] = groupBColumns[i];
         var nSamples = cols.Length;
 
-        var (design, covariatesUsed, messages) = BuildDesign(nA, nB, cols, covariates);
+        var (design, covariatesUsed, messages) = TwoArmDesign(nA, nB, cols, covariates, pairs?.Count);
         messages.InsertRange(0, pairingMessages);
-        if (pairs is not null)
-        {
-            // Sex, age, genotype, diagnosis - the most natural things to tick in a paired design -
-            // are all constant within a subject, and therefore exactly collinear with the subject
-            // block. Left in, the design is rank-deficient and the run dies on a check that names
-            // neither the covariate nor a block the user never asked for. Dropping them here, and
-            // saying so, matches how BuildDesign already handles a dummy collinear with the group.
-            // Note this is not a limitation of the implementation: a within-subject contrast cannot
-            // estimate a between-subject effect, because the subject block has already absorbed it.
-            (design, covariatesUsed) =
-                DropSubjectCollinear(design, covariatesUsed, pairs.Count, messages);
-            design = WithSubjectBlock(design, pairs.Count);
-        }
         return Moderate(exprLog2FeaturesBySamples, featureIds, cols, design, options,
             PriorGroups(options, cols, nA, nB), covariatesUsed, messages,
             nA, nB, trendRange: double.NaN, nSubjects: 0);
@@ -465,17 +452,9 @@ public static class Differential
         // [intercept, x, covariates...]. x is centered for the same reason a numeric covariate is:
         // it leaves the intercept meaning the abundance at the MEAN of x rather than at x = 0,
         // which for a column like year-of-birth is far outside the data.
-        var mean = x.Average();
         var (design, covariatesUsed, designMessages) =
-            BuildTrendDesign(x.Select(v => v - mean).ToArray(), cols, options.Covariates);
+            TrendDesign(x, cols, options.Covariates, withinSubject ? selection : null);
         messages.AddRange(designMessages);
-
-        if (withinSubject)
-        {
-            (design, covariatesUsed) = DropWithinSubjectCollinear(
-                design, covariatesUsed, selection.SubjectOf, messages);
-            design = WithSubjectDummies(design, selection.SubjectOf, selection.SubjectCount);
-        }
 
         return Moderate(exprLog2FeaturesBySamples, featureIds, cols, design, options,
             PriorGroups(options, cols, nA: 0, nB: 0), covariatesUsed, messages,
@@ -513,8 +492,9 @@ public static class Differential
         var nParams = design.GetLength(1);
         if (nSamples - nParams < 1)
             throw new ArgumentException(
-                $"Not enough residual degrees of freedom (n={nSamples}, params={nParams}). " +
-                "Use more samples or fewer covariates.");
+                $"Not enough residual degrees of freedom (n={nSamples}, params={nParams}). "
+                + ColumnsPerCovariate(options.Covariates, covariatesUsed)
+                + "Use more samples or fewer covariates.");
         if (LinAlg.MatrixRank(design) < nParams)
             throw new ArgumentException(
                 "Design matrix is rank-deficient (covariates collinear with each other or with group).");
@@ -604,6 +584,35 @@ public static class Differential
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
             trendRange, nSubjects, priorLevel, DescribeAdjusted(options.Covariates, covariatesUsed));
+    }
+
+    /// <summary>
+    /// Which covariates the design columns came from, for the residual-df refusal - a categorical
+    /// covariate takes one column per level after the first, so one with many levels can use up the
+    /// samples on its own, and the refusal has to say which.
+    /// </summary>
+    private static string ColumnsPerCovariate(IReadOnlyList<Covariate>? covariates, List<string> used)
+    {
+        if (covariates is not { Count: > 0 })
+            return string.Empty;
+        var inDesign = new HashSet<string>(used, StringComparer.Ordinal);
+        var parts = covariates
+            .Select(c => (c, n: c switch
+            {
+                NumericCovariate => inDesign.Contains(c.Name) ? 1 : 0,
+                CategoricalCovariate cat => cat.Values.Where(v => v is not null).Distinct()
+                    .Count(v => inDesign.Contains($"{c.Name}_{v}")),
+                _ => 0,
+            }))
+            .Where(x => x.n > 0)
+            .Select(x => $"{x.c.Describe()} takes {x.n} column{(x.n == 1 ? "" : "s")}")
+            .ToList();
+        if (parts.Count == 0)
+            return string.Empty;
+        var hint = covariates.Any(c => c.Kind == CovariateKind.Categorical)
+            ? " A categorical covariate takes a column per level after the first; one with many levels may be meant as numeric."
+            : string.Empty;
+        return string.Join("; ", parts) + "." + hint + " ";
     }
 
     /// <summary>
@@ -865,21 +874,86 @@ public static class Differential
     /// when the contrast runs.
     /// </remarks>
     public static IReadOnlyList<string> CovariateNotes(Covariate covariate,
-        IReadOnlyList<int> groupAColumns, IReadOnlyList<int> groupBColumns)
+        IReadOnlyList<int> groupAColumns, IReadOnlyList<int> groupBColumns, DifferentialOptions options)
     {
+        // The same pairing the run does, so a paired design's preview sees the matched subjects and
+        // the subject block - which is what drops a covariate constant within subject.
+        int? nPairs = null;
+        if (options.Design == DifferentialDesign.Paired)
+        {
+            if (options.SubjectLabels is null)
+                return Array.Empty<string>();
+            var pairs = PairedSamples.Resolve(options.SubjectLabels, groupAColumns, groupBColumns).Pairs;
+            if (pairs.Count == 0)
+                return Array.Empty<string>();
+            groupAColumns = pairs.Select(p => p.AColumn).ToList();
+            groupBColumns = pairs.Select(p => p.BColumn).ToList();
+            nPairs = pairs.Count;
+        }
+
         var cols = groupAColumns.Concat(groupBColumns).ToArray();
-        return BuildDesign(groupAColumns.Count, groupBColumns.Count, cols, new[] { covariate }).Messages;
+        return TwoArmDesign(groupAColumns.Count, groupBColumns.Count, cols, new[] { covariate }, nPairs).Messages;
     }
 
     /// <summary>
-    /// <see cref="CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int})"/> for a trend
-    /// fitted over <paramref name="sampleColumns"/>, which has no arms for a covariate to be nested in.
+    /// <see cref="CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int}, DifferentialOptions)"/>
+    /// for a trend over <paramref name="sampleColumns"/>, resolved as
+    /// <see cref="RunTrend"/> resolves it (<paramref name="xValues"/> indexed by matrix column).
     /// </summary>
-    public static IReadOnlyList<string> CovariateNotes(Covariate covariate, IReadOnlyList<int> sampleColumns)
+    public static IReadOnlyList<string> CovariateNotes(Covariate covariate, IReadOnlyList<int> sampleColumns,
+        double[] xValues, DifferentialOptions options)
     {
-        // Any term that is not a 0/1 indicator tells the builder there are no arms.
-        var term = Enumerable.Range(0, sampleColumns.Count).Select(i => i - (sampleColumns.Count - 1) / 2.0).ToArray();
-        return BuildDesign(term, "the trend", sampleColumns.ToArray(), new[] { covariate }).Messages;
+        var withinSubject = options.Design == DifferentialDesign.LinearTrendWithinSubject;
+        var selection = TrendSamples.Resolve(sampleColumns, xValues, options.SubjectLabels?.ToArray(), withinSubject);
+        if (selection.Columns.Count < 2 || !(selection.X.Max() - selection.X.Min() > 0))
+            return Array.Empty<string>();
+        return TrendDesign(selection.X.ToArray(), selection.Columns.ToArray(), new[] { covariate },
+            withinSubject ? selection : null).Messages;
+    }
+
+    /// <summary>
+    /// The two-arm design as the run fits it: <c>[1, group, covariates]</c>, then - for a paired
+    /// design over <paramref name="nPairs"/> matched subjects - covariates constant within subject
+    /// dropped and the subject block added. One path for the run and for its preview.
+    /// </summary>
+    private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages) TwoArmDesign(
+        int nA, int nB, int[] cols, IReadOnlyList<Covariate>? covariates, int? nPairs)
+    {
+        var (design, covariatesUsed, messages) = BuildDesign(nA, nB, cols, covariates);
+        if (nPairs is { } n)
+        {
+            // Sex, age, genotype, diagnosis - the most natural things to tick in a paired design -
+            // are all constant within a subject, and therefore exactly collinear with the subject
+            // block. Left in, the design is rank-deficient and the run dies on a check that names
+            // neither the covariate nor a block the user never asked for. Dropping them here, and
+            // saying so, matches how BuildDesign already handles a dummy collinear with the group.
+            // Note this is not a limitation of the implementation: a within-subject contrast cannot
+            // estimate a between-subject effect, because the subject block has already absorbed it.
+            (design, covariatesUsed) = DropSubjectCollinear(design, covariatesUsed, n, messages);
+            design = WithSubjectBlock(design, n);
+        }
+
+        return (design, covariatesUsed, messages);
+    }
+
+    /// <summary>
+    /// The trend design as the run fits it: <c>[1, x - mean(x), covariates]</c>, plus - within
+    /// subject - covariates constant within subject dropped and the subject indicators added.
+    /// </summary>
+    private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages) TrendDesign(
+        double[] x, int[] cols, IReadOnlyList<Covariate>? covariates, TrendSelection? withinSubject)
+    {
+        var mean = x.Average();
+        var (design, covariatesUsed, messages) =
+            BuildTrendDesign(x.Select(v => v - mean).ToArray(), cols, covariates);
+        if (withinSubject is { } selection)
+        {
+            (design, covariatesUsed) = DropWithinSubjectCollinear(
+                design, covariatesUsed, selection.SubjectOf, messages);
+            design = WithSubjectDummies(design, selection.SubjectOf, selection.SubjectCount);
+        }
+
+        return (design, covariatesUsed, messages);
     }
 
     private static (double[,] Design, List<string> CovariatesUsed, List<string> Messages) BuildDesign(
