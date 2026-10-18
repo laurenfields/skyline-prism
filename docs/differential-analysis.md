@@ -262,6 +262,10 @@ What it is not:
   itself takes any design, and `blocked.json`'s `time_by_group` case already pins it on one.
 - Samples with no subject are left out and counted. A run where no subject has two samples is the
   unpaired fit, at a correlation of 0, and says so.
+- Each arm needs at least two subjects (`--min-per-group`), however many samples it holds. Between
+  subjects the subjects are the replicates, and with one subject per arm the subject indicators are
+  the group column itself: `duplicateCorrelation` then answers 0, and the "blocked" fit would be the
+  unpaired one under another name. It is refused instead, with each arm's subject count.
 
 ### Paired is a fixed-effect subject block
 

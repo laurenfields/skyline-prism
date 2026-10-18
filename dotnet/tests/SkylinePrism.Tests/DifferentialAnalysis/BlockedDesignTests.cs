@@ -135,6 +135,50 @@ public class BlockedDesignTests
     }
 
     /// <summary>
+    /// Between subjects the subjects are the replicates, so an arm with fewer than
+    /// <see cref="DifferentialOptions.MinPerGroup"/> of them is refused - however many samples it has.
+    /// One subject per arm is the case that matters: the subject indicators then equal the group
+    /// column, limma answers a correlation of 0, and the "blocked" fit would be exactly the
+    /// pseudo-replicated unpaired one this design exists to avoid.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false, 1, 8)]
+    [InlineData(false, true, 7, 1)]
+    [InlineData(true, true, 1, 1)]
+    public void AnArmWithTooFewSubjects_IsRefused_NotFittedAsUnpaired(bool oneInA, bool oneInB,
+        int subjectsA, int subjectsB)
+    {
+        var (expr, ids, a, b, subjects) = Load("nested_unequal_visits");
+        if (oneInA)
+            foreach (var c in a)
+                subjects[c] = "only-A";
+        if (oneInB)
+            foreach (var c in b)
+                subjects[c] = "only-B";
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => Differential.Run(expr, ids, a, b, Blocked(subjects, VariancePrior.Global)));
+        Assert.Contains("at least 2 subjects in each arm", ex.Message);
+        Assert.Contains($"A has {subjectsA}, B has {subjectsB}", ex.Message);
+    }
+
+    /// <summary>
+    /// A subject column that is blank for every picked sample says so, rather than reporting arms of
+    /// zero samples with no reason.
+    /// </summary>
+    [Fact]
+    public void ASubjectColumnBlankForEverySample_IsRefused_AndSaysWhy()
+    {
+        var (expr, ids, a, b, subjects) = Load("nested_unequal_visits");
+        Array.Fill(subjects, null);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => Differential.Run(expr, ids, a, b, Blocked(subjects, VariancePrior.Global)));
+        Assert.Contains("A has 0, B has 0", ex.Message);
+        Assert.Contains($"{a.Length + b.Length} sample(s) have no subject", ex.Message);
+    }
+
+    /// <summary>
     /// limma answers a correlation of 0 when nothing is repeated, and the fit is then exactly the
     /// unpaired one - said, not silent.
     /// </summary>

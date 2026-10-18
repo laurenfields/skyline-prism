@@ -348,6 +348,19 @@ public static class Differential
             var selection = BlockedSamples.Resolve(options.SubjectLabels, groupAColumns, groupBColumns);
             if (selection.Dropped > 0)
                 pairingMessages.Add($"{selection.Dropped} sample(s) have no subject and were left out.");
+
+            // Between subjects the SUBJECTS are the replicates, so the per-arm minimum counts them,
+            // not their samples. One subject per arm is the case that matters: its indicator is then
+            // the group column itself, duplicateCorrelation answers 0 ("already in the design"), and
+            // the result would be exactly the pseudo-replicated unpaired fit this design exists to
+            // avoid - under a message that blamed the design rather than the arms.
+            var subjectsA = selection.SubjectOf.Take(selection.A.Count).Distinct(StringComparer.Ordinal).Count();
+            var subjectsB = selection.SubjectOf.Skip(selection.A.Count).Distinct(StringComparer.Ordinal).Count();
+            if (subjectsA < minPerGroup || subjectsB < minPerGroup)
+                throw new ArgumentException(
+                    ($"A blocked design needs at least {minPerGroup} subjects in each arm: between "
+                    + "subjects, the subjects are the replicates, not their samples "
+                    + $"(A has {subjectsA}, B has {subjectsB}). " + string.Join(" ", pairingMessages)).TrimEnd());
             (groupAColumns, groupBColumns, subjectOf) = (selection.A, selection.B, selection.SubjectOf);
         }
 
