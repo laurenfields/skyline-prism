@@ -89,8 +89,12 @@ public sealed class DifferentialResult
         int nFeaturesTotal, int nFeaturesTested, double dfResidual, double dfPrior,
         string variancePrior, IReadOnlyList<string> covariatesUsed, IReadOnlyList<string> messages,
         IReadOnlyList<string> warnings, double trendRange = double.NaN, int nSubjects = 0,
-        double priorLevel = double.NaN)
+        double priorLevel = double.NaN, double blockCorrelation = double.NaN, int subjectsA = 0,
+        int subjectsB = 0)
     {
+        BlockCorrelation = blockCorrelation;
+        SubjectsA = subjectsA;
+        SubjectsB = subjectsB;
         TrendRange = trendRange;
         NSubjects = nSubjects;
         PriorLevel = priorLevel;
@@ -206,9 +210,46 @@ public sealed class DifferentialResult
     public double TrendRange { get; }
 
     /// <summary>
-    /// Subjects contributing to a within-subject trend; 0 for every other design.
+    /// Subjects contributing to a within-subject trend or a blocked contrast; 0 for every other
+    /// design.
     /// </summary>
     public int NSubjects { get; }
+
+    /// <summary>
+    /// The intra-subject correlation a <see cref="DifferentialDesign.BlockedBySubject"/> contrast was
+    /// fitted at; NaN for every other design.
+    /// </summary>
+    public double BlockCorrelation { get; }
+
+    /// <summary>Subjects in arm A of a blocked contrast; 0 for every other design.</summary>
+    public int SubjectsA { get; }
+
+    /// <summary>Subjects in arm B of a blocked contrast; 0 for every other design.</summary>
+    public int SubjectsB { get; }
+
+    /// <summary>Whether this result came from a subject-blocked contrast.</summary>
+    public bool IsBlocked => !double.IsNaN(BlockCorrelation);
+
+    /// <summary>
+    /// The arm sizes, in samples and - for a blocked contrast - subjects
+    /// (<c>A n = 28 (7 subjects), B n = 35 (8 subjects)</c>).
+    /// </summary>
+    /// <remarks>
+    /// Subjects as well as samples because under a blocked design the subjects are what a
+    /// between-subject contrast has to work with; the sample count alone would overstate it.
+    /// </remarks>
+    public string DescribeArms() => IsBlocked
+        ? $"A n = {NA} ({SubjectsA} subjects), B n = {NB} ({SubjectsB} subjects)"
+        : $"A n = {NA}, B n = {NB}";
+
+    /// <summary>
+    /// One line on the blocking, for a status line or a file header
+    /// (<c>intra-subject correlation 0.495 across 15 subjects</c>); null for every other design.
+    /// </summary>
+    public string? DescribeBlocking() => IsBlocked
+        ? $"intra-subject correlation {BlockCorrelation.ToString("0.###", CultureInfo.InvariantCulture)} "
+          + $"across {NSubjects} subjects"
+        : null;
 
     /// <summary>Whether this result came from a trend design.</summary>
     public bool IsTrend => !double.IsNaN(TrendRange);
@@ -302,6 +343,37 @@ public static class Differential
             groupBColumns = pairs.Select(pair => pair.BColumn).ToList();
         }
 
+        IReadOnlyList<string>? subjectOf = null;
+        if (options.Design == DifferentialDesign.BlockedBySubject)
+        {
+            if (options.Test != DifferentialTest.ModeratedT)
+                throw new ArgumentException(
+                    "The blocked design needs the moderated t: the other tests treat every sample as "
+                    + "independent and have no way to use the correlation between a subject's samples.");
+            if (options.SubjectLabels is null)
+                throw new ArgumentException(
+                    "A blocked design needs a subject column: the metadata column that identifies "
+                    + "each subject, so that subject's samples can be treated as correlated.");
+
+            var selection = BlockedSamples.Resolve(options.SubjectLabels, groupAColumns, groupBColumns);
+            if (selection.Dropped > 0)
+                pairingMessages.Add($"{selection.Dropped} sample(s) have no subject and were left out.");
+
+            // Between subjects the SUBJECTS are the replicates, so the per-arm minimum counts them,
+            // not their samples. One subject per arm is the case that matters: its indicator is then
+            // the group column itself, duplicateCorrelation answers 0 ("already in the design"), and
+            // the result would be exactly the pseudo-replicated unpaired fit this design exists to
+            // avoid - under a message that blamed the design rather than the arms.
+            var subjectsA = selection.SubjectOf.Take(selection.A.Count).Distinct(StringComparer.Ordinal).Count();
+            var subjectsB = selection.SubjectOf.Skip(selection.A.Count).Distinct(StringComparer.Ordinal).Count();
+            if (subjectsA < minPerGroup || subjectsB < minPerGroup)
+                throw new ArgumentException(
+                    ($"A blocked design needs at least {minPerGroup} subjects in each arm: between "
+                    + "subjects, the subjects are the replicates, not their samples "
+                    + $"(A has {subjectsA}, B has {subjectsB}). " + string.Join(" ", pairingMessages)).TrimEnd());
+            (groupAColumns, groupBColumns, subjectOf) = (selection.A, selection.B, selection.SubjectOf);
+        }
+
         if (options.Test is DifferentialTest.PairedT or DifferentialTest.Wilcoxon)
         {
             if (pairs is null)
@@ -361,7 +433,7 @@ public static class Differential
         }
         return Moderate(exprLog2FeaturesBySamples, featureIds, cols, design, options,
             PriorGroups(options, cols, nA, nB), covariatesUsed, messages,
-            nA, nB, trendRange: double.NaN, nSubjects: 0);
+            nA, nB, trendRange: double.NaN, nSubjects: 0, block: subjectOf);
     }
 
     /// <summary>
@@ -454,7 +526,8 @@ public static class Differential
         int nA,
         int nB,
         double trendRange,
-        int nSubjects)
+        int nSubjects,
+        IReadOnlyList<string>? block = null)
     {
         const int coefIdx = 1; // the tested term is always the second design column
         var isTrend = !double.IsNaN(trendRange);
@@ -494,7 +567,22 @@ public static class Differential
         for (var s = 0; s < nSamples; s++)
             mk[i, s] = exprLog2FeaturesBySamples[tested[i], cols[s]];
 
-        var fit = LinearModel.Fit(mk, design);
+        var blockCorrelation = double.NaN;
+        int subjectsA = 0, subjectsB = 0;
+        LinearModelFit fit;
+        if (block is null)
+        {
+            fit = LinearModel.Fit(mk, design);
+        }
+        else
+        {
+            blockCorrelation = BlockCorrelation(mk, design, block, messages);
+            fit = LinearModel.FitBlocked(mk, design, block, blockCorrelation);
+            nSubjects = block.Distinct(StringComparer.Ordinal).Count();
+            subjectsA = block.Take(nA).Distinct(StringComparer.Ordinal).Count();
+            subjectsB = block.Skip(nA).Distinct(StringComparer.Ordinal).Count();
+        }
+
         var variances = new double[nTested];
         for (var i = 0; i < nTested; i++)
             variances[i] = fit.Sigma[i] * fit.Sigma[i];
@@ -553,7 +641,41 @@ public static class Differential
 
         return new DifferentialResult(ordered, nA, nB, nFeatures, nTested, fit.DfResidual,
             squeezed.DfPrior, variancePrior, covariatesUsed, messages, squeezed.Warnings,
-            trendRange, nSubjects, priorLevel);
+            trendRange, nSubjects, priorLevel, blockCorrelation, subjectsA, subjectsB);
+    }
+
+    /// <summary>
+    /// The consensus intra-subject correlation for a blocked contrast, over the features being tested.
+    /// </summary>
+    /// <remarks>
+    /// Estimated on the same complete features the fit uses, as limma users pass one matrix to both
+    /// <c>duplicateCorrelation</c> and <c>lmFit</c>. Where limma answers 0 without estimating - every
+    /// subject sampled once, or the subjects already in the design - the fit is the ordinary unpaired
+    /// one, and that is said. Where no feature yields an estimate at all, limma's <c>lmFit</c> stops
+    /// with an error, and so does this, rather than fitting at a correlation nobody estimated.
+    /// </remarks>
+    private static double BlockCorrelation(double[,] mk, double[,] design, IReadOnlyList<string> block,
+        List<string> messages)
+    {
+        var dc = DuplicateCorrelation.Estimate(mk, design, block);
+        if (dc.Degenerate is { } why)
+        {
+            messages.Add($"The intra-subject correlation was set to 0 because {why}, so this is the "
+                + "ordinary unpaired fit.");
+            return 0.0;
+        }
+
+        if (double.IsNaN(dc.Consensus))
+            throw new ArgumentException(
+                "No feature had enough samples and subjects to estimate the intra-subject correlation: "
+                + "each needs more samples than coefficients plus two, at least two subjects, and fewer "
+                + "subjects than samples minus one.");
+
+        var estimated = dc.AtanhCorrelations.Count(double.IsFinite);
+        if (estimated < dc.AtanhCorrelations.Length)
+            messages.Add($"The intra-subject correlation was estimated from {estimated} of "
+                + $"{dc.AtanhCorrelations.Length} features; the rest gave no estimate.");
+        return dc.Consensus;
     }
 
     /// <summary>

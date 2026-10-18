@@ -6,6 +6,26 @@ as the GitHub Release description and fails if it is missing.
 
 ## New Features
 
+- **A contrast between subjects could account for subjects sampled more than once.** For a comparison
+  such as sex or onset site, where each subject gave several samples, neither existing design was
+  right. Unpaired counted every sample as independent evidence, which understated the standard error,
+  and Paired could not be fitted at all, because the subject is nested in the group and its block
+  absorbed the contrast. A new **Blocked by subject** design (`prism differential --design blocked
+  --subject COL`, and under Compare in the Differential pane) modeled a subject's samples as
+  correlated, as limma does: one intra-subject correlation shared by every feature
+  (`duplicateCorrelation`), then generalized least squares (`lmFit(block=, correlation=)`) and the
+  usual moderation under any variance prior. It was pinned to R's limma 3.68.5 by a new golden
+  (`blocked.json`, from `generate_blocked.R`). On a 7,602-peptide, 15-patient ALS CSF cohort the
+  result matched limma to 5e-12 on p, at a correlation of 0.441, and `check_blocked_cohort.py`
+  repeats that comparison on any output directory. On simulated null data with a correlation of 0.5,
+  the false-positive rate at 0.05 was 4.3%, against 22.8% for the unpaired test. Results, the CSV
+  header and the quant report named the correlation and counted subjects per arm, and
+  `quant_parameters` recorded `block_correlation` and the `subject` column - the latter for the
+  paired and within-subject trend designs as well. An arm with fewer than two subjects was refused,
+  however many samples it held: with one subject per arm the fit would have been the unpaired one
+  under another name. The detection view said that its tests did not account for repeated samples
+  under this design.
+
 ## Bug Fixes
 
 - **The Trend designs no longer vanish from the Differential pane.** With no run loaded, or a run with
