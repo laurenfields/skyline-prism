@@ -43,7 +43,7 @@ public enum DifferentialDesign
 
     /// <summary>
     /// Two groups where a subject can contribute several samples: the samples of one subject are
-    /// modelled as CORRELATED rather than independent, limma's
+    /// modeled as CORRELATED rather than independent, limma's
     /// <c>duplicateCorrelation(block = subject)</c> followed by <c>lmFit(block =, correlation =)</c>.
     /// </summary>
     /// <remarks>

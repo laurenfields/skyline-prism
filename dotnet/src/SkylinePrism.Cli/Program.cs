@@ -1230,7 +1230,7 @@ public static partial class Program
         samples as independent understates the standard error.
 
         A BLOCKED design is for a two-arm contrast BETWEEN subjects (sex, onset site)
-        where subjects were sampled more than once. A subject's samples are modelled as
+        where subjects were sampled more than once. A subject's samples are modeled as
         correlated - one correlation shared by every feature, as limma's
         duplicateCorrelation estimates it - rather than as independent evidence. A
         paired design cannot do this: there the subject block absorbs the contrast.

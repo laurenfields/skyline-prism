@@ -9,7 +9,7 @@
 #
 # What the blocked design is for: a contrast whose groups are constant within subject (sex, onset
 # site) when subjects contribute several samples. A fixed subject effect cannot be fitted there -
-# subject is nested in the group and absorbs the contrast - so the repeated samples are modelled
+# subject is nested in the group and absorbs the contrast - so the repeated samples are modeled
 # as correlated instead: one intra-subject correlation shared by every feature (the trimmed mean
 # of per-feature REML estimates, on the atanh scale), then generalized least squares with that
 # correlation, then the usual empirical-Bayes moderation. Smyth, Michaud & Scott 2005,
