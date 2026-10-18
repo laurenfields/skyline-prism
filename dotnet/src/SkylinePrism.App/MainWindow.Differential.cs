@@ -98,7 +98,7 @@ public partial class MainWindow
 
     /// <summary>
     /// Rebuild the covariate rows from the ticks, and write each one's note - what the design will
-    /// do with it over the arms as they stand now (<see cref="Differential.CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int})"/>).
+    /// do with it over the arms as they stand now (<see cref="Differential.CovariateNotes(Covariate, IReadOnlyList{int}, IReadOnlyList{int}, DifferentialOptions)"/>).
     /// </summary>
     /// <remarks>
     /// Called whenever something the note depends on changes: a tick, a type, the arms, the design.

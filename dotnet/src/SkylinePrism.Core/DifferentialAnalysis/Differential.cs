@@ -40,6 +40,12 @@ public abstract class Covariate
     /// </summary>
     public string TypeReason { get; }
 
+    /// <summary>
+    /// The type <see cref="CovariateTyping.Infer"/> gave the column, when it was built from metadata;
+    /// null for one constructed directly. Differs from <see cref="Kind"/> when the type was set by hand.
+    /// </summary>
+    public CovariateKind? InferredKind { get; init; }
+
     /// <summary>The name with its type, as the outputs show it: <c>Patient (categorical)</c>.</summary>
     public string Describe() => $"{Name} ({CovariateTyping.Token(Kind)})";
 
@@ -80,7 +86,7 @@ public abstract class Covariate
                         $"'{name}' cannot be numeric: '{v}' is not a number. Fit it as categorical.");
             }
 
-            return new NumericCovariate(name, nums, reason);
+            return new NumericCovariate(name, nums, reason) { InferredKind = guess.Kind };
         }
 
         // A column of numbers used as categories keeps one spelling per level, so "1" and "1.0" - as a
@@ -95,7 +101,7 @@ public abstract class Covariate
                     : v;
         }
 
-        return new CategoricalCovariate(name, labels, reason);
+        return new CategoricalCovariate(name, labels, reason) { InferredKind = guess.Kind };
     }
 }
 
@@ -1168,10 +1174,12 @@ public static class Differential
                     extra.Add(centered);
                     names.Add(num.Name);
 
-                    // Only reachable by asking for it: the inferred type of such a column is
-                    // categorical. Fitted anyway, as asked, but not in silence - an ID fitted as a
-                    // number is a straight-line effect of an arbitrary label.
-                    if (CovariateTyping.CategoryWord(num.Name) is { } word)
+                    // Only when numeric was asked for over an inferred categorical: a name word alone is
+                    // not enough, or "Run order" and "Patient age" - inferred numeric, rightly - would
+                    // carry it. Fitted anyway, as asked, but not in silence - an ID fitted as a number
+                    // is a straight-line effect of an arbitrary label.
+                    if (num.InferredKind == CovariateKind.Categorical
+                        && CovariateTyping.CategoryWord(num.Name) is { } word)
                         messages.Add($"Covariate '{num.Name}' is fitted as numeric - one straight-line effect of "
                             + $"its value - although its name contains '{word}', which usually labels groups. If "
                             + "its values are IDs or batch labels, fit it as categorical. If it identifies "
@@ -1222,6 +1230,30 @@ public static class Differential
                             + "sampled more than once, no fixed covariate accounts for those repeated samples.");
                         continue;
                     }
+
+                    // Partly confounded: some levels, not all, lie within one arm. The design can be
+                    // fitted, so it is kept, but each such level's indicator absorbs its samples' mean -
+                    // they say nothing about the contrast, which is then estimated only from the samples
+                    // whose value occurs in both arms. Said, because adjusting for (say) site reads as
+                    // if every sample still counted. Two levels both within one arm are the group
+                    // itself, which the confounding check below handles.
+                    if (twoArm)
+                    {
+                        var oneArm = levels.Where(level => Enumerable.Range(0, nSamples)
+                            .Where(s => vals[s] == level).Select(s => grp[s]).Distinct().Count() == 1).ToList();
+                        if (oneArm.Count > 0 && oneArm.Count < levels.Length)
+                        {
+                            var inOneArm = Enumerable.Range(0, nSamples).Count(s => oneArm.Contains(vals[s]));
+                            var shown = string.Join(", ", oneArm.Take(3).Select(l => $"'{l}'"))
+                                + (oneArm.Count > 3 ? $" and {oneArm.Count - 3} more" : "");
+                            var one = oneArm.Count == 1;
+                            messages.Add($"Covariate '{cat.Name}' is partly confounded with the groups: {shown} "
+                                + $"occur{(one ? "s" : "")} in one arm only, so the {inOneArm} sample(s) with "
+                                + $"{(one ? "that value" : "those values")} do not inform the contrast, which is "
+                                + "estimated from the samples whose value occurs in both arms.");
+                        }
+                    }
+
                     for (var li = 1; li < levels.Length; li++)
                     {
                         var level = levels[li];

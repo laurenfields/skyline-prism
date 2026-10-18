@@ -229,9 +229,10 @@ public class DifferentialTests
     [Fact]
     public void FromMetadata_InfersNumericVsCategorical()
     {
-        // An integer-coded batch is categories, not one centered column - see CovariateTypingTests.
+        // An integer-coded batch - whole numbers that repeat, under a labeling name - is categories,
+        // not one centered column. See CovariateTypingTests.
         Assert.IsType<CategoricalCovariate>(
-            Covariate.FromMetadata("batch", new string?[] { "1", "2", "3", null }));
+            Covariate.FromMetadata("batch", new string?[] { "1", "1", "2", "3", null }));
 
         // Asked for numeric, it is numeric, and a missing value is NaN.
         var numeric = Assert.IsType<NumericCovariate>(

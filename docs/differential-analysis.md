@@ -223,15 +223,20 @@ The default is now (`CovariateTyping.Infer`):
 
 - text values: categorical;
 - whole numbers that repeat across samples, where the column name contains one of the whole words
-  patient, subject, donor, id, batch, plate, cycle, set or run (split on spaces, punctuation, case
-  changes and letter-digit boundaries, so `File set` and `PatientID` match and `Onset site` does
-  not): categorical. The values have to look like labels as well: `Patient age` in decimals and
-  `Run order` (1, 2, 3, ... never repeating) stay numeric. A whole-number measurement that does
-  repeat, such as an age in years recorded once per patient, still comes out categorical, and its
-  row in the pane says so and switches it;
-- whole numbers with at most 10 distinct values: categorical (a 0/1 column fits the same model either
-  way);
-- any other numbers: numeric (age, a clinical score, years from diagnosis).
+  patient, subject, participant, individual, donor, animal, mouse, id, batch, plate, site, center,
+  cohort, group, cycle, set or run (split on spaces, punctuation, case changes and letter-digit
+  boundaries, so `File set` and `PatientID` match and `Onset` and `Dataset` do not): categorical.
+  The values have to look like labels as well: `Patient age` in decimals and `Run order` (1, 2, 3,
+  ... never repeating) stay numeric. A whole-number measurement that does repeat under such a name,
+  such as `Patient age` in whole years recorded once per patient, still comes out categorical, and
+  its row in the pane says so and switches it;
+- any other numbers: numeric (age, a clinical score, a dose, a visit number, years from diagnosis).
+
+There is deliberately no rule on the number of distinct values. With one - at most ten whole numbers
+made a column categorical - an integer age, a run order or a dose became a factor in a small cohort:
+eight subjects' ages were eight levels, dropped as nested in the groups, or partly nested, leaving
+the contrast estimated from the few subjects who shared an age. Whether such a column was fitted at
+all then depended on how many subjects the study happened to have.
 
 The type is shown and can be overridden: in the pane, as a Numeric | Categorical toggle on each
 ticked Adjust-for column, which also shows before the run what the design will do with that column
@@ -240,19 +245,26 @@ fitted as (`adjusted for Patient (categorical)`), `quant_parameters` records `co
 a recorded command carries `--covariate-type` for every covariate, so a later change to this rule
 cannot make it fit a different model.
 
-A blank value, and one written as `#N/A`, `N/A`, `NA`, `NULL`, `NaN` or `Infinity`, is missing, for
-text columns as well as numbers (so a numeric column whose QC pools hold `#N/A` stays numeric); a covariate missing in a selected sample is skipped, and the result says so. (A blank in a
+A blank value, and one written exactly as `#N/A`, `N/A`, `n/a`, `NA`, `#NA`, `NULL`, `null`, `NaN` or
+`Infinity`, is missing (case matters: `Na`, sodium, is a value), for text columns as well as numbers (so a numeric column whose QC pools hold `#N/A` stays numeric); a covariate missing in a selected sample is skipped, and the result says so. (A blank in a
 text column used to be a level of its own.)
 
 When a categorical covariate's levels use up the residual degrees of freedom, the refusal names it
 and how many design columns it takes.
 
-Two consequences are reported on the result rather than left to a rank-deficiency error:
+Three consequences are reported on the result, and noted in the pane before the run, rather than
+left to a rank-deficiency error or to nothing:
 
 - **A categorical covariate nested in the groups** - every value in one arm only, as a patient ID is
   under a sex contrast - would absorb the contrast as a fixed effect, so it is dropped and named. A
   fixed covariate cannot account for a subject's repeated samples in a between-subject contrast.
-- **A column forced numeric whose name says it labels groups** is fitted as asked, with a warning.
+- **A categorical covariate partly confounded with the groups** - some of its values in one arm only -
+  can be fitted, and is. But each such value's indicator absorbs its samples' mean, so those samples
+  do not inform the contrast, which is estimated only from the samples whose value occurs in both
+  arms. The note names the values and counts the samples.
+- **A column forced numeric although its inferred type is categorical** - its name and its repeating
+  whole numbers say it labels groups - is fitted as asked, with a warning. A column inferred numeric
+  gets no warning, whatever its name.
 
 ### Between subjects, with repeated samples: the blocked design
 

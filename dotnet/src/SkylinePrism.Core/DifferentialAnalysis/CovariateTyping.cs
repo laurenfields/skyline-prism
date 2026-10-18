@@ -36,25 +36,32 @@ public sealed record CovariateTypeGuess(CovariateKind Kind, bool AllNumeric, str
 /// rule both were fitted numeric because their values parsed, with no word to the user.</para>
 /// <para>So a column of numbers is categorical when its name says it labels groups (a whole word
 /// from <see cref="CategoryWords"/>) AND its values look like labels - whole numbers, some of which
-/// repeat across samples, as a subject's ID repeats over its visits - or when its values are whole
-/// numbers taking at most <see cref="MaxCategoricalLevels"/> distinct values. Otherwise it stays
-/// numeric: age, a clinical score, years from diagnosis. A two-level 0/1 column comes out
-/// categorical, which fits exactly the same model as the centered numeric column it used to be.</para>
+/// repeat across samples, as a subject's ID repeats over its visits. Otherwise it stays numeric: age,
+/// a clinical score, a dose, a visit number, years from diagnosis.</para>
+/// <para>There is deliberately no rule on the number of distinct values. With one - at most ten whole
+/// numbers made a column categorical - an integer age, a run order or a dose became a factor in a
+/// small cohort: eight subjects' ages were eight levels, dropped as nested in the groups, or partly
+/// nested, so that the contrast was estimated from the few subjects who shared an age. Whether a
+/// column was fitted at all then depended on how many subjects the study happened to have. A
+/// two-level 0/1 column fits the same model either way, so dropping the rule loses nothing there.</para>
 /// <para>The name alone is not enough: "Patient age", "Run order" and "Cycle time" contain a listed
 /// word and are measurements. Decimals, or whole numbers that never repeat (an injection order),
 /// keep such a column numeric. A whole-number measurement that does repeat - an age in years, one
 /// per patient - still comes out categorical, and its row in the pane says why and switches it.</para>
 /// <para>Words are matched WHOLE, after splitting the name on punctuation, spaces, case changes and
-/// letter-digit boundaries: "File set" and "PatientID" match, "Onset site" does not.</para>
+/// letter-digit boundaries: "File set" and "PatientID" match, "Onset" and "Dataset" do not.</para>
 /// </remarks>
 public static class CovariateTyping
 {
-    /// <summary>Whole numbers with at most this many distinct values are taken as categories.</summary>
-    public const int MaxCategoricalLevels = 10;
-
-    /// <summary>Name words that mark a column as labelling groups rather than measuring a quantity.</summary>
-    public static readonly IReadOnlyList<string> CategoryWords =
-        new[] { "patient", "subject", "donor", "id", "batch", "plate", "cycle", "set", "run" };
+    /// <summary>
+    /// Name words that mark a column as labeling groups rather than measuring a quantity: who or what
+    /// a sample came from, and the processing units samples are grouped into.
+    /// </summary>
+    public static readonly IReadOnlyList<string> CategoryWords = new[]
+    {
+        "patient", "subject", "participant", "individual", "donor", "animal", "mouse", "id",
+        "batch", "plate", "site", "center", "cohort", "group", "cycle", "set", "run",
+    };
 
     /// <summary>The default type of <paramref name="name"/>, given its per-sample values (null = missing).</summary>
     public static CovariateTypeGuess Infer(string name, IReadOnlyList<string?> values)
@@ -79,10 +86,6 @@ public static class CovariateTyping
                 $"its name contains '{word}' and its values are whole numbers that repeat across "
                 + "samples, as labels do");
 
-        if (whole && levels <= MaxCategoricalLevels)
-            return new CovariateTypeGuess(CovariateKind.Categorical, true,
-                $"its values are whole numbers with only {levels} distinct value{(levels == 1 ? "" : "s")}");
-
         return new CovariateTypeGuess(CovariateKind.Numeric, true,
             $"its values are numbers with {levels} distinct values");
     }
@@ -104,14 +107,16 @@ public static class CovariateTyping
     /// <c>#N/A</c> is what Skyline and Excel write into an empty cell - a QC pool has no age - and
     /// left as a value it made the whole column text, so a numeric covariate became categories and,
     /// under a contrast between subjects, was dropped as nested. Not "None": that is a real level
-    /// often enough (a treatment of none) to be left alone.
+    /// often enough (a treatment of none) to be left alone. Matched by exact spelling, the ones tools
+    /// actually write, rather than ignoring case: ignoring it made "Na" - sodium - missing.
     /// </remarks>
     private static readonly HashSet<string> MissingTokens =
-        new(StringComparer.OrdinalIgnoreCase) { "#N/A", "N/A", "NA", "#NA", "NULL" };
+        new(StringComparer.Ordinal) { "#N/A", "N/A", "n/a", "NA", "#NA", "NULL", "null" };
 
     /// <summary>
     /// Whether a metadata value means "no value": blank, a missing-value token (<c>#N/A</c>, <c>NA</c>,
-    /// <c>NULL</c>), or a number that is not finite (<c>NaN</c>, <c>Infinity</c>).
+    /// <c>NULL</c> and the other exact spellings in the set), or a number that is not finite
+    /// (<c>NaN</c>, <c>Infinity</c>).
     /// </summary>
     public static bool IsMissing(string? v)
     {

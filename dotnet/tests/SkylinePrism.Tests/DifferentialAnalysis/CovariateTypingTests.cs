@@ -23,8 +23,8 @@ public class CovariateTypingTests
     // A name word, with whole numbers that repeat (a subject's ID over its visits): labels.
     [InlineData("Patient (paper Table S3)", "1,1,1,2,2,3,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15", CovariateKind.Categorical)]
     [InlineData("PatientID", "101,101,102,102,103,103,104,104,105,105,106,106,107,107,108,108,109,109,110,110,111,111", CovariateKind.Categorical)]
-    [InlineData("File set", "1,2,3", CovariateKind.Categorical)]
-    [InlineData("Digestion cycle", "1,2,3", CovariateKind.Categorical)]
+    [InlineData("File set", "1,1,2,2,3,3", CovariateKind.Categorical)]
+    [InlineData("Digestion cycle", "1,1,1,2,2,3,3", CovariateKind.Categorical)]
     [InlineData("Plate2", "1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12", CovariateKind.Categorical)]
     // A name word on a measurement: decimals, or whole numbers that never repeat, stay numeric.
     [InlineData("Patient age", "65.3,40.7,55.1,61.2,48.9,70.4,52.0,58.6,44.3,67.1,59.9", CovariateKind.Numeric)]
@@ -33,10 +33,16 @@ public class CovariateTypingTests
     // Whole words only: these contain a listed word inside another word.
     [InlineData("Onset site", "1.5,2.25,3.75,4.5,5.5,6.5,7.25,8.5,9.5,10.5,11.5", CovariateKind.Numeric)]
     [InlineData("Hybridization", "0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5,9.5,10.5", CovariateKind.Numeric)]
-    // Few whole-number levels: categories.
-    [InlineData("Visit", "1,2,3,4,5,6,7", CovariateKind.Categorical)]
-    [InlineData("Treated", "0,1,0,1", CovariateKind.Categorical)]
-    [InlineData("Dose", "1.0,2.0,1.0,3.0", CovariateKind.Categorical)]
+    // The added words: who a sample came from, and the units samples are grouped into.
+    [InlineData("Participant", "1,1,2,2,3,3,4,4", CovariateKind.Categorical)]
+    [InlineData("Site", "1,1,2,2,3,3,1,1", CovariateKind.Categorical)]
+    [InlineData("Treatment group", "1,1,2,2,3,3", CovariateKind.Categorical)]
+    // Few whole-number values and no labeling name: still numbers. The count of distinct values is
+    // not a rule - in a small cohort it made an integer age a factor.
+    [InlineData("Visit", "1,2,3,4,5,6,7", CovariateKind.Numeric)]
+    [InlineData("Treated", "0,1,0,1", CovariateKind.Numeric)]
+    [InlineData("Dose", "1.0,2.0,1.0,3.0", CovariateKind.Numeric)]
+    [InlineData("Age", "61,61,61,64,64,64,66,66,66,70,70,70", CovariateKind.Numeric)]
     // Quantities stay numeric.
     [InlineData("ALSFRS-R Total", "48,45,44,40,39,36,33,30,27,24,21", CovariateKind.Numeric)]
     [InlineData("Age at first visit", "65.3,40.7,55.1", CovariateKind.Numeric)]
@@ -49,20 +55,25 @@ public class CovariateTypingTests
         Assert.False(string.IsNullOrEmpty(guess.Reason));
     }
 
+    /// <summary>
+    /// How many distinct whole numbers a column holds does not decide its type, so the same clinical
+    /// column is not a factor in a small cohort and a number in a large one.
+    /// </summary>
     [Fact]
-    public void TenWholeNumberLevelsAreCategorical_ElevenAreNumeric()
+    public void WholeNumbers_StayNumeric_HoweverFewTheirValues()
     {
-        var ten = Enumerable.Range(1, CovariateTyping.MaxCategoricalLevels).Select(i => (string?)i.ToString()).ToArray();
-        var eleven = Enumerable.Range(1, CovariateTyping.MaxCategoricalLevels + 1).Select(i => (string?)i.ToString()).ToArray();
-        Assert.Equal(CovariateKind.Categorical, CovariateTyping.Infer("Score", ten).Kind);
-        Assert.Equal(CovariateKind.Numeric, CovariateTyping.Infer("Score", eleven).Kind);
+        foreach (var n in new[] { 2, 3, 8, 10, 11, 30 })
+        {
+            var values = Enumerable.Range(1, n).SelectMany(i => new[] { (string?)i.ToString(), i.ToString() }).ToArray();
+            Assert.Equal(CovariateKind.Numeric, CovariateTyping.Infer("Score", values).Kind);
+        }
     }
 
     [Fact]
     public void BlanksAndNaN_AreMissing_NotLevels()
     {
         var guess = CovariateTyping.Infer("Score", new string?[] { "1", "", null, "NaN", "2" });
-        Assert.Equal(CovariateKind.Categorical, guess.Kind);
+        Assert.Equal(CovariateKind.Numeric, guess.Kind);
         Assert.Contains("2 distinct values", guess.Reason);
     }
 
@@ -169,6 +180,43 @@ public class CovariateTypingTests
         Assert.Equal(new[] { "Patient (numeric)" }, res.CovariatesAdjusted);
         Assert.Contains(res.Messages, m => m.Contains("'Patient' is fitted as numeric")
             && m.Contains("'patient'"));
+    }
+
+    /// <summary>
+    /// The warning is for overriding an inferred categorical, not for a name: "Run order" holds a
+    /// listed word, is rightly inferred numeric, and is fitted with nothing said.
+    /// </summary>
+    [Fact]
+    public void AColumnInferredNumeric_CarriesNoWarning_WhateverItsName()
+    {
+        var (expr, ids) = Matrix();
+        var order = Covariate.FromMetadata("Run order", Enumerable.Range(1, 12).Select(i => (string?)i.ToString()).ToArray());
+
+        var res = Differential.Run(expr, ids, A, B, With(order));
+
+        Assert.Equal(CovariateKind.Numeric, order.Kind);
+        Assert.Equal(new[] { "Run order" }, res.CovariatesUsed);
+        Assert.DoesNotContain(res.Messages, m => m.Contains("fitted as numeric"));
+    }
+
+    /// <summary>
+    /// Some values in one arm only: kept, since it can be fitted, but said - those samples do not
+    /// inform the contrast - and the pane's note says the same before the run.
+    /// </summary>
+    [Fact]
+    public void APartlyConfoundedCategorical_IsKept_AndSaysWhichSamplesDoNotCount()
+    {
+        var (expr, ids) = Matrix();
+        // 'x' only in arm A, 'z' only in arm B, 'y' in both.
+        var site = Covariate.FromMetadata("Site", Repeat(("x", 3), ("y", 3), ("y", 3), ("z", 3)));
+
+        var res = Differential.Run(expr, ids, A, B, With(site));
+
+        Assert.Equal(new[] { "Site_y", "Site_z" }, res.CovariatesUsed);
+        var note = Assert.Single(res.Messages, m => m.Contains("partly confounded"));
+        Assert.Contains("'x', 'z' occur in one arm only", note);
+        Assert.Contains("the 6 sample(s) with those values", note);
+        Assert.Equal(res.Messages, Differential.CovariateNotes(site, A, B, With()));
     }
 
     /// <summary>A three-level integer batch spanning both arms enters as two indicators.</summary>
@@ -281,6 +329,17 @@ public class CovariateTypingTests
         Assert.Equal(CovariateKind.Categorical, CovariateTyping.Infer("Treatment", new string?[] { "None", "1", "2" }).Kind);
         Assert.False(CovariateTyping.IsMissing("None"));
     }
+
+    /// <summary>The tokens match by exact spelling: "Na" - sodium - is a value, not a blank.</summary>
+    [Theory]
+    [InlineData("NA", true)]
+    [InlineData("n/a", true)]
+    [InlineData("null", true)]
+    [InlineData("Na", false)]
+    [InlineData("na", false)]
+    [InlineData("Null", false)]
+    public void MissingTokens_MatchByExactSpelling(string value, bool missing) =>
+        Assert.Equal(missing, CovariateTyping.IsMissing(value));
 
     [Fact]
     public void NonFiniteText_IsMissing()
