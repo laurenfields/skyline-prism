@@ -43,6 +43,8 @@ public sealed record QuantContrast(
 /// e.g. "intensity-trend from controls"); it differs from the request when a requested prior had to fall back.</param>
 /// <param name="CovariateTypes">Each requested covariate as <c>COLUMN=numeric|categorical</c>, the form
 /// <c>--covariate-type</c> takes - the type it was fitted as, inferred or set.</param>
+/// <param name="Subject">The subject column, for a design that reads one (paired, blocked, trend within subject).</param>
+/// <param name="BlockCorrelation">The intra-subject correlation a blocked contrast was fitted at.</param>
 public sealed record QuantConfig(
     string Level,
     QuantContrast Contrast,
@@ -63,7 +65,9 @@ public sealed record QuantConfig(
     string? Command = null,
     string? CommandUnavailable = null,
     string? DetectionTest = null,
-    IReadOnlyList<string>? CovariateTypes = null)
+    IReadOnlyList<string>? CovariateTypes = null,
+    string? Subject = null,
+    double? BlockCorrelation = null)
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -107,6 +111,13 @@ public sealed record QuantConfig(
         }
 
         sb.Append("design: ").Append(Design).Append('\n');
+        // The subject column changes every p-value under the designs that read one, so a record
+        // without it cannot be re-run - and the free-text command below is absent whenever the
+        // request holds something no command line can carry.
+        if (Subject is not null)
+            sb.Append("subject: ").Append(Yaml(Subject)).Append('\n');
+        if (BlockCorrelation is { } rho)
+            sb.Append("block_correlation: ").Append(rho.ToString("R", inv)).Append('\n');
         sb.Append("test: ").Append(Test).Append('\n');
         sb.Append("prior: ").Append(Prior).Append('\n');
         sb.Append("prior_used: ").Append(Yaml(PriorUsed)).Append('\n');

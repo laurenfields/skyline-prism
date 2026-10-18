@@ -352,6 +352,59 @@ public class DifferentialGoldenTests
         }
     }
 
+    public static IEnumerable<object[]> EBayesCases() => Golden.CaseNames("ebayes.json");
+
+    /// <summary>
+    /// The moderated t against R limma's own <c>eBayes</c>, called whole rather than composed - and in
+    /// particular its cap on the degrees of freedom, <c>df.total = pmin(df.residual + df.prior,
+    /// sum(df.residual))</c>, which binds whenever the prior df is infinite and otherwise when few
+    /// features are tested and the prior df is large. Three cases bind it (an infinite prior, a large
+    /// finite one, an infinite limma-trend prior) and one ordinary case must not move.
+    /// </summary>
+    /// <remarks>
+    /// Two tolerances, by what stands between the data and the number. With an infinite prior df the
+    /// posterior variance and the capped df involve no iterative solve, so t and p are held to 1e-12;
+    /// the measured worst is 2.3e-13, the limma-trend case's p, whose prior comes out of a spline
+    /// fit. With a finite one, d0 comes out of <c>trigammaInverse</c>, a Newton iteration limma stops
+    /// once a step is below 1e-8 relative, so t and p are held to 1e-9 as in
+    /// <c>moderated_t.json</c>; the measured worst is 2.5e-12, a t near zero.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(EBayesCases))]
+    public void Differential_MatchesLimmaEBayes_IncludingItsDfTotalCap(string name)
+    {
+        var c = Golden.Case("ebayes.json", name);
+        var expr = Golden.Mat(c, "expr");
+        var nA = c.GetProperty("n_a").GetInt32();
+        var nB = c.GetProperty("n_b").GetInt32();
+        var nFeatures = expr.GetLength(0);
+        var featureIds = Enumerable.Range(0, nFeatures).Select(i => $"F{i}").ToArray();
+        var options = new DifferentialOptions
+        {
+            Prior = c.GetProperty("trend").GetBoolean() ? VariancePrior.LimmaTrend : VariancePrior.Global,
+        };
+
+        var res = Differential.Run(expr, featureIds, Enumerable.Range(0, nA).ToArray(),
+            Enumerable.Range(nA, nB).ToArray(), options);
+
+        var dfPrior = Golden.Num(c, "df_prior");
+        var tol = double.IsPositiveInfinity(dfPrior) ? 1e-12 : 1e-9;
+        Golden.Close(Golden.Num(c, "df_residual"), res.DfResidual, 1e-15, $"{name}/df_residual");
+        Golden.Close(dfPrior, res.DfPrior, 1e-9, $"{name}/df_prior");
+        Golden.Close(Golden.Num(c, "df_total"), res.DfTotal, tol, $"{name}/df_total");
+        var byId = res.Rows.ToDictionary(r => r.FeatureId, StringComparer.Ordinal);
+        var logfc = Golden.Vec(c, "logfc");
+        var t = Golden.Vec(c, "t");
+        var p = Golden.Vec(c, "p");
+        for (var i = 0; i < nFeatures; i++)
+        {
+            var row = byId[$"F{i}"];
+            Golden.Close(logfc[i], row.LogFc, 1e-11, $"{name}/F{i}/logFC");
+            Golden.Close(t[i], row.T, tol, $"{name}/F{i}/t");
+            Golden.Close(p[i], row.PValue, tol, $"{name}/F{i}/p");
+        }
+    }
+
     // ------------------------------------------------------------------------------------
     // Fisher exact  vs  scipy.stats.fisher_exact
     // ------------------------------------------------------------------------------------
@@ -982,8 +1035,12 @@ public class DifferentialGoldenTests
         var byId = res.Rows.ToDictionary(r => r.FeatureId);
         var logfc = Golden.Vec(c, "logfc");
         var t = Golden.Vec(c, "t");
-        var p = Golden.Vec(c, "p");
-        var adj = Golden.Vec(c, "adj_p");
+        // The toolkit's own p is on df.residual + d0 with no cap; PRISM caps at the pooled residual
+        // df as limma's eBayes does, so it is held to the same t on limma's df (`p_limma`). The two
+        // differ only where the cap binds - unpaired and paired, whose d0 is infinite - and match
+        // exactly elsewhere, which the generator's note records.
+        var p = Golden.Vec(c, "p_limma");
+        var adj = Golden.Vec(c, "adj_p_limma");
         var amean = Golden.Vec(c, "amean");
         for (var i = 0; i < ids.Length; i++)
         {

@@ -444,6 +444,8 @@ public static class QuantAnalysis
             Command: commandLine,
             CommandUnavailable: noCommand,
             CovariateTypes: options.Covariates?.Select(c => $"{c.Name}={CovariateTyping.Token(c.Kind)}").ToList(),
+            Subject: options.Design.UsesSubjects() ? request.SubjectColumn : null,
+            BlockCorrelation: res.IsBlocked ? res.BlockCorrelation : null,
             DetectionTest: detection is null
                 ? null
                 : DetectionAnalysis.Describe(detection) + (detection.Identifiable ? string.Empty : " (not identifiable - no result)"));
